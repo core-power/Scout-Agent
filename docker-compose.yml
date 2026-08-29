@@ -1,0 +1,165 @@
+# Scout Agent Docker Compose 配置
+# Phase 1: PostgreSQL + Redis + NATS 高可用基础设施
+# 使用方式: docker-compose up -d
+
+version: '3.8'
+
+services:
+  # ========== 应用服务 ==========
+  scout-agent:
+    build: .
+    container_name: scout-agent
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    
+    ports:
+      - "8848:8848"
+    
+    volumes:
+      - scout-data:/app/data
+    
+    environment:
+      # 存储后端配置
+      - SCOUT_STORAGE_BACKEND=postgres
+      - SCOUT_PG_DSN=postgresql://scout:scout@postgres:5432/scout
+      - SCOUT_PG_MIN_SIZE=5
+      - SCOUT_PG_MAX_SIZE=20
+      
+      # 缓存配置
+      - SCOUT_CACHE_BACKEND=redis
+      - SCOUT_REDIS_URL=redis://redis:6379/0
+      
+      # NATS 事件总线
+      - SCOUT_NATS_URL=nats://nats:4222
+      
+      # API Key（必需）
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      
+      # 可选：模型配置
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      
+      # 其他配置
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_TOKENS=${MAX_TOKENS:-4000}
+      - TEMPERATURE=${TEMPERATURE:-0.7}
+    
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8848/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ========== 基础设施 ==========
+  
+  # PostgreSQL 主库
+  postgres:
+    image: postgres:16-alpine
+    container_name: scout-postgres
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_USER: scout
+      POSTGRES_PASSWORD: scout
+      POSTGRES_DB: scout
+    
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    
+    ports:
+      - "5432:5432"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scout"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: scout-redis
+    restart: unless-stopped
+    
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    
+    volumes:
+      - redis-data:/data
+    
+    ports:
+      - "6379:6379"
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # NATS with JetStream
+  nats:
+    image: nats:2-alpine
+    container_name: scout-nats
+    restart: unless-stopped
+    
+    command:
+      - "--jetstream"
+      - "--store_dir=/data"
+      - "--max_mem=256M"
+    
+    volumes:
+      - nats-data:/data
+    
+    ports:
+      - "4222:4222"   # Client
+      - "8222:8222"   # HTTP monitoring
+    
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+volumes:
+  scout-data:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  nats-data:
+    driver: local

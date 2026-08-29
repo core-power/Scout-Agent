@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>自动化中心 · Scout Agent</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="/static/vendor/tailwind.js"></script>
+    <script>
+    tailwind.config = { darkMode: 'class', theme: { extend: { colors: { scout: {
+        400:'#22d3ee',500:'#06b6d4',600:'#0891b2',
+    }}}}}
+    </script>
+    <style>
+        * { -webkit-font-smoothing: antialiased; }
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        .tab-btn.active { color: #22d3ee; border-color: #22d3ee; }
+        input, select, textarea { background: #1a1a1a; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #e2e8f0; padding: 6px 10px; font-size: 13px; outline: none; }
+        input:focus, select:focus, textarea:focus { border-color: rgba(6,182,212,0.5); }
+        pre.detail { white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow-y: auto; }
+    </style>
+    <script src="/static/i18n.js"></script>
+</head>
+<body class="min-h-screen bg-[#0a0a0a] text-slate-200">
+    <script>renderLangToggle();</script>
+
+<div class="max-w-5xl mx-auto px-4 py-6">
+    <!-- 顶栏 -->
+    <div class="flex items-center gap-3 mb-5">
+        <a href="/" class="p-2 -ml-2 rounded-lg hover:bg-white/5 text-slate-400 transition-colors">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+        </a>
+        <h1 class="text-xl font-bold text-white">自动化中心</h1>
+        <div class="flex-1"></div>
+        <a href="/observe" class="px-3 py-1.5 rounded-lg text-xs bg-white/5 hover:bg-white/10 text-slate-300 transition-colors">运行观测 →</a>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-1 border-b border-white/10 mb-5 overflow-x-auto">
+        <button class="tab-btn active px-4 py-2 text-sm border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap" data-tab="triggers" onclick="switchTab('triggers')">事件触发器</button>
+        <button class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap" data-tab="runs" onclick="switchTab('runs')">运行历史</button>
+        <button class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap" data-tab="policy" onclick="switchTab('policy')">无人值守策略</button>
+        <button class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap" data-tab="cron" onclick="switchTab('cron')">定时任务</button>
+    </div>
+
+    <!-- ══ Tab 1: 触发器 ══ -->
+    <div id="tab-triggers">
+        <div class="bg-[#0d0d0d] border border-white/10 rounded-xl p-4 mb-4">
+            <div class="text-sm font-medium text-slate-300 mb-3">新建触发器</div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <input id="tg-name" placeholder="名称，如: PR审查" data-i18n-placeholder="名称，如: PR审查">
+                <select id="tg-type" onchange="onTypeChange()">
+                    <option value="event">事件触发（订阅 EventBus 事件）</option>
+                    <option value="cascade">级联触发（上游完成后执行）</option>
+                    <option value="manual">手动触发</option>
+                </select>
+                <div id="tg-event-wrap" class="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input id="tg-event-name" placeholder="事件名，如: tool.complete / file" data-i18n-placeholder="事件名，如: tool.complete / file">
+                    <input id="tg-event-filters" placeholder='过滤器JSON(可选)，如 {"source":"cron:*"}' data-i18n-placeholder='过滤器JSON(可选)，如 {"source":"cron:*"}'>
+                </div>
+                <div id="tg-cascade-wrap" class="hidden">
+                    <select id="tg-after"><option value="">选择上游触发器…</option></select>
+                </div>
+                <textarea id="tg-task" rows="2" class="sm:col-span-2" placeholder="任务模板，支持 {{event.xxx}} 占位符。如: 处理新文件 {{event.file_path}}" data-i18n-placeholder="任务模板，支持 {{event.xxx}} 占位符。如: 处理新文件 {{event.file_path}}"></textarea>
+                <textarea id="tg-verify" rows="2" class="sm:col-span-2" placeholder='验证规则JSON(可选)，如 [{"type":"contains","value":["完成"]}]' data-i18n-placeholder='验证规则JSON(可选)，如 [{"type":"contains","value":["完成"]}]'></textarea>
+                <input id="tg-cooldown" type="number" min="0" placeholder="冷却秒数(防抖)，默认0" data-i18n-placeholder="冷却秒数(防抖)，默认0">
+                <div class="flex items-center justify-end gap-2">
+                    <button onclick="createTrigger()" class="px-4 py-2 rounded-lg bg-scout-500 hover:bg-scout-600 text-white text-sm transition-colors">创建</button>
+                </div>
+            </div>
+        </div>
+        <div id="trigger-list" class="space-y-2"></div>
+    </div>
+
+    <!-- ══ Tab 2: 运行历史 ══ -->
+    <div id="tab-runs" class="hidden">
+        <div id="runs-stats" class="text-xs text-slate-500 mb-3"></div>
+        <div id="run-list" class="space-y-2"></div>
+    </div>
+
+    <!-- ══ Tab 3: 策略 ══ -->
+    <div id="tab-policy" class="hidden">
+        <div class="bg-[#0d0d0d] border border-white/10 rounded-xl p-4">
+            <div class="text-sm text-slate-400 mb-3">自动化任务（触发器/Webhook/定时）在无人值守时的工具权限策略。组织级策略（/etc/scout/requirements.json）会强制覆盖用户配置。</div>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs text-slate-500 mb-1.5">审批策略 approval_policy</label>
+                    <select id="pl-mode" class="w-full sm:w-64">
+                        <option value="auto">auto — 只读放行，写操作需白名单（推荐）</option>
+                        <option value="writes">writes — 文件写放行，高危需白名单</option>
+                        <option value="prompt">prompt — 白名单外拒绝+通知（保守）</option>
+                        <option value="never">never — 全部放行（危险命令仍硬拦截）</option>
+                    </select>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-xs text-slate-500 mb-1.5">工具白名单（逗号分隔，空=不限）</label>
+                        <input id="pl-allow" class="w-full" placeholder="read_file, web_search">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-500 mb-1.5">工具黑名单</label>
+                        <input id="pl-deny" class="w-full" placeholder="shell">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-500 mb-1.5">shell 命令正则白名单（逗号分隔）</label>
+                        <input id="pl-shell" class="w-full" placeholder="git log .*">
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <label class="flex items-center gap-2 text-sm text-slate-300">
+                        <input id="pl-notify" type="checkbox"> 危险操作时推送通知
+                    </label>
+                    <div class="flex-1"></div>
+                    <button onclick="savePolicy()" class="px-4 py-2 rounded-lg bg-scout-500 hover:bg-scout-600 text-white text-sm transition-colors">保存策略</button>
+                </div>
+                <div id="pl-saved" class="text-xs text-emerald-400 hidden">✓ 已保存</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ Tab 4: 定时任务 ══ -->
+    <div id="tab-cron" class="hidden">
+        <div class="bg-[#0d0d0d] border border-white/10 rounded-xl p-4 mb-4">
+            <div class="flex items-center gap-2 mb-3 flex-wrap">
+                <div class="text-sm font-medium text-slate-300">新建定时任务</div>
+                <div class="flex-1"></div>
+                <button onclick="fillCronTemplate('report')" class="px-2.5 py-1 rounded-lg text-xs bg-white/5 hover:bg-white/10 text-slate-400 transition-colors">📊 模板: 每日自我报告</button>
+                <button onclick="fillCronTemplate('news')" class="px-2.5 py-1 rounded-lg text-xs bg-white/5 hover:bg-white/10 text-slate-400 transition-colors">📰 模板: 每日资讯简报</button>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <input id="cron-name" placeholder="名称" data-i18n-placeholder="名称">
+                <input id="cron-schedule" placeholder="调度，如: 每30分钟 / 每天09:00" data-i18n-placeholder="调度，如: 每30分钟 / 每天09:00">
+                <input id="cron-task" placeholder="任务描述（给 Agent 执行）" data-i18n-placeholder="任务描述（给 Agent 执行）">
+                <div class="sm:col-span-3 flex justify-end">
+                    <button onclick="addCron()" class="px-4 py-2 rounded-lg bg-scout-500 hover:bg-scout-600 text-white text-sm transition-colors">创建</button>
+                </div>
+            </div>
+        </div>
+        <div id="cron-list" class="space-y-2"></div>
+    </div>
+
+</div>
+
+<script>
+let allTriggers = [];
+
+function switchTab(name) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    ['triggers', 'runs', 'policy', 'cron'].forEach(t => {
+        document.getElementById('tab-' + t).classList.toggle('hidden', t !== name);
+    });
+    if (name === 'runs') loadRuns();
+    if (name === 'cron') loadCron();
+}
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function toast(msg, ok = true) {
+    msg = __tpl(msg);
+    const d = document.createElement('div');
+    d.className = `fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm z-[200] ${ok ? 'bg-emerald-600' : 'bg-red-600'} text-white`;
+    d.textContent = msg;
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 2500);
+}
+async function api(url, method = 'GET', body = null) {
+    const opt = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opt.body = JSON.stringify(body);
+    const r = await fetch(url, opt);
+    return r.json();
+}
+
+// ── 触发器 ──
+function onTypeChange() {
+    const t = document.getElementById('tg-type').value;
+    document.getElementById('tg-event-wrap').classList.toggle('hidden', t !== 'event');
+    document.getElementById('tg-cascade-wrap').classList.toggle('hidden', t !== 'cascade');
+    if (t === 'cascade') renderCascadeOptions();
+}
+function renderCascadeOptions() {
+    const sel = document.getElementById('tg-after');
+    sel.innerHTML = '<option value="">选择上游触发器…</option>' +
+        allTriggers.map(t => `<option value="${t.id}">${esc(t.name)} (${t.id})</option>`).join('');
+}
+async function loadTriggers() {
+    const data = await api('/api/triggers');
+    allTriggers = data.triggers || [];
+    const list = document.getElementById('trigger-list');
+    if (!allTriggers.length) {
+        list.innerHTML = '<div class="text-center text-slate-600 text-sm py-8">暂无触发器 — 在上方创建一个，让 Scout 响应事件自动干活</div>';
+        return;
+    }
+    list.innerHTML = allTriggers.map(t => `
+        <div class="bg-[#0d0d0d] border border-white/10 rounded-xl p-3 flex items-center gap-3 flex-wrap">
+            <span class="text-lg">${t.type === 'event' ? '⚡' : t.type === 'cascade' ? '🔗' : '👆'}</span>
+            <div class="flex-1 min-w-[200px]">
+                <div class="text-sm text-slate-200">${esc(t.name)} <span class="text-xs text-slate-600">id=${t.id} · ${t.type}</span></div>
+                <div class="text-xs text-slate-500 truncate mt-0.5">${esc(t.task_template.slice(0, 80))}</div>
+                <div class="text-xs text-slate-600 mt-0.5">${__tpl(`触发 ${t.fire_count} 次`)}${t.last_fired ? ' · ' + __tpl(`最近 ${new Date(t.last_fired * 1000).toLocaleString('zh-CN')}`) : ''}${t.event_name ? ' · ' + __tpl(`事件 ${t.event_name}`) : ''}${t.after_trigger ? ' · ' + __tpl(`上游 ${t.after_trigger}`) : ''}</div>
+            </div>
+            <div class="flex items-center gap-1.5">
+                <button onclick="fireTrigger('${t.id}')" class="px-2.5 py-1 rounded-lg text-xs bg-scout-500/20 text-scout-400 hover:bg-scout-500/30 transition-colors">运行</button>
+                <button onclick="toggleTrigger('${t.id}')" class="px-2.5 py-1 rounded-lg text-xs bg-white/5 hover:bg-white/10 transition-colors">${t.enabled ? '停用' : '启用'}</button>
+                <button onclick="delTrigger('${t.id}')" class="px-2.5 py-1 rounded-lg text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors">删除</button>
+            </div>
+        </div>`).join('');
+}
+async function createTrigger() {
+    const type = document.getElementById('tg-type').value;
+    const body = {
+        name: document.getElementById('tg-name').value.trim(),
+        type: type,
+        task_template: document.getElementById('tg-task').value.trim(),
+        event_name: document.getElementById('tg-event-name').value.trim(),
+        after_trigger: document.getElementById('tg-after').value,
+        cooldown_seconds: parseInt(document.getElementById('tg-cooldown').value) || 0,
+    };
+    const filters = document.getElementById('tg-event-filters').value.trim();
+    if (filters) { try { body.event_filters = JSON.parse(filters); } catch (e) { toast('过滤器 JSON 格式错误', false); return; } }
+    const verify = document.getElementById('tg-verify').value.trim();
+    if (verify) { try { body.verification = JSON.parse(verify); } catch (e) { toast('验证规则 JSON 格式错误', false); return; } }
+    if (!body.name || !body.task_template) { toast('名称和任务模板必填', false); return; }
+    const r = await api('/api/triggers', 'POST', body);
+    if (r.status === 'ok') { toast('触发器已创建'); loadTriggers(); } else toast(r.error || '创建失败', false);
+}
+async function fireTrigger(id) {
+    const r = await api(`/api/triggers/${id}/fire`, 'POST', { payload: {} });
+    toast(r.status === 'success' ? '运行完成 ✓' : __tpl(`运行结果: ${r.status}${r.reason ? ' - ' + r.reason : ''}`), r.status === 'success');
+}
+async function toggleTrigger(id) { await api(`/api/triggers/${id}/toggle`, 'POST'); loadTriggers(); }
+async function delTrigger(id) {
+    if (!confirm(__t('删除该触发器？'))) return;
+    await api(`/api/triggers/${id}`, 'DELETE');
+    loadTriggers();
+}
+
+// ── 运行历史 ──
+async function loadRuns() {
+    const [runsData, statsData] = await Promise.all([api('/api/runs?limit=50'), api('/api/runs/stats?days=7')]);
+    const statsEl = document.getElementById('runs-stats');
+    let statHtml = __tpl(`近7天共 ${statsData.total || 0} 次运行`);
+    for (const [src, b] of Object.entries(statsData.by_source || {})) {
+        statHtml += __tpl(` · ${src}: ${b.total}次${b.success_rate != null ? '(成功率' + (b.success_rate * 100).toFixed(0) + '%)' : ''}`);
+    }
+    statsEl.textContent = statHtml;
+
+    const list = document.getElementById('run-list');
+    const runs = runsData.runs || [];
+    if (!runs.length) {
+        list.innerHTML = '<div class="text-center text-slate-600 text-sm py-8">暂无运行记录</div>';
+        return;
+    }
+    const statusMeta = { success: ['✅', 'text-emerald-400'], failed: ['❌', 'text-red-400'], verification_failed: ['⚠️', 'text-amber-400'], running: ['⏳', 'text-slate-400'] };
+    list.innerHTML = runs.map(r => {
+        const [icon, color] = statusMeta[r.status] || ['❓', 'text-slate-400'];
+        const started = new Date(r.started_at * 1000).toLocaleString('zh-CN');
+        const dur = r.finished_at ? ((r.finished_at - r.started_at).toFixed(1) + 's') : '-';
+        return `
+        <div class="bg-[#0d0d0d] border border-white/10 rounded-xl p-3">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span>${icon}</span>
+                <span class="text-sm text-slate-200 flex-1 truncate" title="${esc(r.task)}">${esc(r.task.slice(0, 60))}</span>
+                <span class="text-xs text-slate-600">${r.source}</span>
+                <span class="text-xs ${color}">${r.status}</span>
+            </div>
+            <div class="text-xs text-slate-600 mt-1">${started} · ${dur} · ${__tpl(`${r.steps || 0} 步`)} · ${__tpl(`${r.tool_calls || 0} 次工具调用`)}</div>
+            ${r.verification ? `<details class="mt-2"><summary class="text-xs text-slate-500 cursor-pointer hover:text-slate-300">${__tpl(`验证证据（${r.verification.passed ? __t('通过') : __t('未通过')} · score ${r.verification.score}）`)}</summary><pre class="detail text-xs bg-black/40 rounded p-2 mt-1 text-slate-300">${esc(JSON.stringify(r.verification, null, 1))}</pre></details>` : ''}
+            ${r.events && r.events.length ? `<details class="mt-1"><summary class="text-xs text-slate-500 cursor-pointer hover:text-slate-300">${__tpl(`执行事件流（${r.events.length} 条）`)}</summary><pre class="detail text-xs bg-black/40 rounded p-2 mt-1 text-slate-300">${esc(JSON.stringify(r.events, null, 1))}</pre></details>` : ''}
+        </div>`;
+    }).join('');
+}
+
+// ── 策略 ──
+async function loadPolicy() {
+    const data = await api('/api/automation/policy');
+    const p = data.effective || {};
+    document.getElementById('pl-mode').value = p.approval_policy || 'auto';
+    document.getElementById('pl-allow').value = (p.allowed_tools || []).join(',');
+    document.getElementById('pl-deny').value = (p.denied_tools || []).join(',');
+    document.getElementById('pl-shell').value = (p.allowed_shell_patterns || []).join(',');
+    document.getElementById('pl-notify').checked = p.notify_on_danger !== false;
+    if (data.has_org_policy) toast('检测到组织级策略（/etc/scout/requirements.json），将强制覆盖用户配置');
+}
+async function savePolicy() {
+    const body = {
+        approval_policy: document.getElementById('pl-mode').value,
+        allowed_tools: document.getElementById('pl-allow').value.split(',').map(s => s.trim()).filter(Boolean),
+        denied_tools: document.getElementById('pl-deny').value.split(',').map(s => s.trim()).filter(Boolean),
+        allowed_shell_patterns: document.getElementById('pl-shell').value.split(',').map(s => s.trim()).filter(Boolean),
+        notify_on_danger: document.getElementById('pl-notify').checked,
+    };
+    const r = await api('/api/automation/policy', 'POST', body);
+    if (r.status === 'ok') {
+        const el = document.getElementById('pl-saved');
+        el.classList.remove('hidden');
+        setTimeout(() => el.classList.add('hidden'), 2000);
+    } else toast(r.error || '保存失败', false);
+}
+
+// ── 定时任务模板 ──
+const CRON_TEMPLATES = {
+    report: {
+        name: '每日自我报告',
+        schedule: '每天09:00',
+        task: '调用 scout_report 工具生成近24小时的运行状况自我报告，然后把报告内容发送给我',
+    },
+    news: {
+        name: '每日资讯简报',
+        schedule: '每天08:00',
+        task: '搜索今天的 AI 与科技重要新闻，整理成一份简明扼要的早报（不超过5条，每条一句话），发送给我',
+    },
+};
+function fillCronTemplate(key) {
+    const t = CRON_TEMPLATES[key];
+    if (!t) return;
+    document.getElementById('cron-name').value = t.name;
+    document.getElementById('cron-schedule').value = t.schedule;
+    document.getElementById('cron-task').value = t.task;
+}
+
+// ── 定时任务 ──
+async function loadCron() {
+    const data = await api('/api/cron');
+    const list = document.getElementById('cron-list');
+    const tasks = data.tasks || [];
+    if (!tasks.length) {
+        list.innerHTML = '<div class="text-center text-slate-600 text-sm py-8">暂无定时任务</div>';
+        return;
+    }
+    list.innerHTML = tasks.map(t => `
+        <div class="bg-[#0d0d0d] border border-white/10 rounded-xl p-3 flex items-center gap-3">
+            <span>⏰</span>
+            <div class="flex-1">
+                <div class="text-sm text-slate-200">${esc(t.name)} <span class="text-xs text-slate-600">${esc(t.schedule)}</span></div>
+                <div class="text-xs text-slate-500 truncate">${esc(t.task)}</div>
+            </div>
+            <span class="text-xs ${t.enabled ? 'text-emerald-400' : 'text-slate-600'}">${t.enabled ? '启用' : '停用'}</span>
+            <button onclick="delCron('${esc(t.name)}')" class="px-2.5 py-1 rounded-lg text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors">删除</button>
+        </div>`).join('');
+}
+async function delCron(name) {
+    if (!confirm(__tpl(`删除定时任务「${name}」？`))) return;
+    await api(`/api/cron/${encodeURIComponent(name)}`, 'DELETE');
+    loadCron();
+}
+async function addCron() {
+    const body = {
+        name: document.getElementById('cron-name').value.trim(),
+        schedule: document.getElementById('cron-schedule').value.trim(),
+        task: document.getElementById('cron-task').value.trim(),
+    };
+    if (!body.name || !body.schedule || !body.task) { toast('所有字段必填', false); return; }
+    const r = await api('/api/cron', 'POST', body);
+    if (r.status === 'ok' || r.task) { toast('定时任务已创建'); loadCron(); } else toast(r.error || '创建失败', false);
+}
+
+
+loadTriggers();
+loadPolicy();
+</script>
+</body>
+</html>

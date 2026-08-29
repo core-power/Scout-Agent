@@ -1,0 +1,21 @@
+# Scout Agent 桌面版（Windows 打包）依赖子集 —— 纯 ASCII
+# 只含 Web 服务 / LLM / 记忆 / 安全核心链路，不含 IM 渠道与重型可选依赖
+fastapi>=0.110.0
+uvicorn>=0.27.0
+websockets>=12.0
+sse-starlette>=2.0.0
+httpx>=0.27.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+click>=8.0.0
+croniter>=1.4,<6
+rich>=13.0.0
+prompt_toolkit>=3.0.0
+openai>=1.30.0
+onnxruntime>=1.16.0
+numpy>=1.24.0
+cryptography>=41.0.0
+aiohttp>=3.9.0
+requests>=2.31.0
+psutil>=5.9.0

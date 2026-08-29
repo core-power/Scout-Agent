@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统监控 - Scout Agent</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="/static/i18n.js"></script>
+    <script src="/static/vendor/tailwind.js"></script>
+    <script src="/static/vendor/chart.umd.min.js"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        .stat-card {
+            transition: transform 0.2s;
+        }
+        .stat-card:hover {
+            transform: translateY(-4px);
+        }
+        .progress-bar {
+            transition: width 0.5s ease-in-out;
+        }
+    </style>
+</head>
+<body>
+    <script>renderLangToggle();</script>
+    <div class="min-h-screen p-8">
+        <!-- 头部 -->
+        <div class="max-w-7xl mx-auto mb-8">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-4xl font-bold text-white mb-2">📊 系统监控</h1>
+                    <p class="text-white/80">实时监控 Scout Agent 运行状态</p>
+                </div>
+                <div class="flex gap-4">
+                    <a href="/" class="px-6 py-3 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors">
+                        ← 返回首页
+                    </a>
+                    <button onclick="refreshAll()" class="px-6 py-3 bg-white text-purple-600 rounded-lg hover:bg-white/90 transition-colors">
+                        🔄 刷新数据
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 系统资源监控 -->
+        <div class="max-w-7xl mx-auto mb-8">
+            <div class="card rounded-xl p-6">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6">💻 系统资源</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <!-- CPU 使用率 -->
+                    <div class="stat-card bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-6 text-white">
+                        <div class="flex items-center justify-between mb-4">
+                            <span class="text-3xl">🔥</span>
+                            <span id="cpu-percent" class="text-4xl font-bold">0%</span>
+                        </div>
+                        <div class="text-sm opacity-90 mb-2">CPU 使用率</div>
+                        <div class="w-full bg-white/20 rounded-full h-2">
+                            <div id="cpu-bar" class="progress-bar bg-white rounded-full h-2" style="width: 0%"></div>
+                        </div>
+                        <div id="cpu-cores" class="text-xs opacity-75 mt-2">0 核心</div>
+                    </div>
+
+                    <!-- 内存使用率 -->
+                    <div class="stat-card bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-6 text-white">
+                        <div class="flex items-center justify-between mb-4">
+                            <span class="text-3xl">💾</span>
+                            <span id="memory-percent" class="text-4xl font-bold">0%</span>
+                        </div>
+                        <div class="text-sm opacity-90 mb-2">内存使用率</div>
+                        <div class="w-full bg-white/20 rounded-full h-2">
+                            <div id="memory-bar" class="progress-bar bg-white rounded-full h-2" style="width: 0%"></div>
+                        </div>
+                        <div id="memory-detail" class="text-xs opacity-75 mt-2">0 GB / 0 GB</div>
+                    </div>
+
+                    <!-- 磁盘使用率 -->
+                    <div class="stat-card bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg p-6 text-white">
+                        <div class="flex items-center justify-between mb-4">
+                            <span class="text-3xl">💿</span>
+                            <span id="disk-percent" class="text-4xl font-bold">0%</span>
+                        </div>
+                        <div class="text-sm opacity-90 mb-2">磁盘使用率</div>
+                        <div class="w-full bg-white/20 rounded-full h-2">
+                            <div id="disk-bar" class="progress-bar bg-white rounded-full h-2" style="width: 0%"></div>
+                        </div>
+                        <div id="disk-detail" class="text-xs opacity-75 mt-2">0 GB / 0 GB</div>
+                    </div>
+
+                    <!-- 网络流量 -->
+                    <div class="stat-card bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg p-6 text-white">
+                        <div class="flex items-center justify-between mb-4">
+                            <span class="text-3xl">🌐</span>
+                            <span id="network-speed" class="text-4xl font-bold">0</span>
+                        </div>
+                        <div class="text-sm opacity-90 mb-2">网络速率</div>
+                        <div id="network-detail" class="text-xs opacity-75 mt-2">
+                            <div>↑ 0 KB/s</div>
+                            <div>↓ 0 KB/s</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent 状态 -->
+        <div class="max-w-7xl mx-auto mb-8">
+            <div class="card rounded-xl p-6">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6">🤖 Agent 状态</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <!-- 运行状态 -->
+                    <div class="bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-lg p-6 text-white">
+                        <div class="text-sm opacity-90 mb-2">运行状态</div>
+                        <div id="agent-status" class="text-3xl font-bold mb-2">运行中</div>
+                        <div id="agent-uptime" class="text-sm opacity-75">运行时间: 0 小时</div>
+                    </div>
+
+                    <!-- 会话统计 -->
+                    <div class="bg-gradient-to-br from-pink-500 to-pink-600 rounded-lg p-6 text-white">
+                        <div class="text-sm opacity-90 mb-2">活跃会话</div>
+                        <div id="active-sessions" class="text-3xl font-bold mb-2">0</div>
+                        <div id="total-sessions" class="text-sm opacity-75">总会话数: 0</div>
+                    </div>
+
+                    <!-- 工具调用 -->
+                    <div class="bg-gradient-to-br from-teal-500 to-teal-600 rounded-lg p-6 text-white">
+                        <div class="text-sm opacity-90 mb-2">工具调用</div>
+                        <div id="tool-calls" class="text-3xl font-bold mb-2">0</div>
+                        <div id="tool-types" class="text-sm opacity-75">工具类型: 0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 性能图表 -->
+        <div class="max-w-7xl mx-auto mb-8">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- CPU 历史 -->
+                <div class="card rounded-xl p-6">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4">📈 CPU 使用历史</h3>
+                    <canvas id="cpu-chart" height="200"></canvas>
+                </div>
+
+                <!-- 内存历史 -->
+                <div class="card rounded-xl p-6">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4">📈 内存使用历史</h3>
+                    <canvas id="memory-chart" height="200"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- 插件状态 -->
+        <div class="max-w-7xl mx-auto">
+            <div class="card rounded-xl p-6">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">🧩 插件状态</h2>
+                    <a href="/plugins" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
+                        管理插件 →
+                    </a>
+                </div>
+                <div id="plugins-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- 插件卡片将在这里动态生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let cpuChart, memoryChart;
+        let cpuHistory = [];
+        let memoryHistory = [];
+        let startTime = Date.now();
+
+        // 初始化图表
+        function initCharts() {
+            const cpuCtx = document.getElementById('cpu-chart').getContext('2d');
+            cpuChart = new Chart(cpuCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'CPU 使用率 (%)',
+                        data: [],
+                        borderColor: 'rgb(59, 130, 246)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+
+            const memoryCtx = document.getElementById('memory-chart').getContext('2d');
+            memoryChart = new Chart(memoryCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '内存使用率 (%)',
+                        data: [],
+                        borderColor: 'rgb(34, 197, 94)',
+                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+        }
+
+        // 更新系统资源
+        async function updateSystemStats() {
+            try {
+                const response = await fetch('/api/system/stats');
+                const data = await response.json();
+
+                // CPU
+                document.getElementById('cpu-percent').textContent = `${data.cpu.percent}%`;
+                document.getElementById('cpu-bar').style.width = `${data.cpu.percent}%`;
+                document.getElementById('cpu-cores').textContent = `${data.cpu.cores}${__t('核心')}`;
+
+                // 内存
+                document.getElementById('memory-percent').textContent = `${data.memory.percent}%`;
+                document.getElementById('memory-bar').style.width = `${data.memory.percent}%`;
+                document.getElementById('memory-detail').textContent = 
+                    `${data.memory.used} GB / ${data.memory.total} GB`;
+
+                // 磁盘
+                document.getElementById('disk-percent').textContent = `${data.disk.percent}%`;
+                document.getElementById('disk-bar').style.width = `${data.disk.percent}%`;
+                document.getElementById('disk-detail').textContent = 
+                    `${data.disk.used} GB / ${data.disk.total} GB`;
+
+                // 网络
+                document.getElementById('network-speed').textContent = data.network.speed;
+                document.getElementById('network-detail').innerHTML = `
+                    <div>↑ ${data.network.upload} KB/s</div>
+                    <div>↓ ${data.network.download} KB/s</div>
+                `;
+
+                // 更新图表
+                const now = new Date().toLocaleTimeString();
+                cpuHistory.push(data.cpu.percent);
+                memoryHistory.push(data.memory.percent);
+
+                if (cpuHistory.length > 30) {
+                    cpuHistory.shift();
+                    memoryHistory.shift();
+                    cpuChart.data.labels.shift();
+                    memoryChart.data.labels.shift();
+                }
+
+                cpuChart.data.labels.push(now);
+                cpuChart.data.datasets[0].data = cpuHistory;
+                cpuChart.update();
+
+                memoryChart.data.labels.push(now);
+                memoryChart.data.datasets[0].data = memoryHistory;
+                memoryChart.update();
+
+            } catch (error) {
+                console.error('更新系统状态失败:', error);
+            }
+        }
+
+        // 更新 Agent 状态
+        async function updateAgentStats() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                // 运行状态
+                document.getElementById('agent-status').textContent = 
+                    __t(data.running ? '✅ 运行中' : '❌ 停止');
+
+                // 计算运行时间
+                const uptime = Math.floor((Date.now() - startTime) / 1000 / 60);
+                document.getElementById('agent-uptime').textContent = 
+                    `${__t('运行时间: ')}${uptime}${__t('分钟')}`;
+
+                // 会话统计
+                document.getElementById('active-sessions').textContent = 
+                    data.active_sessions || 0;
+                document.getElementById('total-sessions').textContent = 
+                    __tpl(`总会话数: ${data.total_sessions || 0}`);
+
+                // 工具调用
+                document.getElementById('tool-calls').textContent = 
+                    data.tool_calls || 0;
+                document.getElementById('tool-types').textContent = 
+                    __tpl(`工具类型: ${data.tool_types || 0}`);
+
+            } catch (error) {
+                console.error('更新 Agent 状态失败:', error);
+            }
+        }
+
+        // 更新插件状态
+        async function updatePlugins() {
+            try {
+                const response = await fetch('/api/plugins');
+                const data = await response.json();
+                const plugins = Array.isArray(data) ? data : (data.plugins || []);
+
+                const grid = document.getElementById('plugins-grid');
+                grid.innerHTML = '';
+
+                plugins.forEach(plugin => {
+                    const card = document.createElement('div');
+                    card.className = `p-4 rounded-lg border-2 ${
+                        plugin.enabled 
+                            ? 'border-green-500 bg-green-50' 
+                            : 'border-gray-300 bg-gray-50'
+                    }`;
+
+                    card.innerHTML = `
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="font-bold text-gray-800">${plugin.name}</div>
+                            <span class="px-2 py-1 text-xs rounded ${
+                                plugin.enabled 
+                                    ? 'bg-green-500 text-white' 
+                                    : 'bg-gray-400 text-white'
+                            }">
+                                ${plugin.enabled ? __t('启用') : __t('禁用')}
+                            </span>
+                        </div>
+                        <div class="text-sm text-gray-600 mb-2">${plugin.description || __t('无描述')}</div>
+                        <div class="text-xs text-gray-500">
+                            <div>${__tpl(`版本: ${plugin.version}`)}</div>
+                            <div>${__tpl(`优先级: ${plugin.priority}`)}</div>
+                        </div>
+                    `;
+
+                    grid.appendChild(card);
+                });
+
+            } catch (error) {
+                console.error('更新插件状态失败:', error);
+            }
+        }
+
+        // 刷新所有数据
+        async function refreshAll() {
+            await Promise.all([
+                updateSystemStats(),
+                updateAgentStats(),
+                updatePlugins()
+            ]);
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            refreshAll();
+            
+            // 每 3 秒更新一次
+            setInterval(refreshAll, 3000);
+        });
+    </script>
+</body>
+</html>
