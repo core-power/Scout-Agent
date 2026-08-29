@@ -11,6 +11,9 @@
 （但首次运行需通过 download_model.py 获取本地嵌入模型）。
 """
 
+import os
+import sys
+
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 # ── 数据文件 ──────────────────────────────────────────────
@@ -21,6 +24,22 @@ datas = [
     ("../.env.example", "."),                       # 配置模板（随包携带）
     ("scout.ico", "."),                             # exe 图标（相对 spec 目录）
 ]
+
+# ── WebView2 程序集（原生窗口方案，2026-08-29） ────────────
+# launcher.py 直接 AddReference 加载，须放到 _internal 根目录；
+# WebView2Loader.dll 为 native 加载器，.NET DllImport 按 exe 目录搜索。
+_webview_lib = None
+for _p in sys.path:
+    _c = os.path.join(_p, "webview", "lib")
+    if os.path.isdir(_c):
+        _webview_lib = _c
+        break
+if _webview_lib:
+    datas += [
+        (os.path.join(_webview_lib, "Microsoft.Web.WebView2.Core.dll"), "."),
+        (os.path.join(_webview_lib, "Microsoft.Web.WebView2.WinForms.dll"), "."),
+        (os.path.join(_webview_lib, "runtimes", "win-x64", "native", "WebView2Loader.dll"), "."),
+    ]
 
 # 本地嵌入模型（bge-small-zh-v1.5 onnx）— 默认不打包（约 114MB 瘦身）。
 # 如需开箱即用，取消下行注释；否则首次运行需在 Scout 界面下载模型。
@@ -107,7 +126,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,          # 保留控制台便于查看启动日志（后续可改 False）
+    console=False,         # 无控制台窗口，双击直接弹出对话界面（如需调试日志可改 True）
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

@@ -1525,15 +1525,19 @@ function postProcessMarkdown(el) {
 
 // ── WebSocket ──
 let wsReconnecting = false;
+let restoreWarned = false;   // ★ 2026-08-29: 会话丢失提示防重复（页面生命周期内最多弹 1 次）
 let currentAgentMode = 'react';   // 当前运行模式：react / multi_agent（Multi-Agent UI 差异化依据）
-function connect(sid) {
+function connect(sid, forceNew = false) {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let wsUrl = sid ? `${proto}//${location.host}/ws?session_id=${sid}` : `${proto}//${location.host}/ws`;
+    const params = [];
+    if (sid) params.push(`session_id=${sid}`);
+    // ★ 2026-08-29：用户主动点"新对话"时 forceNew=true → 后端 new=1 强制新建，
+    // 否则后端"无 sid 有历史则恢复最近"会把新对话按钮误当成恢复。
+    if (forceNew) params.push('new=1');
     // 附加认证 token（安全修复 2026-08-09）
     const authToken = typeof getAuthToken === 'function' ? getAuthToken() : '';
-    if (authToken) {
-        wsUrl += (wsUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(authToken);
-    }
+    if (authToken) params.push('token=' + encodeURIComponent(authToken));
+    const wsUrl = `${proto}//${location.host}/ws` + (params.length ? '?' + params.join('&') : '');
     ws = new WebSocket(wsUrl);
     ws.onopen = () => {
         wsReconnecting = false;
@@ -1570,7 +1574,9 @@ function handleEvent(event) {
         if (!sessionLoaded && currentSessionId && !isProcessing) {
             sessionLoaded = true;
             console.log('[DEBUG] Calling loadSession from session_init');
-            loadSession(currentSessionId);
+            // ★ 2026-08-29：自动恢复流程静默处理 404（新会话未落库/旧后端），
+            // 不再误弹"会话不存在"——只有用户主动点击历史会话 404 才提示。
+            loadSession(currentSessionId, { silent404: true });
         } else if (sessionLoaded && isProcessing && event.data.session_id && !forceReloaded) {
             // ★ 断线重连且后端仍在生成：强制重建 DOM，补齐断线期间丢失的增量事件
             // （done 等终止事件可能在断线期间丢失，若只靠增量事件会永久缺内容/卡死）
@@ -1580,7 +1586,9 @@ function handleEvent(event) {
         }
         // ★ 修复 2026-08-27：请求的旧会话已不存在（服务重启/数据丢失）→ 明确提示，
         // 不再静默把另一个会话顶上来（此前表现为"历史错乱/变成别人的对话"）
-        if (event.data.restored === false) {
+        // ★ 2026-08-29：restoreWarned 防重复——断线重连会多次收到 session_init，此前每次连接都弹一次
+        if (event.data.restored === false && !restoreWarned) {
+            restoreWarned = true;
             setTimeout(() => toast.warning(__t('请求的会话已不存在，已为你创建新会话')), 600);
         }
         return;
@@ -2918,9 +2926,9 @@ function newChat() {
     localStorage.removeItem('scout_last_session');
     updateMsgCount();
     document.getElementById('chat-title').textContent = __t('新对话');
-    // 重连 WebSocket 创建新 session
+    // 重连 WebSocket 创建新 session（forceNew=true，防止后端恢复最近会话）
     if (ws) ws.close();
-    connect();
+    connect(null, true);
 }
 function updateMsgCount() { const el = document.getElementById('msg-count'); if (el) el.textContent = msgCount; }
 
@@ -3149,7 +3157,12 @@ async function loadSession(sid, opts = {}) {
             currentSessionId = null;
             if (ws) ws.close();
             connect();
-            toast && toast.warning ? toast.warning('该历史会话已不存在，已为你新建对话') : null;
+            // ★ 2026-08-29：防重复——与 session_init 的提示合并为最多 1 条；
+            // silent404（session_init 自动恢复）静默处理，仅用户主动点击历史会话 404 才提示
+            if (!opts.silent404 && !restoreWarned) {
+                restoreWarned = true;
+                toast && toast.warning ? toast.warning('该历史会话已不存在，已为你新建对话') : null;
+            }
             return;
         }
         document.getElementById('welcome-screen').classList.add('hidden');
@@ -5953,9 +5966,22 @@ async function startup() {
         restoreLast = c.restore_last_session !== false;
     } catch(ignore) { /* 配置读取失败时默认恢复 */ }
 
-    const lastSid = localStorage.getItem('scout_last_session');
+    let lastSid = localStorage.getItem('scout_last_session');
     const urlParams = new URLSearchParams(location.search);
     const urlSid = urlParams.get('session_id') || urlParams.get('sid') || '';
+    // ★ 修复 2026-08-29：启动前校验"上次会话"是否仍存在。
+    // 空会话未落库 / 会话被删会留下"幽灵 sid"，直接带上会让后端查不到 → restored=false →
+    // 每次启动都弹"请求的会话已不存在，已为你创建新会话"。
+    if (!urlSid && lastSid) {
+        try {
+            const r = await fetch(`/api/sessions/${lastSid}`);
+            const d = await r.json();
+            if (!r.ok || d.error || !Array.isArray(d.messages)) {
+                localStorage.removeItem('scout_last_session');
+                lastSid = null;
+            }
+        } catch(ignore) { /* 校验失败（网络异常）仍带 sid 连接，后端自会兜底 */ }
+    }
     connect(urlSid || (restoreLast ? lastSid : null));  // URL 指定 > 恢复上次 > 新建
     loadProviders().then(() => {
         loadConfig();

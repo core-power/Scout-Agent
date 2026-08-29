@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +16,20 @@ from typing import AsyncIterator
 from scout.storage.base import StorageBackend
 
 logger = logging.getLogger("scout.storage.sqlite")
+
+# ★ 2026-08-29 修复：store.py 等上层模块使用了 Postgres 风格占位符 $1/$2，
+# 而 sqlite3 只支持 ?（或 :name/@name/$name 命名参数，不含 $数字）。
+# 此前所有 $N 查询/写入都会抛 "Binding N ('$N') is a named parameter..." 异常，
+# 导致会话从未真正落库 → 每次启动历史全丢、前端反复弹"该对话不存在"。
+# 这里统一把 $N 归一化为 ?（按出现顺序一一对应，语义完全等价）。
+_PLACEHOLDER_RE = re.compile(r"\$\d+")
+
+
+def _normalize_sql(sql: str) -> str:
+    """将 Postgres 风格占位符 $1/$2 归一化为 sqlite3 的 ?."""
+    if _PLACEHOLDER_RE.search(sql):
+        return _PLACEHOLDER_RE.sub("?", sql)
+    return sql
 
 
 class SQLiteStorage(StorageBackend):
@@ -46,6 +61,7 @@ class SQLiteStorage(StorageBackend):
     async def execute(self, sql: str, params: tuple | None = None) -> None:
         """执行写操作."""
         assert self._conn, "SQLite 未连接"
+        sql = _normalize_sql(sql)
         if params:
             self._conn.execute(sql, params)
         else:
@@ -55,12 +71,14 @@ class SQLiteStorage(StorageBackend):
     async def executemany(self, sql: str, params_list: list[tuple]) -> None:
         """批量执行写操作."""
         assert self._conn, "SQLite 未连接"
+        sql = _normalize_sql(sql)
         self._conn.executemany(sql, params_list)
         self._conn.commit()
 
     async def fetchone(self, sql: str, params: tuple | None = None) -> dict | None:
         """查询单行."""
         assert self._conn, "SQLite 未连接"
+        sql = _normalize_sql(sql)
         if params:
             row = self._conn.execute(sql, params).fetchone()
         else:
@@ -70,6 +88,7 @@ class SQLiteStorage(StorageBackend):
     async def fetchall(self, sql: str, params: tuple | None = None) -> list[dict]:
         """查询多行."""
         assert self._conn, "SQLite 未连接"
+        sql = _normalize_sql(sql)
         if params:
             rows = self._conn.execute(sql, params).fetchall()
         else:
@@ -112,15 +131,18 @@ class _TransactionStorage(StorageBackend):
         pass
 
     async def execute(self, sql: str, params: tuple | None = None) -> None:
+        sql = _normalize_sql(sql)
         if params:
             self._conn.execute(sql, params)
         else:
             self._conn.execute(sql)
 
     async def executemany(self, sql: str, params_list: list[tuple]) -> None:
+        sql = _normalize_sql(sql)
         self._conn.executemany(sql, params_list)
 
     async def fetchone(self, sql: str, params: tuple | None = None) -> dict | None:
+        sql = _normalize_sql(sql)
         if params:
             row = self._conn.execute(sql, params).fetchone()
         else:
@@ -128,6 +150,7 @@ class _TransactionStorage(StorageBackend):
         return dict(row) if row else None
 
     async def fetchall(self, sql: str, params: tuple | None = None) -> list[dict]:
+        sql = _normalize_sql(sql)
         if params:
             rows = self._conn.execute(sql, params).fetchall()
         else:

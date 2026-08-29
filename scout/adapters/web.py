@@ -196,6 +196,21 @@ class WebAdapter:
 
         self._setup_routes()
 
+    # ── Session store 解析 ──
+    # ★ 2026-08-29：exe 启动初期 self._agent 可能为 None（create_web_app() 不传 agent，
+    # 需等配置加载后才 rebuild）。若会话历史读取依赖 self._agent，会导致启动瞬间
+    # 误判"会话不存在"→ 前端反复弹"该对话不存在，已创建新对话"。这里统一兜底到
+    # 全局 session store，保证无论 agent 是否就绪都能正确读写历史会话。
+    def _session_store(self):
+        if self._agent and self._agent.session_store:
+            return self._agent.session_store
+        try:
+            from scout.session.store import get_session_store
+            return get_session_store()
+        except Exception:  # noqa: BLE001
+            logger.warning("get_session_store() 失败，会话存储不可用", exc_info=True)
+            return None
+
     # ── Webhook 存储 ──
 
     def _load_webhooks(self) -> list[dict]:
@@ -1620,8 +1635,9 @@ class WebAdapter:
         @self.app.get("/api/sessions")
         async def list_sessions(limit: int = 20):
             """列出历史会话."""
-            if self._agent and self._agent.session_store:
-                sessions = self._agent.session_store.list_sessions(limit=limit)
+            _sstore = self._session_store()
+            if _sstore:
+                sessions = _sstore.list_sessions(limit=limit)
                 return {"sessions": sessions}
             return {"sessions": []}
 
@@ -1645,8 +1661,9 @@ class WebAdapter:
         @self.app.get("/api/sessions/{session_id}")
         async def get_session(session_id: str):
             """加载指定会话."""
-            if self._agent and self._agent.session_store:
-                session = self._agent.session_store.load_session(session_id)
+            _sstore = self._session_store()
+            if _sstore:
+                session = _sstore.load_session(session_id)
                 if session:
                     msgs = []
                     for idx, m in enumerate(session.messages):
@@ -1685,8 +1702,11 @@ class WebAdapter:
         @self.app.delete("/api/sessions/{session_id}")
         async def delete_session(session_id: str):
             """删除会话."""
-            if self._agent and self._agent.session_store:
-                self._agent.session_store.delete_session(session_id)
+            # ★ 2026-08-29：改用 _session_store()，不再依赖 self._agent——
+            # exe 启动时 agent 为 None，此前删除一律返回 400"会话存储未启用"，会话删不掉。
+            store = self._session_store()
+            if store:
+                store.delete_session(session_id)
                 return {"status": "ok"}
             return JSONResponse({"error": "会话存储未启用"}, status_code=400)
 
@@ -1697,8 +1717,9 @@ class WebAdapter:
             title = body.get("title", "").strip()
             if not title:
                 return JSONResponse({"error": "标题不能为空"}, status_code=400)
-            if self._agent and self._agent.session_store:
-                self._agent.session_store.rename_session(session_id, title)
+            store = self._session_store()
+            if store:
+                store.rename_session(session_id, title)
                 return {"status": "ok"}
             return JSONResponse({"error": "会话存储未启用"}, status_code=400)
 
@@ -3689,10 +3710,14 @@ class YourPluginName(Plugin):
             await ws.accept()
 
             # 支持通过 query param 指定已有 session
+            # ★ 2026-08-29：session_store 不依赖 self._agent——exe 启动时 agent 尚未
+            # 重建（create_web_app() 不传 agent），此前导致带 sid 也永远"找不到"→
+            # 每次启动都误报"会话已丢失"并新建会话（历史明明还在）。
             sid_param = ws.query_params.get("session_id")
-            restored = False
-            if sid_param and self._agent and self._agent.session_store:
-                existing = self._agent.session_store.load_session(sid_param)
+            restored = True
+            _sstore = self._session_store()
+            if sid_param and _sstore:
+                existing = _sstore.load_session(sid_param)
                 if existing:
                     session = existing
                     restored = True
@@ -3702,8 +3727,37 @@ class YourPluginName(Plugin):
                     # 后端悄悄把另一个会话顶上来 → 用户看到"历史错乱/消失/变成别人的对话"。
                     # 现在：新建空会话并在 session_init 标注 lost，前端可感知并明确提示。
                     session = Session(id=str(uuid.uuid4()))
-            else:
+                    restored = False
+                    # ★ 修复 2026-08-29：新建会话立即落库。此前仅内存对象不落库，
+                    # 前端 session_init 后 loadSession(新sid) 必然 404 → 误弹"会话不存在"提示。
+                    try:
+                        await _sstore.async_create(session.id, agent_id=session.agent_id)
+                    except Exception:
+                        logger.warning("新建会话落库失败（sid 不存在分支）", exc_info=True)
+            elif ws.query_params.get("new") == "1":
+                # ★ 2026-08-29：用户主动点"新对话"→ 强制新建，不恢复历史。
                 session = Session(id=str(uuid.uuid4()))
+                try:
+                    await _sstore.async_create(session.id, agent_id=session.agent_id)
+                except Exception:
+                    logger.warning("新建会话落库失败（new=1 分支）", exc_info=True)
+            else:
+                # ★ 2026-08-29：无 sid（首启/缓存丢失）：有历史会话 → 恢复最近一个，
+                # 不再每次启动都新建空会话导致堆积；无任何历史 → 才新建并落库。
+                restored = True
+                session = None
+                try:
+                    recent = _sstore.list_sessions(limit=1)
+                    if recent:
+                        session = _sstore.load_session(recent[0]["id"])
+                except Exception:
+                    logger.warning("恢复最近会话失败（无 sid 分支）", exc_info=True)
+                if session is None:
+                    session = Session(id=str(uuid.uuid4()))
+                    try:
+                        await _sstore.async_create(session.id, agent_id=session.agent_id)
+                    except Exception:
+                        logger.warning("新建会话落库失败（无 sid 分支）", exc_info=True)
 
             # 通知前端当前 session_id（restored=false 表示请求的旧会话已不存在，已新建）
             await ws.send_json({

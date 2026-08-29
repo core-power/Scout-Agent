@@ -39,6 +39,7 @@ __pycache__/
 htmlcov/
 .tox/
 .venv/
+.venv-*/
 venv/
 
 # ===== IDE / 编辑器 =====
