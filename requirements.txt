@@ -1,0 +1,41 @@
+# Scout Agent 依赖清单（保持纯 ASCII，Windows pip 默认 cp1252 编码读取）
+openai>=1.30.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+httpx>=0.27.0
+rich>=13.0.0
+prompt_toolkit>=3.0.0
+click>=8.0.0
+croniter>=1.4,<6
+python-dotenv>=1.0.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+websockets>=12.0
+sse-starlette>=2.0.0
+numpy>=1.24.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# browser 工具依赖（可选，装后才会被 discover() 加载）
+playwright>=1.40.0
+# /api/system/* 路由依赖（缺包时路由被静默跳过）
+psutil>=5.9.0
+# /api/version/* 路由依赖
+requests>=2.31.0
+# Web UI 入口（scout/web/app.py）
+streamlit>=1.30.0
+# voice/asr（scout.voice 实现，测试与可选功能依赖）
+aiohttp>=3.9.0
+
+# Phase 1: 高可用基础设施
+asyncpg>=0.29.0
+redis>=5.0.0
+nats-py>=2.6.0
+
+# 2026-08-27 平台适配器依赖：
+# - 企业微信/公众号 回调 AES 加解密（cryptography 或 pycryptodome 任一）
+cryptography>=41.0.0
+# - Discord 适配器（discord.py，可选）
+discord.py>=2.3.0
+# - QQ 适配器（aiocqhttp，可选；仅使用 webhook 模式时不需要）
+# - 个人微信适配器（wechaty / itchat，可选；未安装时该渠道不可用，不影响服务）

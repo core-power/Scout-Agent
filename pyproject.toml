@@ -1,0 +1,48 @@
+[project]
+name = "scout-agent"
+version = "1.0.0.0"
+description = "Scout Agent — The self-evolving AI agent that grows with you"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [{name = "Scout Agent"}]
+
+dependencies = [
+    "openai>=1.30.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "httpx>=0.27.0",
+    "rich>=13.0.0",
+    "prompt_toolkit>=3.0.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "websockets>=12.0",
+    "sse-starlette>=2.0.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.3.0",
+]
+# 平台适配器依赖（可选，按需安装对应渠道）
+platforms = [
+    "discord.py>=2.3.0",
+    "cryptography>=41.0.0",
+    # 个人微信: wechaty / itchat（二选一）
+]
+
+[project.scripts]
+scout = "scout.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["scout*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+# 注：pytest 配置统一在 pytest.ini（asyncio_mode 等），此处不再重复声明，
+# 避免 pytest 报 "ignoring pytest config in pyproject.toml" 警告。

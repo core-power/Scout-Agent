@@ -1,0 +1,80 @@
+# Third-Party Notices / 第三方组件声明
+
+This project bundles the following third-party software in `scout/web/static/vendor/`.
+本仓库在 `scout/web/static/vendor/` 目录下捆绑了以下第三方软件，均保留其原始版权与许可声明。
+
+---
+
+## Chart.js (chart.umd.min.js)
+- Version: v4.5.1
+- Homepage: https://www.chartjs.org
+- License: MIT
+- Copyright (c) 2025 Chart.js Contributors
+- Source: https://github.com/chartjs/Chart.js
+- Full license: https://github.com/chartjs/Chart.js/blob/master/LICENSE.md
+
+## D3.js (d3.min.js)
+- Version: v7.9.0
+- Homepage: https://d3js.org
+- License: ISC
+- Copyright 2010-2023 Mike Bostock
+- Source: https://github.com/d3/d3
+- Full license: https://github.com/d3/d3/blob/main/LICENSE
+
+## Highlight.js (highlight.min.js)
+- Version: v11.9.0
+- Homepage: https://highlightjs.org
+- License: BSD-3-Clause
+- Copyright (c) 2006-2023 Ivan Sagalaev and other contributors
+- Source: https://github.com/highlightjs/highlight.js
+- Full license: https://github.com/highlightjs/highlight.js/blob/main/LICENSE
+
+## GitHub Dark theme (github-dark.min.css, for Highlight.js)
+- Theme: GitHub Dark
+- Description: Dark theme as seen on github.com
+- License: MIT
+- Source: https://github.com/highlightjs/highlight.js/tree/main/src/styles
+
+## Marked (marked.min.js)
+- Version: v15.0.12
+- Homepage: https://marked.js.org
+- License: MIT
+- Copyright (c) 2011-2025, Christopher Jeffrey
+- Source: https://github.com/markedjs/marked
+- Full license: https://github.com/markedjs/marked/blob/master/LICENSE.md
+
+## DOMPurify (purify.min.js)
+- Version: v3.4.13
+- Homepage: https://github.com/cure53/DOMPurify
+- License: Apache-2.0 AND Mozilla Public License 2.0 (dual-licensed)
+- Copyright (c) Cure53 and other contributors
+- Source: https://github.com/cure53/DOMPurify
+- Full license: https://github.com/cure53/DOMPurify/blob/main/LICENSE
+
+## Tailwind CSS (tailwind.js)
+- Version: v3.0.x (browser build)
+- Homepage: https://tailwindcss.com
+- License: MIT
+- Copyright (c) Tailwind Labs, Inc.
+- Source: https://github.com/tailwindlabs/tailwindcss
+- Full license: https://github.com/tailwindlabs/tailwindcss/blob/master/LICENSE
+
+  MIT License
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+  THE SOFTWARE.

@@ -1,0 +1,66 @@
+# ===== 用户配置与运行时数据（绝不提交，随项目迁移）=====
+.scout/
+data/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# ===== 密钥与配置（绝不提交）=====
+.env
+.env.*
+!.env.example
+config.json
+credentials.json
+*.key
+*.pem
+secrets/
+
+# ===== 模型文件（体积大，需自行下载）=====
+scout/models/bge-small-zh-v1.5-onnx/
+
+# ===== 打包产物 =====
+build/
+dist/
+ScoutPortable/
+*.spec
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.venv/
+venv/
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== 运行时文件 =====
+.scout.pid
+nohup.out
+tmp/
+/tmp/
+bench/
+
+# ===== 临时与开发脚本 =====
+_verify_*.py
+run_sandbox_test.sh
+test_*.py
+!test_*.md
+run_e2e*.py
+run_quick_test.sh
+run_test.sh
+*.bak_*

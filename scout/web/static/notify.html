@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>通知中心 · Scout Agent</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="/static/vendor/tailwind.js"></script>
+    <script>
+    tailwind.config = {
+        darkMode: 'class',
+        theme: { extend: { colors: { scout: {
+            50:'#ecfeff',100:'#cffafe',200:'#a5f3fc',300:'#67e8f9',
+            400:'#22d3ee',500:'#06b6d4',600:'#0891b2',700:'#0e7490',800:'#155e75',900:'#164e63',
+        }}}}
+    }
+    </script>
+    <style>
+        * { -webkit-font-smoothing: antialiased; }
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        .card { background: #0d0d0d; border: 1px solid rgba(255,255,255,0.08); border-radius: 0.75rem; }
+        .field { width: 100%; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 0.5rem; padding: 0.5rem 0.75rem; color: #e2e8f0; font-size: 0.8rem; outline: none; }
+        .field:focus { border-color: rgba(6,182,212,0.5); }
+        .btn-primary { background: #0891b2; color: #fff; border-radius: 0.5rem; padding: 0.5rem 1rem; font-size: 0.8rem; transition: opacity .15s; }
+        .btn-primary:hover { opacity: 0.85; }
+        .btn-ghost { background: rgba(255,255,255,0.05); color: #cbd5e1; border-radius: 0.5rem; padding: 0.5rem 1rem; font-size: 0.8rem; transition: background .15s; }
+        .btn-ghost:hover { background: rgba(255,255,255,0.1); }
+        .switch { position: relative; width: 34px; height: 20px; border-radius: 10px; background: #334155; cursor: pointer; transition: background .2s; }
+        .switch.on { background: #0891b2; }
+        .switch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .2s; }
+        .switch.on .knob { left: 16px; }
+        .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: 8px; font-size: 0.8rem; color: #fff; z-index: 100; opacity: 0; transition: opacity .3s; pointer-events: none; }
+        .toast.show { opacity: 1; }
+    </style>
+    <script src="/static/i18n.js"></script>
+</head>
+<body class="h-screen overflow-hidden bg-[#0a0a0a] text-slate-200 flex flex-col">
+    <script>renderLangToggle();</script>
+
+<!-- 顶栏 -->
+<div class="flex items-center gap-3 px-4 py-3 border-b border-white/5 flex-shrink-0">
+    <a href="/" class="p-2 -ml-2 rounded-lg hover:bg-white/5 text-slate-400 transition-colors">
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+    </a>
+    <h1 class="text-lg font-bold text-white">🔔 通知中心</h1>
+    <div class="flex-1"></div>
+    <button onclick="testPush()" class="btn-primary">发送测试通知</button>
+    <button onclick="loadAll()" class="btn-ghost">刷新</button>
+</div>
+
+<div class="flex-1 flex overflow-hidden">
+    <!-- 左栏：偏好配置 -->
+    <div class="w-[420px] flex-shrink-0 border-r border-white/5 overflow-y-auto p-4 space-y-4">
+        <!-- 总开关 -->
+        <div class="card p-4 flex items-center justify-between">
+            <div>
+                <div class="text-sm text-slate-200 font-medium">启用通知推送</div>
+                <div class="text-xs text-slate-500 mt-0.5">关闭后所有跨渠道推送暂停</div>
+            </div>
+            <div id="sw-enabled" class="switch" onclick="toggleEnabled()"><div class="knob"></div></div>
+        </div>
+
+        <!-- 基本规则 -->
+        <div class="card p-4 space-y-3">
+            <div class="text-sm text-slate-200 font-medium">推送规则</div>
+            <div class="flex items-center justify-between">
+                <span class="text-xs text-slate-400">最低级别</span>
+                <select id="min-level" class="field w-32" onchange="savePrefs()">
+                    <option value="debug">debug</option>
+                    <option value="info">info</option>
+                    <option value="warning">warning</option>
+                    <option value="critical">critical</option>
+                </select>
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-xs text-slate-400">去重窗口 (秒)</span>
+                <input id="dedupe" type="number" min="0" class="field w-24" onchange="savePrefs()">
+            </div>
+        </div>
+
+        <!-- 类型策略 -->
+        <div class="card p-4 space-y-2">
+            <div class="text-sm text-slate-200 font-medium">按类型开关</div>
+            <div class="text-xs text-slate-500 mb-2">控制哪些类型的通知值得推送</div>
+            <div id="type-policy" class="space-y-2"></div>
+        </div>
+
+        <!-- IM 渠道目标 -->
+        <div class="card p-4 space-y-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-sm text-slate-200 font-medium">IM 渠道目标</div>
+                    <div class="text-xs text-slate-500">通知将主动推送到这些渠道</div>
+                </div>
+                <button onclick="addChannelRow()" class="btn-ghost text-xs" data-i18n="+ 添加">+ 添加</button>
+            </div>
+            <div id="channel-targets" class="space-y-2"></div>
+        </div>
+
+        <!-- 邮件 -->
+        <div class="card p-4 space-y-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-sm text-slate-200 font-medium">邮件推送 (SMTP)</div>
+                    <div class="text-xs text-slate-500">可选，用于重要通知的邮件备份</div>
+                </div>
+                <div id="sw-email" class="switch" onclick="toggleEmail()"><div class="knob"></div></div>
+            </div>
+            <div id="email-form" class="space-y-2">
+                <input id="email-to" class="field" placeholder="收件人邮箱" data-i18n-placeholder="收件人邮箱">
+                <input id="smtp-host" class="field" placeholder="SMTP 主机 (如 smtp.qq.com)" data-i18n-placeholder="SMTP 主机 (如 smtp.qq.com)">
+                <div class="flex gap-2">
+                    <input id="smtp-port" class="field w-24" placeholder="端口 (465)" data-i18n-placeholder="端口 (465)" type="number">
+                    <input id="smtp-user" class="field flex-1" placeholder="SMTP 账号" data-i18n-placeholder="SMTP 账号">
+                </div>
+                <input id="smtp-pass" class="field" placeholder="SMTP 密码/授权码" data-i18n-placeholder="SMTP 密码/授权码" type="password">
+                <label class="flex items-center gap-2 text-xs text-slate-400">
+                    <input id="smtp-ssl" type="checkbox" checked> 使用 SSL/TLS
+                </label>
+            </div>
+            <button onclick="savePrefs()" class="btn-primary w-full">保存偏好</button>
+        </div>
+    </div>
+
+    <!-- 右栏：推送历史 -->
+    <div class="flex-1 flex flex-col overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-white/5 flex items-center gap-2 flex-shrink-0">
+            <span class="text-sm text-slate-300 font-medium">推送历史</span>
+            <span class="text-xs text-slate-600">最多保留 500 条</span>
+            <div class="flex-1"></div>
+            <button onclick="clearHistory()" class="text-xs text-slate-500 hover:text-red-400 transition-colors">清空</button>
+        </div>
+        <div id="history" class="flex-1 overflow-y-auto p-4 space-y-2"></div>
+    </div>
+</div>
+
+<div id="toast" class="toast bg-slate-800"></div>
+
+<script>
+// ── 类型元信息 ──
+const TYPE_META = {
+    task_alert:      { label: '任务异常', icon: '⚠️', color: '#ef4444' },
+    task_complete:   { label: '任务完成', icon: '✅', color: '#10b981' },
+    cron_triggered:  { label: '定时触发', icon: '⏰', color: '#f59e0b' },
+    system:          { label: '系统',     icon: '⚙️', color: '#3b82f6' },
+    reminder:        { label: '提醒',     icon: '🔔', color: '#a855f7' },
+    default:         { label: '其他',     icon: '📄', color: '#64748b' },
+};
+
+let prefs = null;
+
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function toast(msg) {
+    msg = __tpl(msg);
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+// ── 加载 ──
+async function loadAll() {
+    await Promise.all([loadPrefs(), loadHistory()]);
+}
+
+async function loadPrefs() {
+    try {
+        const r = await fetch('/api/notify/prefs');
+        const { prefs: p } = await r.json();
+        prefs = p;
+        renderPrefs();
+    } catch (e) { console.error(e); toast('加载偏好失败'); }
+}
+
+function renderPrefs() {
+    if (!prefs) return;
+    // 总开关
+    const sw = document.getElementById('sw-enabled');
+    sw.classList.toggle('on', !!prefs.enabled);
+    // 基本规则
+    document.getElementById('min-level').value = prefs.min_level || 'info';
+    document.getElementById('dedupe').value = prefs.dedupe_seconds || 60;
+    // 类型策略
+    const policyKeys = ['task_alert','task_complete','cron_triggered','system','reminder','default'];
+    const tp = document.getElementById('type-policy');
+    tp.innerHTML = policyKeys.map(k => {
+        const meta = TYPE_META[k] || TYPE_META.default;
+        const on = prefs.type_policy && prefs.type_policy[k] !== false;
+        return `
+        <div class="flex items-center justify-between px-2 py-1.5 rounded hover:bg-white/[0.03]">
+            <span class="text-xs text-slate-300">${meta.icon} ${__t(meta.label)}</span>
+            <div class="switch ${on ? 'on' : ''}" onclick="toggleType('${k}')"><div class="knob"></div></div>
+        </div>`;
+    }).join('');
+    // 渠道目标
+    renderChannels();
+    // 邮件
+    const e = prefs.email || {};
+    document.getElementById('sw-email').classList.toggle('on', !!e.enabled);
+    document.getElementById('email-to').value = e.to || '';
+    document.getElementById('smtp-host').value = e.smtp_host || '';
+    document.getElementById('smtp-port').value = e.smtp_port || 465;
+    document.getElementById('smtp-user').value = e.smtp_user || '';
+    document.getElementById('smtp-pass').value = e.smtp_password || '';
+    document.getElementById('smtp-ssl').checked = e.smtp_ssl !== false;
+}
+
+function renderChannels() {
+    const channels = (prefs && prefs.channels) || [];
+    const cw = document.getElementById('channel-targets');
+    if (channels.length === 0) {
+        cw.innerHTML = '<div class="text-xs text-slate-600 text-center py-3">暂无渠道目标，点击右上角"+"添加</div>';
+        return;
+    }
+    cw.innerHTML = channels.map((c, i) => `
+        <div class="flex items-center gap-2 bg-white/[0.03] rounded-lg p-2">
+            <input data-idx="${i}" data-f="channel" class="field flex-1" placeholder="渠道名 (如 telegram)" data-i18n-placeholder="渠道名 (如 telegram)" value="${esc(c.channel)}" onchange="updateChannel(${i}, 'channel', this.value)">
+            <input data-idx="${i}" data-f="target" class="field flex-1" placeholder="目标 ID / 群组" data-i18n-placeholder="目标 ID / 群组" value="${esc(c.target)}" onchange="updateChannel(${i}, 'target', this.value)">
+            <div class="switch ${c.enabled !== false ? 'on' : ''}" onclick="toggleChannel(${i})"><div class="knob"></div></div>
+            <button class="text-slate-500 hover:text-red-400 text-xs" onclick="removeChannel(${i})">✕</button>
+        </div>`).join('');
+}
+
+// ── 交互 ──
+async function savePrefs() {
+    if (!prefs) return;
+    const body = {
+        enabled: prefs.enabled,
+        min_level: document.getElementById('min-level').value,
+        dedupe_seconds: parseInt(document.getElementById('dedupe').value) || 0,
+        email: {
+            enabled: prefs.email ? !!prefs.email.enabled : false,
+            to: document.getElementById('email-to').value,
+            smtp_host: document.getElementById('smtp-host').value,
+            smtp_port: parseInt(document.getElementById('smtp-port').value) || 465,
+            smtp_user: document.getElementById('smtp-user').value,
+            smtp_password: document.getElementById('smtp-pass').value,
+            smtp_ssl: document.getElementById('smtp-ssl').checked,
+        },
+    };
+    try {
+        const r = await fetch('/api/notify/prefs', {
+            method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        prefs = d.prefs || prefs;
+        renderPrefs();
+        toast('偏好已保存');
+    } catch (e) { toast('保存失败: ' + e.message); }
+}
+
+function toggleEnabled() {
+    prefs.enabled = !prefs.enabled;
+    document.getElementById('sw-enabled').classList.toggle('on', prefs.enabled);
+    savePrefs();
+}
+
+function toggleEmail() {
+    if (!prefs.email) prefs.email = {};
+    prefs.email.enabled = !prefs.email.enabled;
+    document.getElementById('sw-email').classList.toggle('on', prefs.email.enabled);
+    savePrefs();
+}
+
+function toggleType(k) {
+    if (!prefs.type_policy) prefs.type_policy = {};
+    prefs.type_policy[k] = prefs.type_policy[k] === false;
+    savePrefs();
+}
+
+function addChannelRow() {
+    if (!prefs.channels) prefs.channels = [];
+    prefs.channels.push({ channel: '', target: '', enabled: true });
+    renderChannels();
+    savePrefs();
+}
+function updateChannel(i, f, v) { prefs.channels[i][f] = v; savePrefs(); }
+function toggleChannel(i) { prefs.channels[i].enabled = !(prefs.channels[i].enabled !== false); renderChannels(); savePrefs(); }
+function removeChannel(i) { prefs.channels.splice(i, 1); renderChannels(); savePrefs(); }
+
+async function testPush() {
+    toast('正在发送测试通知...');
+    try {
+        const r = await fetch('/api/notify/test', { method: 'POST' });
+        const d = await r.json();
+        if (d.result && d.result.pushed) { toast('测试通知已推送 ✅'); loadHistory(); }
+        else toast('未推送到任何渠道（检查偏好配置）');
+    } catch (e) { toast('测试失败: ' + e.message); }
+}
+
+// ── 历史 ──
+async function loadHistory() {
+    const el = document.getElementById('history');
+    try {
+        const r = await fetch('/api/notify/history?limit=100');
+        const { history } = await r.json();
+        if (!history || history.length === 0) {
+            el.innerHTML = '<div class="text-center text-slate-600 text-sm py-20" data-i18n="暂无推送记录">暂无推送记录</div>';
+            return;
+        }
+        el.innerHTML = history.map(h => {
+            const meta = TYPE_META[h.type] || TYPE_META.default;
+            const ok = h.result && h.result.pushed;
+            const ch = (h.result && h.result.channels || []).map(c => c.ok ? `${c.channel}✓` : `${c.channel}✗`).join(' ');
+            const dedupe = h.dedupe_hits > 0 ? ` <span class="text-amber-500" title="去重合并了 ${h.dedupe_hits} 次">⊘${h.dedupe_hits}</span>` : '';
+            return `
+            <div class="card p-3 flex items-start gap-3">
+                <span class="text-sm mt-0.5" style="color:${meta.color}">${meta.icon}</span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm text-slate-200 truncate">${esc(h.title)}${dedupe}</div>
+                    <div class="text-xs text-slate-500 mt-0.5 truncate">${esc(h.message || '')}</div>
+                    <div class="text-xs text-slate-600 mt-1 flex items-center gap-2 flex-wrap">
+                        <span>${esc(h.ts || '')}</span>
+                        <span class="text-slate-500">${__t(meta.label)}</span>
+                        ${ch ? `<span class="text-slate-400">→ ${ch}</span>` : ''}
+                        ${h.result && h.result.email ? '<span class="text-scout-400">📧 邮件✓</span>' : ''}
+                        ${!ok ? '<span class="text-slate-600">未推送</span>' : ''}
+                    </div>
+                </div>
+                <span class="text-xs ${ok ? 'text-emerald-500' : 'text-slate-600'}">${ok ? '已推送' : '已过滤'}</span>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        el.innerHTML = '<div class="text-center text-red-400 text-sm py-20">加载失败: ' + e.message + '</div>';
+    }
+}
+
+async function clearHistory() {
+    if (!confirm(__t('确认清空全部推送历史？'))) return;
+    try {
+        await fetch('/api/notify/history', { method: 'DELETE' });
+        toast('历史已清空');
+        loadHistory();
+    } catch (e) { toast('清空失败'); }
+}
+
+loadAll();
+</script>
+</body>
+</html>
