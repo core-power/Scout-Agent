@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+from scout.storage.schema import ensure_schema
 from typing import Any
 
 
@@ -88,6 +89,8 @@ class LLMUsageTracker:
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_usage_model ON llm_usage(model)
         """)
+        # 统一 schema 版本管理：自动执行缺失版本的增量迁移（幂等）
+        ensure_schema(conn)
         conn.commit()
         conn.close()
 

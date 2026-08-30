@@ -8,10 +8,10 @@ Scout Agent 的插件系统允许你轻松扩展 AI 助手的对话能力。每�
 
 ### 1. 创建插件目录
 
-插件存放在 `~/.scout/plugins/` 目录下：
+插件存放在 `$SCOUT_DATA_DIR/plugins/` 目录下：
 
 ```bash
-mkdir -p ~/.scout/plugins/my_plugin
+mkdir -p $SCOUT_DATA_DIR/plugins/my_plugin
 ```
 
 ### 2. 创建插件文件
@@ -19,7 +19,7 @@ mkdir -p ~/.scout/plugins/my_plugin
 创建 `__init__.py` 文件：
 
 ```bash
-nano ~/.scout/plugins/my_plugin/__init__.py
+nano $SCOUT_DATA_DIR/plugins/my_plugin/__init__.py
 ```
 
 ### 3. 编写插件代码
@@ -74,7 +74,7 @@ class FAQPlugin(Plugin):
     # 定义问答对
     faq = {
         "什么是 scout": "Scout 是一个智能 AI 助手，支持插件扩展和多工具调用。",
-        "如何安装插件": "将插件目录放到 ~/.scout/plugins/ 下，然后在插件管理页面启用。",
+        "如何安装插件": "将插件目录放到 $SCOUT_DATA_DIR/plugins/ 下，然后在插件管理页面启用。",
         "支持哪些功能": "文件编辑、命令执行、记忆存储、知识图谱、语音识别等。"
     }
     
@@ -115,7 +115,7 @@ class MessageLogger(Plugin):
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.log_file = self.config.get("log_file", "~/.scout/message_log.txt")
+        self.log_file = self.config.get("log_file", "$SCOUT_DATA_DIR/message_log.txt")
         self.log_file = Path(self.log_file).expanduser()
     
     async def on_event(self, event):
@@ -192,7 +192,7 @@ class CustomGreeting(Plugin):
 
 ### 配置文件位置
 
-插件配置保存在 `~/.scout/plugins/{plugin_name}/config.json`：
+插件配置保存在 `$SCOUT_DATA_DIR/plugins/{plugin_name}/config.json`：
 
 ```json
 {
@@ -301,7 +301,7 @@ async def on_event(self, event):
 ### 1. 查看日志
 
 ```bash
-tail -f ~/.scout/scout.log | grep your_plugin
+tail -f $SCOUT_DATA_DIR/scout.log | grep your_plugin
 ```
 
 ### 2. 添加调试输出

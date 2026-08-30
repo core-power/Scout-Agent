@@ -2,7 +2,7 @@
 
 对外导出两套配置:
 - ConfigManager / LLMConfig (pydantic): 运行时可修改的 Web 配置，
-  持久化在 ~/.scout/config.json（原 scout/config.py，2026-08-03 从字节码还原）。
+  持久化在 $SCOUT_DATA_DIR/config.json（原 scout/config.py，2026-08-03 从字节码还原）。
 - ScoutConfig / get_config (settings.py): 基于环境变量的核心配置。
 
 注意: 两套配置里各有一个 LLMConfig。包级别导出的是 pydantic 版

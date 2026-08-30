@@ -130,6 +130,9 @@ class GoalManager:
             CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id);
             CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
         """)
+        # 统一 schema 版本管理：自动执行缺失版本的增量迁移（幂等）
+        from scout.storage.schema import ensure_schema
+        ensure_schema(conn)
         conn.commit()
 
     def create_goal(

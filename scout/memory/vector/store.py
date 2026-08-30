@@ -88,6 +88,9 @@ class VectorStore:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_created ON memories(created_at)")
+            # 统一 schema 版本管理：自动执行缺失版本的增量迁移（幂等）
+            from scout.storage.schema import ensure_schema
+            ensure_schema(conn)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))

@@ -13,13 +13,19 @@ import secrets
 import time
 from base64 import b64decode, b64encode
 from pathlib import Path
-
-from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
-# JWT 密钥 — 首次启动自动生成并持久化
-SECRET_PATH = _SCOUT_DATA_DIR / "jwt_secret"
+# JWT 密钥路径：延迟解析，避免模块导入期 import scout.config 触发
+# config → manager → secret → ... 的循环导入。测试可直接 monkeypatch 覆盖。
+SECRET_PATH: Path | None = None
 TOKEN_EXPIRY = 86400 * 7  # 7 天
+
+
+def _jwt_secret_path() -> Path:
+    """数据目录下的 JWT 密钥路径（运行时解析，避免循环导入）."""
+    from scout.config.paths import DATA_DIR
+
+    return DATA_DIR / "jwt_secret"
 
 # PBKDF2 迭代次数 — 对抗离线爆破（登录频率低，200k 兼顾性能与安全）
 _PBKDF2_ITERATIONS = 200_000
@@ -28,12 +34,13 @@ _PBKDF2_PREFIX = "pbkdf2$"
 
 def _get_secret() -> bytes:
     """获取或生成 JWT 密钥."""
-    if SECRET_PATH.exists():
-        return SECRET_PATH.read_bytes()
-    SECRET_PATH.parent.mkdir(parents=True, exist_ok=True)
+    secret_path = SECRET_PATH if SECRET_PATH is not None else _jwt_secret_path()
+    if secret_path.exists():
+        return secret_path.read_bytes()
+    secret_path.parent.mkdir(parents=True, exist_ok=True)
     secret = secrets.token_bytes(32)
-    SECRET_PATH.write_bytes(secret)
-    os.chmod(SECRET_PATH, 0o600)
+    secret_path.write_bytes(secret)
+    os.chmod(secret_path, 0o600)
     return secret
 
 
@@ -43,8 +50,9 @@ def rotate_secret() -> None:
     在修改密码后调用，吊销旧会话（旧 token 签名校验将失败）。
     注意：当前进程所有已登录会话都会因此需要重新登录。
     """
-    if SECRET_PATH.exists():
-        SECRET_PATH.unlink()
+    secret_path = SECRET_PATH if SECRET_PATH is not None else _jwt_secret_path()
+    if secret_path.exists():
+        secret_path.unlink()
     _get_secret()
 
 
@@ -144,7 +152,8 @@ def verify_token(token: str) -> dict[str, Any] | None:
 class AuthManager:
     """认证管理器 — 管理用户凭证."""
 
-    CREDENTIALS_PATH = _SCOUT_DATA_DIR / "credentials.json"
+    # 凭证路径：延迟解析避免模块导入期循环导入；测试可 monkeypatch 覆盖
+    CREDENTIALS_PATH: Path | None = None
 
     # 登录失败锁定：连续失败 MAX_LOGIN_FAILURES 次后锁定 LOCK_SECONDS 秒
     MAX_LOGIN_FAILURES = 5
@@ -153,21 +162,35 @@ class AuthManager:
     _fail_counts: dict[str, int] = {}
     _lock_until: dict[str, float] = {}
 
+    @staticmethod
+    def _credentials_path() -> Path:
+        """数据目录下的凭证文件路径（运行时解析，避免循环导入）."""
+        from scout.config.paths import DATA_DIR
+
+        return DATA_DIR / "credentials.json"
+
+    def _resolve_credentials_path(self) -> Path:
+        return (
+            self.CREDENTIALS_PATH
+            if self.CREDENTIALS_PATH is not None
+            else self._credentials_path()
+        )
+
     def __init__(self):
-        self.CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self._resolve_credentials_path().parent.mkdir(parents=True, exist_ok=True)
 
     def has_credentials(self) -> bool:
         """是否已设置凭证."""
-        return self.CREDENTIALS_PATH.exists()
+        return self._resolve_credentials_path().exists()
 
     def _write_credentials(self, data: dict) -> None:
         """写凭证文件（600 权限，仅当前用户可读）. """
-        with open(self.CREDENTIALS_PATH, "w") as f:
+        with open(self._resolve_credentials_path(), "w") as f:
             json.dump(data, f)
-        os.chmod(self.CREDENTIALS_PATH, 0o600)
+        os.chmod(self._resolve_credentials_path(), 0o600)
 
     def _read_credentials(self) -> dict:
-        with open(self.CREDENTIALS_PATH) as f:
+        with open(self._resolve_credentials_path()) as f:
             return json.load(f)
 
     def set_credentials(self, username: str, password: str) -> None:
@@ -203,10 +226,9 @@ class AuthManager:
         return False
 
     def verify(self, username: str, password: str) -> bool:
-        """验证用户名和密码."""
+        """验证用户名和密码（凭证未设置时返回 False；首次设置由 login 负责引导）."""
         if not self.has_credentials():
-            # 未设置凭证时，允许任意用户名密码（首次设置）
-            return True
+            return False
         data = self._read_credentials()
         if username != data["username"]:
             return False

@@ -29,7 +29,7 @@ from scout.security.secret import (
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 统一路径（2026-08-30）：SCOUT_CONFIG_DIR 或 <项目根>/.scout，随项目迁移；
-# exe 便携模式由 launcher 设置 SCOUT_CONFIG_DIR=exe旁data，不再写死 C 盘 ~/.scout
+# exe 便携模式由 launcher 设置 SCOUT_CONFIG_DIR=exe旁data，不再写死 C 盘 $SCOUT_DATA_DIR
 from scout.config.paths import CONFIG_PATH  # noqa: E402
 
 # 需要加密存储的敏感字段（直接值）
@@ -38,8 +38,12 @@ _SENSITIVE_FIELDS = ("api_key",)
 # 需要加密存储的敏感字段（dict 的 value，如 provider -> api_key 映射）
 _SENSITIVE_MAP_FIELDS = ("provider_keys",)
 
+# 配置结构版本：字段增删时 +1（加载时自动补齐新字段，向后兼容旧配置）
+CONFIG_VERSION = 1
+
 # 首次启动时生成配置文件的模板
 INITIAL_CONFIG = {
+    "config_version": CONFIG_VERSION,
     "provider": "dashscope",
     "model": "qwen-plus",
     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -89,7 +93,8 @@ INITIAL_CONFIG = {
 
 
 class LLMConfig(BaseModel):
-    """LLM 配置模型 — 所有字段都是可选的，从 ~/.scout/config.json 读取."""
+    """LLM 配置模型 — 所有字段都是可选的，从 $SCOUT_DATA_DIR/config.json 读取."""
+    config_version: int = 1  # 配置结构版本，旧配置缺省时按 1 处理
     provider: str = ""
     model: str = ""
     base_url: str = ""
@@ -147,7 +152,7 @@ class ConfigManager:
             json.dump(INITIAL_CONFIG, f, indent=2, ensure_ascii=False)
 
     def load(self) -> LLMConfig:
-        """加载配置 — 从 ~/.scout/config.json 读取."""
+        """加载配置 — 从 $SCOUT_DATA_DIR/config.json 读取."""
         # 1. 从 .env 加载（仅用于向后兼容）
         config = {}
         env_candidates = [
@@ -160,7 +165,7 @@ class ConfigManager:
                 self._load_env_file(env_path, config)
                 break
 
-        # 2. 从 ~/.scout/config.json 读取（覆盖 .env）
+        # 2. 从 $SCOUT_DATA_DIR/config.json 读取（覆盖 .env）
         if CONFIG_PATH.exists():
             with open(CONFIG_PATH) as f:
                 saved = json.load(f)
@@ -173,6 +178,15 @@ class ConfigManager:
         for _k, _v in config.items():
             if _v is not None:
                 merged[_k] = _v
+
+        # 3.1 配置结构升级：旧配置缺省 config_version 视为 1；
+        #     低于当前版本时按版本号执行结构迁移（暂无迁移步骤，仅记录并回写）。
+        try:
+            saved_version = int(merged.get("config_version", 1) or 1)
+        except (TypeError, ValueError):
+            saved_version = 1
+        if saved_version < CONFIG_VERSION:
+            merged["config_version"] = CONFIG_VERSION
 
         # 4. 解密敏感字段（api_key / provider_keys）。
         #    同时做平滑迁移：若字段是非空的明文，则自动加密并回写，
@@ -208,7 +222,7 @@ class ConfigManager:
                         need_migrate = True
                 migrated_engines.append(e)
             merged["search_engines"] = migrated_engines
-        if need_migrate:
+        if need_migrate or int(merged.get("config_version", 1)) < CONFIG_VERSION:
             self._write_encrypted(merged)
 
         return LLMConfig(**merged)

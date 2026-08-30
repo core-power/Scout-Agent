@@ -1,5 +1,5 @@
 {
-  "// 说明": "Scout Agent 首次配置模板。复制到用户配置目录并填写：cp config.example.json ~/.scout/config.json （首次启动也会自动生成）。所有用户配置、会话、记忆保存在 ~/.scout/ 下。provider 可选 dashscope / deepseek / zhipu / moonshot / volcano / openai / claude / gemini / openrouter / compatible；模型示例见各 provider 最新模型（如 qwen3.8-max / deepseek-chat / glm-5.2 / kimi-k3 / gpt-4.1 / claude-sonnet-4-20250514 / gemini-2.5-pro）。",
+  "// 说明": "Scout Agent 首次配置模板。数据目录（$SCOUT_DATA_DIR）默认位于程序所在盘符根目录（如 Windows 下 D:\\.scout）或项目根目录，可用环境变量 SCOUT_DATA_DIR 覆盖。复制并填写：cp config.example.json $SCOUT_DATA_DIR/config.json （首次启动也会自动生成）。所有用户配置、会话、记忆保存在 $SCOUT_DATA_DIR/ 下。provider 可选 dashscope / deepseek / zhipu / moonshot / volcano / openai / claude / gemini / openrouter / compatible；模型示例见各 provider 最新模型（如 qwen3.8-max / deepseek-chat / glm-5.2 / kimi-k3 / gpt-4.1 / claude-sonnet-4-20250514 / gemini-2.5-pro）。",
   "provider": "dashscope",
   "model": "qwen3.7-plus",
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",

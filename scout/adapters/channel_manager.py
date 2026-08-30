@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 from pathlib import Path
@@ -29,7 +30,12 @@ class ChannelManager:
         self._running: dict[str, asyncio.Task] = {}
         self._message_queue: asyncio.Queue[PlatformMessage] = asyncio.Queue()
         self._agent_handler: Any = None  # Agent 处理函数
-        self._config_dir = Path(config_dir) if config_dir else Path("data/channels")
+        if config_dir:
+            self._config_dir = Path(config_dir)
+        else:
+            # 统一数据目录（默认 <盘符>:\\.scout\channels），避免落 CWD 相对路径
+            from scout.config.paths import DATA_DIR
+            self._config_dir = DATA_DIR / "channels"
         self._config_dir.mkdir(parents=True, exist_ok=True)
         self._stats: dict[str, dict] = {}  # 渠道统计
 
@@ -79,7 +85,7 @@ class ChannelManager:
             await adapter.start()
             task = asyncio.create_task(self._run_channel(name, adapter))
             self._running[name] = task
-            self._stats[name]["started_at"] = __import__("datetime").datetime.now().isoformat()
+            self._stats[name]["started_at"] = datetime.datetime.now().isoformat()
             logger.info(f"渠道已启动: {name}")
             return True
         except Exception as e:

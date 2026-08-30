@@ -175,8 +175,8 @@ def _wait_port_free(port: int = 8848, timeout: float = 5.0) -> bool:
 def _get_db_path() -> Optional[str]:
     """Scout 数据库文件路径（默认 <盘符>:\\.scout\\sessions.db）."""
     try:
-        from scout.config.settings import get_data_dir
-        return os.path.join(str(get_data_dir()), "sessions.db")
+        from scout.config.paths import DATA_DIR
+        return str(DATA_DIR / "sessions.db")
     except Exception:
         # 兜底: 项目所在盘符根目录（如 D:\.scout）
         anchor = os.path.splitdrive(get_project_root())[0]  # 如 "D:"
@@ -456,6 +456,18 @@ def update(ctx):
     )
 
     click.echo("")
+    # 升级能力：代码更新后提示数据格式迁移状态
+    try:
+        from scout.config.manifest import check_data_format
+
+        compatible, msg = check_data_format()
+        if compatible:
+            click.echo(f"[数据格式] {msg}")
+        else:
+            click.echo(f"[警告] {msg}", err=True)
+    except Exception:
+        pass
+
     time.sleep(1)
     ctx.invoke(start, no_logs=False)
 
@@ -464,3 +476,15 @@ def update(ctx):
 def version():
     """显示版本."""
     click.echo(f"scout v{__version__}")
+    # 数据格式版本提示（升级能力）：显示当前数据目录的格式版本
+    try:
+        from scout.config.manifest import (
+            DATA_FORMAT_VERSION,
+            get_data_format_version,
+        )
+
+        current = get_data_format_version()
+        status = "✓" if current >= DATA_FORMAT_VERSION else "↑ 升级后首次启动将自动迁移"
+        click.echo(f"数据格式版本 v{current}（当前程序支持 v{DATA_FORMAT_VERSION}）{status}")
+    except Exception:
+        pass

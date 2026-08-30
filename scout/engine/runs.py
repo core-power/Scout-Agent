@@ -4,7 +4,7 @@
 每次自动化运行（cron/webhook/事件/级联）记录完整执行档案，
 支持事后审计「AI 在我睡觉时干了什么」。
 
-存储: ~/.scout/runs.db (SQLite)，保留最近 1000 条。
+存储: $SCOUT_DATA_DIR/runs.db (SQLite)，保留最近 1000 条。
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 
 from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+from scout.storage.schema import ensure_schema
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class RunStore:
         try:
             with self._conn() as conn:
                 conn.executescript(_SCHEMA)
+                ensure_schema(conn)
         except Exception as e:
             logger.warning(f"runs.db 初始化失败: {e}")
 

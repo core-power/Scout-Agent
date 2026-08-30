@@ -222,6 +222,7 @@ class DAGLoop(AgentLoop):
             saved_turns = agent.max_turns
             if self.step_max_turns:
                 agent.max_turns = self.step_max_turns
+            res = None
             try:
                 res = await agent._run_react(step_msg, step_session, attachments)
                 response = res.get("response", "")
@@ -231,7 +232,8 @@ class DAGLoop(AgentLoop):
             finally:
                 agent.max_turns = saved_turns
 
-            total_steps += res.get("steps", 0) if "res" in locals() else 0
+            # 步骤异常时 res 保持 None，避免沿用上一轮的陈旧结果
+            total_steps += res.get("steps", 0) if res else 0
             dag_meta["steps"][step_id] = {"description": description, "summary": response[:500]}
             results.append({"id": step_id, "description": description, "response": response})
 

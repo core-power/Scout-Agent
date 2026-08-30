@@ -58,3 +58,6 @@ CREDENTIALS_PATH = CONFIG_DIR / "credentials.json"
 JWT_SECRET_PATH = CONFIG_DIR / "jwt_secret"
 SECRET_KEY_PATH = CONFIG_DIR / "secret_key"
 AUTOMATION_POLICY_PATH = CONFIG_DIR / "automation_policy.json"
+
+# 数据目录版本标识 — 记录数据格式版本与程序版本，供升级/迁移检测
+MANIFEST_PATH = DATA_DIR / "manifest.json"
