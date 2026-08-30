@@ -22,6 +22,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 datas = [
     ("../scout/web/static", "scout/web/static"),   # Web UI + PWA 资源
     ("../.env.example", "."),                       # 配置模板（随包携带）
+    ("../VERSION", "."),                            # 版本号（更新检查/版本显示用，2026-08-30）
     ("scout.ico", "."),                             # exe 图标（相对 spec 目录）
 ]
 

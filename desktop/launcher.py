@@ -433,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.setdefault("SCOUT_DATA_DIR", str(ddir))
     # ★ 2026-08-30：配置文件目录同样跟随 exe（config.json 不再写 C 盘 ~/.scout）
     os.environ.setdefault("SCOUT_CONFIG_DIR", str(ddir))
+    # ★ 2026-08-30：标记桌面绿色版（更新检查横幅仅在桌面版显示）
+    os.environ.setdefault("SCOUT_DESKTOP", "1")
     load_env_files()
 
     host = args.host

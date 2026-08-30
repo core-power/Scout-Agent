@@ -333,6 +333,15 @@
     </script>
 </head>
 <body class="h-screen overflow-hidden bg-[#0a0a0a] text-slate-200">
+<!-- ═══════════════ 更新提示横幅（桌面绿色版自动检查，2026-08-30） ═══════════════ -->
+<div id="update-banner" class="hidden fixed top-4 right-4 z-[9000] flex items-center gap-3 px-4 py-2.5 rounded-xl bg-emerald-950/90 border border-emerald-600/40 shadow-xl shadow-emerald-900/40 backdrop-blur">
+    <svg class="w-4 h-4 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+    <span class="text-sm text-slate-200">发现新版本 <b id="update-version" class="text-white">v0.0.0</b></span>
+    <a id="update-link" href="#" target="_blank" rel="noopener" class="text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 px-2.5 py-1 rounded-lg transition">立即升级</a>
+    <button id="update-close" class="text-slate-400 hover:text-white text-sm leading-none px-1 transition" title="关闭">✕</button>
+</div>
 <!-- ═══════════════ 登录界面 ═══════════════ -->
 <div id="login-overlay" class="fixed inset-0 z-[9999] bg-slate-900 flex items-center justify-center hidden">
     <div class="w-full max-w-sm px-6">
@@ -1077,7 +1086,7 @@
                         <button onclick="checkForUpdates()" class="px-4 py-2 rounded-lg bg-scout-500 hover:bg-scout-600 text-white text-sm font-medium transition-colors">
                             检查更新
                         </button>
-                        <a href="https://github.com/core-power/Scout-Agent/releases" target="_blank" class="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-sm font-medium transition-colors">
+                        <a href="https://github.com/core-power/scout-agent/releases" target="_blank" class="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-sm font-medium transition-colors">
                             查看所有版本
                         </a>
                     </div>
@@ -6851,19 +6860,47 @@ async function checkForUpdates() {
         const response = await fetch('/api/version/check');
         const data = await response.json();
         
-        if (data.has_update) {
-            updateIndicator.classList.remove('hidden');
-            updateIndicator.textContent = __tpl(`· 有新版本 ${data.latest_version}`);
-        } else {
-            updateIndicator.classList.add('hidden');
+        // 设置页指示器（所有用户可见）
+        if (updateIndicator) {
+            if (data.update_available) {
+                updateIndicator.classList.remove('hidden');
+                updateIndicator.textContent = __tpl(`· 有新版本 ${data.latest_version}`);
+            } else {
+                updateIndicator.classList.add('hidden');
+            }
         }
         
         if (currentVersion) {
             currentVersion.textContent = `v${data.current_version}`;
         }
+        
+        // 桌面绿色版：右上角更新横幅（自动提示 + 一键跳转下载）
+        if (data.desktop && data.update_available) {
+            showUpdateBanner(data);
+        }
     } catch (error) {
         console.error('检查更新失败:', error);
     }
+}
+
+// 桌面版更新横幅（关闭后 24 小时内不再提示该版本）
+function showUpdateBanner(data) {
+    const banner = document.getElementById('update-banner');
+    if (!banner) return;
+    try {
+        const key = 'scout-update-dismissed';
+        const dismissed = JSON.parse(localStorage.getItem(key) || '{}');
+        if (dismissed.version === data.latest_version && Date.now() < (dismissed.at || 0) + 86400000) return;
+    } catch (e) { /* 忽略存储异常 */ }
+    document.getElementById('update-version').textContent = 'v' + data.latest_version;
+    document.getElementById('update-link').href = data.download_url || data.html_url || 'https://github.com/core-power/scout-agent/releases';
+    banner.classList.remove('hidden');
+    document.getElementById('update-close').onclick = () => {
+        banner.classList.add('hidden');
+        try {
+            localStorage.setItem('scout-update-dismissed', JSON.stringify({ version: data.latest_version, at: Date.now() }));
+        } catch (e) { /* 忽略 */ }
+    };
 }
 
 // 页面加载时自动检查版本
