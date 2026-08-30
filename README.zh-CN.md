@@ -70,6 +70,21 @@ Scout Agent 是一个智能个人助手 AI 智能体，支持持久记忆、工�
 
 ## <a name="快速开始"></a>🚀 快速开始
 
+### 🪟 Windows 用户：开箱即用，无需装 Python
+
+不想折腾环境？直接用**绿色便携版**，双击即用：
+
+1. 到 **GitHub Releases** 下载最新版 **`ScoutPortable`**：[Releases 页面](https://github.com/<your-github-username>/scout-agent/releases)（下载最新的 `ScoutPortable-*.zip` 附件）。
+2. 解压后把**整个文件夹**拷到任意 Windows 10/11 电脑即可运行——免安装、免注册表、免管理员权限。
+3. 双击 **`Scout.exe`**，对话窗口立即弹出。
+4. 首次使用打开**设置**页，填入你的 LLM API Key 即可（支持通义/DeepSeek/OpenAI 等任意 OpenAI 兼容端点）。
+
+数据跟随程序所在盘符（例如文件夹放在 D 盘，数据就在 `D:\.scout`——不落 C 盘、不塞进应用目录），真正做到随行便携：把文件夹和数据一起拷到另一台电脑，接着上次的进度继续用。
+
+> Windows 版**仅通过 GitHub Releases 分发**——exe 不会提交进本仓库（保持仓库轻量）。想自己打包 exe？在 Windows 上运行 `desktop\build.bat`（需 Python 3.11+），会自动把所有依赖打进 `dist\ScoutPortable\`。
+>
+> 每个 Release 还会**自动附带源码归档**（`Source code (zip)` / `Source code (tar.gz)`）——开发者直接下载源码后按下方「安装」章节运行即可。
+
 ### 环境要求
 
 - Python 3.11+

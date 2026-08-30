@@ -70,6 +70,21 @@ Scout Agent is an intelligent personal assistant AI agent with persistent memory
 
 ## <a name="quick-start"></a>🚀 Quick Start
 
+### 🪟 Windows Users: Just Run It — No Python Needed
+
+Don't want to set up Python? Use the **portable green build** — double-click and go:
+
+1. Download the latest **`ScoutPortable`** build from the **GitHub Releases** page: [releases](https://github.com/<your-github-username>/scout-agent/releases) (look for the newest `ScoutPortable-*.zip` asset).
+2. Unzip it, then copy the **whole folder** to any Windows 10/11 machine — no installation, no registry, no admin rights.
+3. Double-click **`Scout.exe`** — the chat window opens instantly.
+4. On first use, open **Settings** and paste your LLM API key (dashscope / DeepSeek / OpenAI / any OpenAI-compatible endpoint).
+
+Data lives **next to the program** (e.g. `D:\.scout` when the folder is on drive D — never on C:, never inside the app folder), so it travels with you: copy the folder + data to another PC and pick up where you left off.
+
+> The Windows build is distributed **via GitHub Releases only** — the exe is **not** committed to this repository, keeping the repo lightweight. Want to build it yourself? Run `desktop\build.bat` on Windows (needs Python 3.11+) — it packages everything into `dist\ScoutPortable\` automatically.
+>
+> Every release also ships **auto-generated source archives** (`Source code (zip)` / `Source code (tar.gz)`) — developers can grab those and follow the [Installation](#installation) section below.
+
 ### Prerequisites
 
 - Python 3.11+
