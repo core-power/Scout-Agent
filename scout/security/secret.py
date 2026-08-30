@@ -15,6 +15,8 @@ import logging
 import os
 from pathlib import Path
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,7 @@ logger = logging.getLogger(__name__)
 # 密文前缀，用于标识该值是加密过的
 PREFIX = "enc:v1:"
 
-SECRET_PATH = Path.home() / ".scout" / "secret_key"
+SECRET_PATH = _SCOUT_DATA_DIR / "secret_key"
 
 
 def _get_key() -> bytes:

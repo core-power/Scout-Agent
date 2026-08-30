@@ -16,6 +16,7 @@ from typing import Any
 
 from scout.bus.hub import bus
 from scout.config import ConfigManager, LLMConfig
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from scout.tools.registry import ToolRegistry
 
 
@@ -52,7 +53,7 @@ class Gateway:
         # 插件管理器
         from scout.automation.plugins import PluginManager
         self.plugins = PluginManager(
-            user_dir=os.path.expanduser("~/.scout/plugins"),
+            user_dir=str(_SCOUT_DATA_DIR / "plugins"),
             project_dir=os.path.join(os.getcwd(), ".scout/plugins"),
         )
 

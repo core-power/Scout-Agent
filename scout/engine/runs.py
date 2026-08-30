@@ -15,11 +15,13 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_DB_PATH = Path.home() / ".scout" / "runs.db"
+_DB_PATH = _SCOUT_DATA_DIR / "runs.db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (

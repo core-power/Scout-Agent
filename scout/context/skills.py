@@ -3,7 +3,7 @@
 v2 (2026-08-13) 对标 Codex Skills / agentskills.io 开放标准：
 1. **多作用域发现**（对标 Codex 四层 scope，就近优先）：
    - REPO: $CWD/.scout/skills 及父目录、项目根的 .scout/skills、.agents/skills
-   - USER: ~/.scout/skills（个人跨项目技能）
+   - USER: <数据目录>/skills（个人跨项目技能，默认 <盘符>:\\.scout\\skills）
    - ADMIN: /etc/scout/skills（机器级默认技能）
 2. **agentskills.io 兼容**：标准 YAML frontmatter（name + description），
    同时支持 scout 扩展字段 trigger/pattern。
@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 
 try:
     import yaml  # type: ignore
@@ -107,12 +109,14 @@ class SkillManager:
 
     def __init__(
         self,
-        skills_dir: str | Path = "~/.scout/skills",
+        skills_dir: str | Path | None = None,
         enable_repo_scope: bool = True,
         enable_admin_scope: bool = True,
         cwd: str | Path | None = None,
     ):
-        self.skills_dir = Path(skills_dir).expanduser()
+        self.skills_dir = Path(
+            skills_dir if skills_dir is not None else str(_SCOUT_DATA_DIR / "skills")
+        ).expanduser()
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         self._enable_repo_scope = enable_repo_scope
         self._enable_admin_scope = enable_admin_scope

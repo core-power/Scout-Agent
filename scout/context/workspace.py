@@ -7,12 +7,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 
 class Workspace:
     """工作空间 — Agent 的身份和上下文."""
 
-    def __init__(self, workspace_dir: str | Path = "~/.scout/workspace"):
-        self.dir = Path(workspace_dir).expanduser()
+    def __init__(self, workspace_dir: str | Path | None = None):
+        self.dir = Path(
+            workspace_dir
+            if workspace_dir is not None
+            else str(_SCOUT_DATA_DIR / "workspace")
+        ).expanduser()
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def get_agent_identity(self) -> str:

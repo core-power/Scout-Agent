@@ -6,13 +6,15 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 from scout.core.annotations import ToolAnnotations
 from scout.core.types import Observation
 from scout.tools.base import ToolDefinition
 from scout.tools.registry import ToolRegistry
 
 # 定时任务存储
-TASKS_FILE = Path.home() / ".scout" / "scheduled_tasks.json"
+TASKS_FILE = _SCOUT_DATA_DIR / "scheduled_tasks.json"
 
 
 class SchedulerTool(ToolDefinition):

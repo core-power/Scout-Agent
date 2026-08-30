@@ -16,12 +16,14 @@ import json
 import logging
 import time
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_STATE_PATH = Path.home() / ".scout" / "introspection_state.json"
-_LOG_PATH = Path.home() / ".scout" / "introspection_log.json"
+_STATE_PATH = _SCOUT_DATA_DIR / "introspection_state.json"
+_LOG_PATH = _SCOUT_DATA_DIR / "introspection_log.json"
 
 # 自省阈值
 DEFAULT_TURN_INTERVAL = 200        # 每 200 轮对话工具调用触发一次

@@ -18,6 +18,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 logger = logging.getLogger(__name__)
 
 # 每级目录按序检查的文件名（override 优先）
@@ -73,7 +75,7 @@ class InstructionLoader:
             max_bytes: 组合大小上限
             custom_fallback_names: 自定义回退文件名（对标 Codex project_doc_fallback_filenames）
         """
-        self.global_dir = Path(global_dir or (Path.home() / ".scout")).expanduser()
+        self.global_dir = Path(global_dir or _SCOUT_DATA_DIR).expanduser()
         self.max_bytes = max_bytes
         self._fallback_names = custom_fallback_names or []
 

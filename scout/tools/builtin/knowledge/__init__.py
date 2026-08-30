@@ -11,6 +11,8 @@ import json
 import os
 import re
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from datetime import datetime
 
 from scout.core.annotations import ToolAnnotations
@@ -19,9 +21,9 @@ from scout.tools.base import ToolDefinition
 from scout.tools.registry import ToolRegistry
 
 # 知识库根目录
-KNOWLEDGE_DIR = Path.home() / ".scout" / "knowledge"
+KNOWLEDGE_DIR = _SCOUT_DATA_DIR / "knowledge"
 # 倒排索引缓存文件
-_INDEX_CACHE_PATH = Path.home() / ".scout" / "knowledge_index.json"
+_INDEX_CACHE_PATH = _SCOUT_DATA_DIR / "knowledge_index.json"
 
 
 class _InvertedIndex:

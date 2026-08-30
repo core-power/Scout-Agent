@@ -2,6 +2,8 @@
 
 from typing import Dict, Optional, List, Type
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 import importlib.util
 import sys
 import json
@@ -369,7 +371,7 @@ def get_plugin_manager() -> PluginManager:
     global _plugin_manager
     if _plugin_manager is None:
         # 默认插件目录: ~/.scout/plugins
-        plugins_dir = Path.home() / ".scout" / "plugins"
+        plugins_dir = _SCOUT_DATA_DIR / "plugins"
         _plugin_manager = PluginManager(plugins_dir)
         # 与 scout/plugins/api.py 行为一致：首次访问即加载所有插件
         _plugin_manager.load_all_plugins()

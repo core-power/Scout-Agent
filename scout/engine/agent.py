@@ -37,6 +37,8 @@ from scout.core.types import (
 
 from scout.engine.budget import IterationBudget
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 from scout.engine.interrupt import InterruptibleExecutor
 
 from scout.llm.base import LLMClient
@@ -95,7 +97,7 @@ class Agent:
         enable_skills: bool = True,
         # 工作空间
         enable_workspace: bool = False,
-        workspace_dir: str = "~/.scout/workspace",
+        workspace_dir: str | Path | None = None,
         # 事件总线
         enable_bus: bool = True,
         # ── 子代理委派控制 ──
@@ -539,7 +541,9 @@ class Agent:
         if enable_workspace:
             from scout.context.workspace import Workspace
 
-            self.workspace = Workspace(workspace_dir)
+            self.workspace = Workspace(
+                workspace_dir if workspace_dir is not None else str(_SCOUT_DATA_DIR / "workspace")
+            )
 
             # 用工作空间内容增强 system prompt
             # ── 前缀稳定：工作空间内容（AGENT.md/USER.md/RULE.md）属于外部变动内容，

@@ -173,11 +173,15 @@ def _wait_port_free(port: int = 8848, timeout: float = 5.0) -> bool:
 
 
 def _get_db_path() -> Optional[str]:
-    """Scout 数据库文件路径（默认 ~/.scout/sessions.db）."""
+    """Scout 数据库文件路径（默认 <盘符>:\\.scout\\sessions.db）."""
     try:
         from scout.config.settings import get_data_dir
         return os.path.join(str(get_data_dir()), "sessions.db")
     except Exception:
+        # 兜底: 项目所在盘符根目录（如 D:\.scout）
+        anchor = os.path.splitdrive(get_project_root())[0]  # 如 "D:"
+        if anchor:
+            return os.path.join(anchor + os.sep, ".scout", "sessions.db")
         return os.path.expanduser("~/.scout/sessions.db")
 
 

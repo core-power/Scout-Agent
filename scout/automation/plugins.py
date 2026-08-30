@@ -13,6 +13,8 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 
 class Plugin:
     """插件信息."""
@@ -47,10 +49,12 @@ class PluginManager:
 
     def __init__(
         self,
-        user_dir: str = "~/.scout/plugins",
+        user_dir: str | None = None,
         project_dir: str = "",
     ):
-        self.user_dir = Path(user_dir).expanduser()
+        self.user_dir = Path(
+            user_dir if user_dir is not None else str(_SCOUT_DATA_DIR / "plugins")
+        ).expanduser()
         self.project_dir = Path(project_dir) if project_dir else Path.cwd() / ".scout" / "plugins"
         self._plugins: list[Plugin] = []
 

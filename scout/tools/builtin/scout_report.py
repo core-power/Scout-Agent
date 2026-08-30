@@ -18,12 +18,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 from scout.core.annotations import ToolAnnotations
 from scout.core.types import Observation
 from scout.tools.base import ToolDefinition
 from scout.tools.registry import ToolRegistry
 
-_INTROSPECTION_LOG = Path.home() / ".scout" / "introspection_log.json"
+_INTROSPECTION_LOG = _SCOUT_DATA_DIR / "introspection_log.json"
 
 
 class ScoutReportTool(ToolDefinition):

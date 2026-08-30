@@ -27,13 +27,15 @@ from email.header import Header
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
 logger = logging.getLogger("scout.notify")
 
 # 默认配置路径
-_PREFS_PATH = Path.home() / ".scout" / "notify_preferences.json"
-_HISTORY_PATH = Path.home() / ".scout" / "notify_history.jsonl"
+_PREFS_PATH = _SCOUT_DATA_DIR / "notify_preferences.json"
+_HISTORY_PATH = _SCOUT_DATA_DIR / "notify_history.jsonl"
 # 历史最多保留条数
 _MAX_HISTORY = 500
 

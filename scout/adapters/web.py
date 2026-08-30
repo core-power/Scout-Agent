@@ -15,6 +15,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
@@ -159,7 +161,7 @@ class WebAdapter:
         self._sessions: dict[str, Session] = {}
         self.config_mgr = ConfigManager()
         self.auth_mgr = AuthManager()
-        self._webhooks_path = Path.home() / ".scout" / "webhooks.json"
+        self._webhooks_path = _SCOUT_DATA_DIR / "webhooks.json"
         self._webhooks_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 渠道管理器 — 单例模式
@@ -1441,7 +1443,7 @@ class WebAdapter:
 
         # ── Cron API ──
 
-        CRON_FILE = Path.home() / ".scout" / "cron_tasks.json"
+        CRON_FILE = _SCOUT_DATA_DIR / "cron_tasks.json"
 
         def _get_cron_mgr():
             """全局 CronManager（懒加载）— 带持久化 + 自动化执行接入.
