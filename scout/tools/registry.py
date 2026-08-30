@@ -70,6 +70,18 @@ class ToolRegistry:
         "image_gen": [],    # 需要 API key，但无额外 pip 依赖
     }
 
+    # 内置工具显式兜底清单（2026-08-30 修复）:
+    # PyInstaller 打包后 .py 模块全部进入 PYZ 归档，pkgutil.iter_modules()
+    # 无法枚举归档内子模块 → discover() 动态导入全部落空，只剩被主程序
+    # 显式 import 的工具（如 knowledge）注册。此清单保证打包版工具完整加载；
+    # 源码环境下与 iter_modules 结果做并集去重，无副作用。
+    _BUILTIN_FALLBACK = [
+        "browser", "code_exec", "delegate", "edit", "env_config",
+        "files", "image_gen", "knowledge", "mcp", "memory",
+        "parallel", "scheduler", "send_file", "shell", "vision", "web",
+        "scout_report",
+    ]
+
     @classmethod
     def register(cls, tool: ToolDefinition) -> None:
         """注册工具 — 在工具模块顶层调用."""
@@ -187,7 +199,11 @@ class ToolRegistry:
 
         skipped = []
 
-        for _, name, _ in pkgutil.iter_modules(builtin.__path__):
+        # 源码环境枚举物理目录；打包环境枚举为空 → 用显式清单兜底（并集去重）
+        discovered = {name for _, name, _ in pkgutil.iter_modules(builtin.__path__)}
+        modules = sorted(discovered | set(cls._BUILTIN_FALLBACK))
+
+        for name in modules:
             # 检查是否为可选工具
             if name in cls._OPTIONAL_TOOLS:
                 deps = cls._OPTIONAL_TOOLS[name]
