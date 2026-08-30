@@ -1618,10 +1618,19 @@ class WebAdapter:
                 if file_abs == _sd or file_abs.startswith(_sd + os.sep):
                     return JSONResponse({"error": f"安全拦截: 不允许下载系统目录文件 {file_abs}"}, status_code=403)
             _home = os.path.expanduser("~")
-            # 通用允许前缀 + web 下载特有 /polarfs
-            _allow_prefixes = [_home + os.sep] + list(ALLOWED_PATH_PREFIXES) + ["/polarfs"]
+            if os.name == "nt":
+                # Windows：放行任意盘符根（系统目录已在上面硬拦截）
+                _drive, _ = os.path.splitdrive(file_abs)
+                _allow_prefixes = [_home + os.sep] + (["/polarfs"] if _drive else [])
+                _drive_root_ok = bool(_drive)
+            else:
+                # 通用允许前缀 + web 下载特有 /polarfs
+                _allow_prefixes = [_home + os.sep] + list(ALLOWED_PATH_PREFIXES) + ["/polarfs"]
+                _drive_root_ok = False
             if file_abs == _home:
                 pass  # 主目录本身允许
+            elif _drive_root_ok:
+                pass  # Windows 盘符根放行（系统目录已拦）
             elif not any(file_abs.startswith(p) for p in _allow_prefixes):
                 return JSONResponse({"error": "安全拦截: 只允许下载用户目录/临时目录/数据目录内的文件"}, status_code=403)
             
