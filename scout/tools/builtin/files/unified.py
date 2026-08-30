@@ -34,7 +34,7 @@ from pathlib import Path
 
 from scout.core.annotations import ToolAnnotations
 from scout.core.types import Observation
-from scout.security.policy import ALLOWED_PATH_PREFIXES, SYSTEM_DIRS
+from scout.security.policy import SYSTEM_DIRS, path_allowed
 from scout.tools.base import ToolDefinition
 
 
@@ -147,7 +147,7 @@ class UnifiedFileTool(ToolDefinition):
         规则:
         1. expanduser + abspath 归一化，防 `..` 相对路径穿越。
         2. 命中 SYSTEM_DIRS 系统敏感目录 → 拒绝。
-        3. 未命中 ALLOWED_PATH_PREFIXES 白名单前缀 → 拒绝。
+        3. 未命中跨平台白名单 path_allowed（Windows 盘符根 / Unix 前缀）→ 拒绝。
         """
         if not path:
             return "", "缺少 path 参数"
@@ -158,11 +158,10 @@ class UnifiedFileTool(ToolDefinition):
             if abs_path == d or abs_path.startswith(d + os.sep):
                 return "", f"⛔ 禁止访问系统目录: {d}（file 工具路径沙箱）"
 
-        for prefix in ALLOWED_PATH_PREFIXES:
-            if abs_path == prefix or abs_path.startswith(prefix + os.sep):
-                return abs_path, ""
+        if not path_allowed(abs_path):
+            return "", f"⛔ 路径不在允许的访问范围内: {abs_path}（file 工具路径沙箱）"
 
-        return "", f"⛔ 路径不在允许的访问范围内: {abs_path}（file 工具路径沙箱，白名单: {ALLOWED_PATH_PREFIXES}）"
+        return abs_path, ""
 
     # ── read ──────────────────────────────────────────────
 

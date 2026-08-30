@@ -41,6 +41,22 @@ ALLOWED_PATH_PREFIXES = [
 ]
 
 
+def path_allowed(abs_path: str) -> bool:
+    """跨平台路径白名单判定（供 file / shell / web 工具共享，2026-08-30）.
+
+    Windows: 放行任意盘符根（如 D:\\）及其下路径——系统目录由 SYSTEM_DIRS 另行硬拦截；
+    Unix: 放行主目录 + ALLOWED_PATH_PREFIXES 白名单前缀。
+    """
+    abs_path = os.path.abspath(abs_path)
+    if os.name == "nt":
+        drive, _ = os.path.splitdrive(abs_path)
+        return bool(drive)
+    for prefix in ALLOWED_PATH_PREFIXES:
+        if abs_path == prefix or abs_path.startswith(prefix + os.sep):
+            return True
+    return False
+
+
 # 危险命令模式
 DANGEROUS_PATTERNS = [
     (r"\brm\s+-rf?\s+/", "递归删除根目录"),
