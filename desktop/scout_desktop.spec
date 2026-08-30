@@ -14,7 +14,11 @@
 import os
 import sys
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 # ── 数据文件 ──────────────────────────────────────────────
 # 注意: PyInstaller 的 datas 路径相对 spec 所在目录(desktop/)解析，
@@ -93,6 +97,9 @@ hiddenimports = [
     "scout.scheduler",
     "scout.security.secret",
     "scout.doctor",
+    # 内置工具模块（2026-08-30 修复）：PyInstaller 打包后 iter_modules 无法
+    # 枚举 PYZ 归档，须显式收集全部 builtin 工具，discover() 才有代码可导入。
+    *collect_submodules("scout.tools.builtin"),
     # playwright CLI（首次运行自动安装 chromium 用，2026-08-30）
     "playwright.__main__",
     "playwright.async_api",
