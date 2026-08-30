@@ -424,6 +424,25 @@
         </div>
     </aside>
 
+    <!-- ═══════════════ 文件树面板（代码工作流 UI，2026-08-30） ═══════════════ -->
+    <aside id="fs-panel" class="hidden w-72 bg-[#0e0e0e] border-r border-white/5 flex-col flex-shrink-0 min-h-0">
+        <div class="flex items-center gap-2 px-3 h-14 border-b border-white/5">
+            <svg class="w-4 h-4 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+            <span class="text-sm font-medium text-slate-200 flex-1" data-i18n="文件">文件</span>
+            <button onclick="fsRefresh()" class="p-1.5 rounded hover:bg-white/5 text-slate-400 transition-colors" title="刷新" data-i18n-title="刷新">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            </button>
+            <button onclick="toggleFsPanel()" class="p-1.5 rounded hover:bg-white/5 text-slate-400 transition-colors" title="收起" data-i18n-title="收起">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div class="px-2 py-2 border-b border-white/5">
+            <select id="fs-root" onchange="fsLoadTree(this.value)" class="w-full bg-[#1a1a1a] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-scout-500/50"></select>
+        </div>
+        <div id="fs-tree" class="flex-1 overflow-y-auto px-2 py-2 space-y-0.5 min-h-0 text-xs"></div>
+        <div class="px-3 py-2 border-t border-white/5 text-[10px] text-slate-600" data-i18n="点击文件查看内容">点击文件查看内容</div>
+    </aside>
+
     <!-- ═══════════════ MAIN ═══════════════ -->
     <div class="flex-1 flex flex-col min-w-0">
         <header class="h-14 flex items-center gap-3 px-4 border-b border-white/5 bg-[#0d0d0d] flex-shrink-0">
@@ -441,6 +460,11 @@
             </a>
             <!-- Workspace 功能区 (桌面端显示) -->
             <div class="hidden md:flex items-center gap-2">
+                <!-- 文件树（代码工作流，2026-08-30） -->
+                <button onclick="toggleFsPanel()" class="flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-white/5 text-slate-400 transition-colors" title="文件" data-i18n-title="文件">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                    <span class="text-xs" data-i18n="文件">文件</span>
+                </button>
                 <!-- 知识管理组 -->
                 <div class="relative group">
                     <button class="flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-white/5 text-slate-400 transition-colors" title="知识管理" data-i18n-title="知识管理">
@@ -1132,6 +1156,8 @@ let forceReloaded = false;  // 断线重连强制重建 DOM 只执行一次，�
 let PROVIDER_DATA = {};
 const PROVIDER_LABELS = {dashscope:"阿里云 DashScope (通义千问)",deepseek:"DeepSeek (深度求索)",zhipu:"智谱 BigModel (GLM)",moonshot:"Moonshot (Kimi)",volcano:"火山引擎 (豆包)",openai:"OpenAI (GPT)",claude:"Anthropic Claude",gemini:"Google Gemini",openrouter:"OpenRouter (聚合平台)"};
 const KEY_LINKS = {dashscope:"https://dashscope.console.aliyun.com/apiKey",deepseek:"https://platform.deepseek.com/api_keys",zhipu:"https://open.bigmodel.cn/usercenter/apikeys",moonshot:"https://platform.moonshot.cn/console/api-keys",volcano:"https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",openai:"https://platform.openai.com/api-keys",claude:"https://console.anthropic.com/settings/keys",gemini:"https://aistudio.google.com/apikey",openrouter:"https://openrouter.ai/keys"};
+// ★ 2026-08-30：各厂商 OpenAI 兼容默认 Base URL（首次配置自动填入，用户可改）。claude 无官方 OpenAI 兼容端点，留空待用户填中转地址。
+const BASE_URLS = {dashscope:"https://dashscope.aliyuncs.com/compatible-mode/v1",deepseek:"https://api.deepseek.com/v1",zhipu:"https://open.bigmodel.cn/api/paas/v4",moonshot:"https://api.moonshot.cn/v1",volcano:"https://ark.cn-beijing.volces.com/api/v3",openai:"https://api.openai.com/v1",claude:"",gemini:"https://generativelanguage.googleapis.com/v1beta/openai/",openrouter:"https://openrouter.ai/api/v1"};
 const CAP_STYLES = {text:{label:'文本对话',cls:'bg-blue-500/10 text-blue-400'},vision:{label:'👁 视觉理解',cls:'bg-purple-500/10 text-purple-400'},code:{label:'💻 代码生成',cls:'bg-emerald-500/10 text-emerald-400'},reasoning:{label:'🧠 深度推理',cls:'bg-amber-500/10 text-amber-400'}};
 
 marked.setOptions({highlight:(c,l)=>{try{return l&&hljs.getLanguage(l)?hljs.highlight(c,{language:l}).value:hljs.highlightAuto(c).value}catch{return c}},breaks:true});
@@ -5246,7 +5272,7 @@ function renderProviderCredFields(p) {
     const keyVal = (providerCredDraft[p] && providerCredDraft[p].key !== undefined) ? providerCredDraft[p].key
         : (localStorage.getItem('scout_apikey_' + p) || '');
     const urlVal = (providerCredDraft[p] && providerCredDraft[p].url !== undefined) ? providerCredDraft[p].url
-        : (providerCredState.base_urls[p] || localStorage.getItem('scout_baseurl_' + p) || '');
+        : (providerCredState.base_urls[p] || localStorage.getItem('scout_baseurl_' + p) || (BASE_URLS[p] || ''));
     const statusCls = hasKey ? 'text-emerald-400' : 'text-amber-400';
     const statusText = hasKey ? __t('✅ 该服务商已配置 API Key') : __t('⚠️ 该服务商未配置 API Key，请在上方"服务商 API 配置"中填写');
     wrap.innerHTML = `
@@ -5266,7 +5292,7 @@ function renderProviderCredFields(p) {
             </div>
             <div>
                 <label for="prov-url-${p}" class="block text-xs text-slate-400 mb-1">Base URL</label>
-                <input id="prov-url-${p}" type="text" value="${_seEscape(urlVal)}" placeholder="${__t('Base URL')}"
+                <input id="prov-url-${p}" type="text" value="${_seEscape(urlVal)}" placeholder="${BASE_URLS[p] ? ('默认: ' + BASE_URLS[p]) : (p === 'claude' ? __t('无官方 OpenAI 兼容端点，请填中转地址') : 'Base URL')}"
                     class="w-full px-3 py-2 rounded-lg bg-[#1a1a1a] border border-white/10 text-slate-200 text-sm focus:outline-none focus:border-scout-500/50 font-mono">
             </div>
         </div>`;
@@ -6930,6 +6956,166 @@ if ('serviceWorker' in navigator) {
             console.warn('Service Worker 注册失败:', err);
         });
     });
+}
+
+// ═══════════════ 文件树面板（代码工作流 UI，2026-08-30） ═══════════════
+let fsCurrentPath = '';
+
+function fsEsc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function toggleFsPanel() {
+    const panel = document.getElementById('fs-panel');
+    if (!panel) return;
+    const show = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden');
+    if (show) fsInit();
+}
+
+function fsInit() {
+    const sel = document.getElementById('fs-root');
+    if (!sel) return;
+    fetch('/api/fs/roots')
+        .then(r => r.json())
+        .then(data => {
+            sel.innerHTML = (data.roots || []).map(r => `<option value="${fsEsc(r.path)}">${fsEsc(r.name)}</option>`).join('');
+            if (data.roots && data.roots.length) fsLoadTree(data.roots[0].path);
+        })
+        .catch(e => console.error('文件树初始化失败:', e));
+}
+
+function fsJoin(base, name) {
+    if (!base) return name;
+    return base.replace(/[\\/]+$/, '') + '/' + name;
+}
+
+function fsLoadTree(path) {
+    fsCurrentPath = path;
+    const tree = document.getElementById('fs-tree');
+    if (!tree) return;
+    tree.innerHTML = '<div class="text-slate-600 px-2 py-1">加载中...</div>';
+    fetch('/api/fs/tree?path=' + encodeURIComponent(path) + '&depth=1')
+        .then(async r => {
+            if (!r.ok) { tree.innerHTML = '<div class="text-red-400 px-2 py-1">' + fsEsc(await r.text()) + '</div>'; return; }
+            return r.json();
+        })
+        .then(data => {
+            if (!data) return;
+            tree.innerHTML = '';
+            fsRenderDir(data.tree || [], tree, 0);
+            if (!data.tree || !data.tree.length) tree.innerHTML = '<div class="text-slate-600 px-2 py-1">（空目录）</div>';
+        })
+        .catch(e => { tree.innerHTML = '<div class="text-red-400 px-2 py-1">加载失败: ' + fsEsc(e) + '</div>'; });
+}
+
+function fsRenderDir(entries, container, level) {
+    const pad = level * 14;
+    for (const it of entries) {
+        if (it.type === 'dir') {
+            const row = document.createElement('div');
+            row.className = 'flex items-center gap-1 py-1 px-2 rounded hover:bg-white/5 cursor-pointer text-slate-300 select-none';
+            row.style.paddingLeft = (pad + 8) + 'px';
+            row.innerHTML = '<span class="fs-caret text-slate-500 w-3 text-center shrink-0">▸</span><span class="shrink-0">📁</span><span class="truncate">' + fsEsc(it.name) + '</span>';
+            row.onclick = () => fsToggleDir(row, it.name, level);
+            container.appendChild(row);
+        } else {
+            const row = document.createElement('div');
+            row.className = 'flex items-center gap-1.5 py-1 px-2 rounded hover:bg-white/5 cursor-pointer text-slate-400 select-none';
+            row.style.paddingLeft = (pad + 8) + 'px';
+            row.innerHTML = '<span class="w-3 shrink-0"></span><span class="shrink-0">📄</span><span class="truncate">' + fsEsc(it.name) + '</span><span class="ml-auto text-[10px] text-slate-600 shrink-0">' + fmtSize(it.size) + '</span>';
+            row.onclick = () => fsOpenFile(fsJoin(fsCurrentPath, it.name));
+            container.appendChild(row);
+        }
+    }
+}
+
+function fsToggleDir(row, name, level) {
+    const sub = row.nextSibling;
+    const caret = row.querySelector('.fs-caret');
+    if (sub && sub.classList && sub.classList.contains('fs-sub')) {
+        sub.classList.toggle('hidden');
+        caret.textContent = sub.classList.contains('hidden') ? '▸' : '▾';
+        return;
+    }
+    caret.textContent = '▾';
+    const path = fsJoin(fsCurrentPath, name);
+    const subDiv = document.createElement('div');
+    subDiv.className = 'fs-sub';
+    row.parentNode.insertBefore(subDiv, row.nextSibling);
+    subDiv.innerHTML = '<div class="text-slate-600 px-2 py-1" style="padding-left:' + ((level + 1) * 14 + 8) + 'px">加载中...</div>';
+    fetch('/api/fs/tree?path=' + encodeURIComponent(path) + '&depth=1')
+        .then(r => r.json())
+        .then(data => {
+            subDiv.innerHTML = '';
+            fsRenderDir(data.tree || [], subDiv, level + 1);
+            if (!data.tree || !data.tree.length) subDiv.innerHTML = '<div class="text-slate-600 px-2 py-1" style="padding-left:' + ((level + 1) * 14 + 8) + 'px">（空）</div>';
+        })
+        .catch(() => { subDiv.innerHTML = '<div class="text-red-400 px-2 py-1">加载失败</div>'; });
+}
+
+function fsOpenFile(path) {
+    let modal = document.getElementById('fs-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'fs-modal';
+        modal.className = 'fixed inset-0 z-[9500] bg-black/70 flex items-center justify-center p-4';
+        modal.innerHTML =
+            '<div class="w-full max-w-3xl h-[80vh] bg-[#111] border border-white/10 rounded-xl flex flex-col overflow-hidden">' +
+            '<div class="flex items-center gap-2 px-4 h-11 border-b border-white/10">' +
+            '<span id="fs-modal-path" class="text-xs text-slate-400 truncate flex-1"></span>' +
+            '<span id="fs-modal-enc" class="text-[10px] text-slate-600 shrink-0"></span>' +
+            '<button onclick="document.getElementById(\'fs-modal\').remove()" class="p-1.5 rounded hover:bg-white/5 text-slate-400 shrink-0">✕</button></div>' +
+            '<pre id="fs-modal-content" class="flex-1 overflow-auto p-4 text-xs leading-relaxed font-mono text-slate-300 whitespace-pre-wrap break-all"></pre>' +
+            '<div class="px-4 py-2 border-t border-white/10 text-xs text-slate-500 flex items-center gap-2">' +
+            '<button onclick="fsCopyContent()" class="px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 transition-colors">复制</button>' +
+            '<span id="fs-modal-status" class="text-[10px] text-slate-600"></span></div></div>';
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+        document.body.appendChild(modal);
+    }
+    const content = document.getElementById('fs-modal-content');
+    const p = document.getElementById('fs-modal-path');
+    const st = document.getElementById('fs-modal-status');
+    p.textContent = path;
+    st.textContent = '加载中...';
+    content.textContent = '';
+    fetch('/api/fs/read?path=' + encodeURIComponent(path))
+        .then(async r => {
+            if (!r.ok) {
+                const txt = await r.text().catch(() => '');
+                st.textContent = txt || ('HTTP ' + r.status);
+                return;
+            }
+            const data = await r.json();
+            p.textContent = data.path;
+            if (data.encoding === 'binary') {
+                content.textContent = '[二进制文件，无法预览] (' + fmtSize(data.size) + ')';
+            } else {
+                content.textContent = data.content;
+                st.textContent = fmtSize(data.size) + ' · ' + data.encoding;
+            }
+        })
+        .catch(e => { st.textContent = '加载失败: ' + e; });
+}
+
+function fsCopyContent() {
+    const c = document.getElementById('fs-modal-content');
+    if (!c) return;
+    navigator.clipboard.writeText(c.textContent).catch(() => {});
+    const st = document.getElementById('fs-modal-status');
+    if (st) st.textContent = '已复制';
+}
+
+function fsRefresh() {
+    if (fsCurrentPath) fsLoadTree(fsCurrentPath);
+}
+
+function fmtSize(n) {
+    if (n === undefined || n === null) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(1) + ' GB';
 }
 
 </script>

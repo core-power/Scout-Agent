@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -151,15 +152,38 @@ class BrowserTool(ToolDefinition):
         self._download_dir.mkdir(parents=True, exist_ok=True)
 
     async def _ensure_browser(self):
-        """确保浏览器已启动."""
+        """确保浏览器已启动（首次运行自动安装 chromium，绿色版开箱即用）."""
         if self._browser is None:
             try:
                 from playwright.async_api import async_playwright
-                self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+            except ImportError:
+                raise RuntimeError(
+                    "playwright is not installed. Run: pip install playwright && playwright install chromium"
                 )
+            try:
+                self._playwright = await async_playwright().start()
+                try:
+                    self._browser = await self._playwright.chromium.launch(
+                        headless=True,
+                        args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    )
+                except Exception as e:
+                    # 首次运行（2026-08-30）：chromium 二进制未安装 → 自动安装后重试。
+                    # Windows 绿色版不带浏览器，需在首次使用浏览器工具时自动下载。
+                    msg = str(e).lower()
+                    if "executable doesn't exist" in msg or "not found" in msg or "error while loading" in msg:
+                        _installed = await self._auto_install_chromium()
+                        if not _installed:
+                            raise RuntimeError(
+                                "未检测到 chromium 浏览器且自动安装失败。"
+                                "请手动执行: playwright install chromium"
+                            )
+                        self._browser = await self._playwright.chromium.launch(
+                            headless=True,
+                            args=["--no-sandbox", "--disable-dev-shm-usage"],
+                        )
+                    else:
+                        raise RuntimeError(f"Failed to launch browser: {e}")
                 self._context = await self._browser.new_context(
                     viewport={"width": 1280, "height": 720},
                     accept_downloads=True,   # 允许下载
@@ -183,6 +207,28 @@ class BrowserTool(ToolDefinition):
                 )
             except Exception as e:
                 raise RuntimeError(f"Failed to launch browser: {e}")
+
+    @staticmethod
+    async def _auto_install_chromium() -> bool:
+        """自动安装 playwright chromium（首次使用；约 120MB，安装到用户目录）.
+
+        在打包后的绿色版中无 python 解释器，直接复用 playwright 自带 CLI
+        （playwright.__main__），经 asyncio.to_thread 避免阻塞事件循环。
+        """
+        try:
+            import sys
+            from playwright.__main__ import main as _pw_main
+
+            _old_argv = sys.argv
+            sys.argv = ["playwright", "install", "chromium"]
+            try:
+                await asyncio.to_thread(_pw_main)
+            finally:
+                sys.argv = _old_argv
+            return True
+        except Exception as e:
+            logging.getLogger("scout.browser").warning("playwright install chromium 失败: %s", e)
+            return False
 
     async def execute(
         self,

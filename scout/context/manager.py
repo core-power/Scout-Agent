@@ -23,6 +23,26 @@ _IMG_RE = re.compile(
 )
 
 
+def estimate_tokens(text: str) -> int:
+    """粗略 token 估算（无需 tiktoken，可跨平台离线运行）.
+
+    规则：
+    - 中日韩全角字符按 1 字符 ≈ 1 token（实际略保守，0.6~0.8 token/字）
+    - 其余按 4 字符 ≈ 1 token（英文/数字/标点）
+    用于上下文窗口治理：长工具输出（搜索抓取全文）按字符数即时计入窗口，
+    避免"只按条数"导致窗口实际溢出、压缩阈值误判。
+    """
+    if not text:
+        return 0
+    import unicodedata
+
+    cjk = sum(
+        1 for ch in text if unicodedata.east_asian_width(ch) in ("F", "W")
+    )
+    other = len(text) - cjk
+    return cjk + max(0, (other + 3) // 4)
+
+
 class ContextManager:
     """上下文治理器 — 管理 Session 的消息列表长度."""
 
@@ -33,6 +53,8 @@ class ContextManager:
         compress_threshold: int = 80,
         keep_recent: int = 20,
         prune_batch: int = 6,
+        max_tokens: int = 0,
+        compress_ratio: float = 0.8,
     ):
         """
         Args:
@@ -44,16 +66,46 @@ class ContextManager:
             compress_threshold: 达到此长度触发压缩
             keep_recent: 压缩时保留最近 N 条消息
             prune_batch: 剪枝缓冲，批量删到 max_tool_outputs-prune_batch，降低触发频率
+            max_tokens: 上下文 token 预算（2026-08-30 新增）。
+                0 表示仅按条数治理；>0 时按 ``estimate_tokens`` 估算实际窗口，
+                达到 ``max_tokens * compress_ratio`` 即触发压缩——长工具输出
+                （搜索抓取全文等）会即时计入，而不是等条数攒够。
+                可用环境变量 SCOUT_CONTEXT_MAX_TOKENS 覆盖默认值。
+            compress_ratio: 触发压缩的窗口占用比例（默认 80%）
         """
+        import os as _os
+
+        if not max_tokens:
+            try:
+                max_tokens = int(_os.getenv("SCOUT_CONTEXT_MAX_TOKENS", "0") or 0)
+            except ValueError:
+                max_tokens = 0
         self.max_messages = max_messages
         self.max_tool_outputs = max_tool_outputs
         self.compress_threshold = compress_threshold
         self.keep_recent = keep_recent
         self.prune_batch = prune_batch
+        self.max_tokens = max_tokens
+        self.compress_ratio = compress_ratio
+
+    def count_tokens(self, session: Session) -> int:
+        """估算会话当前 token 占用（含消息内容与元数据，不含 system prompt）."""
+        total = 0
+        for m in session.messages:
+            total += estimate_tokens(m.content or "")
+            meta = m.metadata or {}
+            if meta.get("tool_name"):
+                total += 4
+        return total
 
     def needs_compression(self, session: Session) -> bool:
-        """判断是否需要压缩."""
-        return len(session.messages) >= self.compress_threshold
+        """判断是否需要压缩：条数超限 或 token 超预算（二者任一触发）."""
+        if len(session.messages) >= self.compress_threshold:
+            return True
+        if self.max_tokens > 0:
+            if self.count_tokens(session) >= int(self.max_tokens * self.compress_ratio):
+                return True
+        return False
 
     def prune_tool_outputs(self, session: Session) -> list[Message]:
         """剪枝 — 控制工具输出数量，保持前缀稳定以命中缓存（2026-08-19 优化）.
@@ -81,31 +133,62 @@ class ContextManager:
             i for i, m in enumerate(session.messages)
             if m.role == Role.TOOL
         ]
-        if len(tool_messages) <= self.max_tool_outputs:
-            return removed
 
-        # 目标：删到保留 max_tool_outputs - prune_batch 条，留出增长缓冲
-        target_keep = max(self.prune_batch, self.max_tool_outputs - self.prune_batch)
-        to_remove = len(tool_messages) - target_keep
-        if to_remove <= 0:
-            return removed
+        # 条数剪枝：超过 max_tool_outputs 才删（2026-08-30 修复：此前条数
+        # 未超限时提前 return，导致 token 维度分支永远执行不到）
+        if len(tool_messages) > self.max_tool_outputs:
+            # 目标：删到保留 max_tool_outputs - prune_batch 条，留出增长缓冲
+            target_keep = max(self.prune_batch, self.max_tool_outputs - self.prune_batch)
+            to_remove = len(tool_messages) - target_keep
+            if to_remove > 0:
+                # 每次从"当前最旧"的工具消息开始删，删完重算索引（删除会使后续索引位移）
+                for _ in range(to_remove):
+                    cur_tools = [
+                        i for i, m in enumerate(session.messages)
+                        if m.role == Role.TOOL
+                    ]
+                    if not cur_tools:
+                        break
+                    idx = cur_tools[0]
+                    removed.append(session.messages[idx])
+                    # 若前一条是与之配对的 assistant(tool_calls)，一并移除以保持结构合法
+                    if idx > 0 and session.messages[idx - 1].role == Role.ASSISTANT:
+                        removed.append(session.messages[idx - 1])
+                        del session.messages[idx - 1:idx + 1]
+                    else:
+                        del session.messages[idx]
 
-        # 每次从"当前最旧"的工具消息开始删，删完重算索引（删除会使后续索引位移）
-        for _ in range(to_remove):
-            cur_tools = [
-                i for i, m in enumerate(session.messages)
-                if m.role == Role.TOOL
-            ]
-            if not cur_tools:
-                break
-            idx = cur_tools[0]
-            removed.append(session.messages[idx])
-            # 若前一条是与之配对的 assistant(tool_calls)，一并移除以保持结构合法
-            if idx > 0 and session.messages[idx - 1].role == Role.ASSISTANT:
-                removed.append(session.messages[idx - 1])
-                del session.messages[idx - 1:idx + 1]
-            else:
-                del session.messages[idx]
+        # token 维度补充（2026-08-30）：工具输出总 token 超预算时，从最旧开始
+        # 剪掉超大输出（单条搜索抓取全文可达数万字符）。预算 = max_tokens//2，
+        # 单条 < 预算/20 的小输出不剪（保护前缀稳定以命中缓存）。
+        if self.max_tokens > 0:
+            _tool_budget = max(2000, self.max_tokens // 2)
+            while True:
+                _tools = [
+                    i for i, m in enumerate(session.messages)
+                    if m.role == Role.TOOL
+                ]
+                if not _tools:
+                    break
+                _tk_total = sum(
+                    estimate_tokens(session.messages[i].content or "") for i in _tools
+                )
+                if _tk_total <= _tool_budget:
+                    break
+                _cand: int | None = None
+                for i in _tools:
+                    if estimate_tokens(session.messages[i].content or "") >= _tool_budget // 20:
+                        _cand = i
+                        break
+                if _cand is None:
+                    break
+                if _cand > 0 and session.messages[_cand - 1].role == Role.ASSISTANT:
+                    removed.append(session.messages[_cand - 1])
+                    removed.append(session.messages[_cand])
+                    del session.messages[_cand - 1:_cand + 1]
+                else:
+                    removed.append(session.messages[_cand])
+                    del session.messages[_cand]
 
         return removed
 

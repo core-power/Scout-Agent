@@ -274,6 +274,14 @@ def create_web_app(agent=None) -> FastAPI:
         import logging
         logging.getLogger(__name__).warning(f"文件监听管理 API 加载失败: {e}")
 
+    # 挂载文件系统浏览 API（文件树/读取/保存，2026-08-30）
+    try:
+        from scout.web.api.fs import router as fs_router
+        app.include_router(fs_router, tags=["fs"])
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"文件系统 API 加载失败: {e}")
+
     # 静态文件目录
     static_dir = os.path.join(os.path.dirname(__file__), "static")
 
