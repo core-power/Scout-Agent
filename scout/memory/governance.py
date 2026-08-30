@@ -20,11 +20,13 @@ import logging
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = Path.home() / ".scout" / "memories.json"
+_CONFIG_PATH = _SCOUT_DATA_DIR / "memories.json"
 
 _DEFAULTS: dict[str, Any] = {
     "generate_memories": True,

@@ -27,11 +27,13 @@ import os
 import re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_USER_POLICY_PATH = Path.home() / ".scout" / "automation_policy.json"
+_USER_POLICY_PATH = _SCOUT_DATA_DIR / "automation_policy.json"
 _ORG_POLICY_PATH = Path("/etc/scout/requirements.json")  # JSON 兼容版（无需 toml 依赖）
 
 # 只读工具（auto 模式直接放行）

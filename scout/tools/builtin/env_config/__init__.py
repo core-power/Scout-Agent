@@ -12,13 +12,15 @@ import json
 import os
 from pathlib import Path
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 from scout.core.annotations import ToolAnnotations
 from scout.core.types import Observation
 from scout.tools.base import ToolDefinition
 from scout.tools.registry import ToolRegistry
 
 # 配置文件路径
-CONFIG_DIR = Path.home() / ".scout" / "config"
+CONFIG_DIR = _SCOUT_DATA_DIR / "config"
 CONFIG_FILE = CONFIG_DIR / "env_secrets.json"
 
 # keyring 索引条目（keyring 无列举 API，用固定条目维护 key 列表）

@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,8 +108,12 @@ class ObservabilityTracker:
                 span.output_data = {"content": "...", "tokens": 100}
     """
 
-    def __init__(self, db_path: str | Path = "~/.scout/observability.db"):
-        self.db_path = Path(db_path).expanduser()
+    def __init__(self, db_path: str | Path | None = None):
+        self.db_path = Path(
+            db_path
+            if db_path is not None
+            else str(_SCOUT_DATA_DIR / "observability.db")
+        ).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._init_db()

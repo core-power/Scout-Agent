@@ -3,7 +3,7 @@
 
 特性:
   - 免安装: 双击即用，不写注册表、不做文件关联、不设开机自启
-  - 数据随程序: 便携模式数据目录 = exe 旁 data/（拷到 U 盘即可带走）
+  - 数据跟随盘符: 数据目录 = 程序所在盘符根目录/.scout（如 D:\\.scout），不落 C 盘
   - 内嵌 Web 服务: 本地启动 uvicorn，原生 WinForms + WebView2 窗口加载
   - 配置跟随: exe 旁 config/.env 或 .env 可覆盖默认配置
   - 端口自适应: 8848 被占用时自动 +1 探测
@@ -43,7 +43,22 @@ def app_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """便携数据目录: exe 旁 data/，不可写时回退用户目录 ~/.scout."""
+    """数据目录:
+    - Windows: 程序所在盘符根目录/.scout（如 D:\\.scout），不可写时回退 exe 旁 data/
+    - 其他平台: exe 旁 data/，不可写时回退用户目录 ~/.scout
+    """
+    if os.name == "nt":
+        anchor = Path(sys.executable if _is_frozen() else __file__).resolve().anchor
+        if anchor:
+            d = Path(anchor) / ".scout"
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                probe = d / ".write_probe"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink()
+                return d
+            except OSError:
+                pass
     d = app_dir() / "data"
     try:
         d.mkdir(parents=True, exist_ok=True)
@@ -416,6 +431,8 @@ def main(argv: list[str] | None = None) -> int:
     # ── 环境准备（必须在导入 scout 之前） ──
     ddir = data_dir()
     os.environ.setdefault("SCOUT_DATA_DIR", str(ddir))
+    # ★ 2026-08-30：配置文件目录同样跟随 exe（config.json 不再写 C 盘 ~/.scout）
+    os.environ.setdefault("SCOUT_CONFIG_DIR", str(ddir))
     load_env_files()
 
     host = args.host

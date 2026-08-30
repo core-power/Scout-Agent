@@ -22,11 +22,13 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = Path.home() / ".scout" / "distiller.json"
+_CONFIG_PATH = _SCOUT_DATA_DIR / "distiller.json"
 
 _DEFAULTS: dict[str, Any] = {
     "enabled": True,

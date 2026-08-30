@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from scout.storage.base import CacheBackend, StorageBackend
 from scout.storage.postgres import PostgresStorage
 from scout.storage.redis_cache import RedisCache
@@ -90,7 +91,7 @@ def get_storage_backend(
     elif backend == "sqlite":
         db_path = kwargs.get("db_path") or os.getenv(
             "SCOUT_SQLITE_PATH",
-            str(Path.home() / ".scout" / "sessions.db"),
+            str(_SCOUT_DATA_DIR / "sessions.db"),
         )
         _storage = SQLiteStorage(db_path=db_path)
         logger.info(f"存储后端: SQLite (path={db_path})")

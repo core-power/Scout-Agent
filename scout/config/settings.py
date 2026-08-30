@@ -7,6 +7,8 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from scout.config.paths import get_data_dir
+
 
 def _resolve_source_root() -> Path:
     """解析 Scout 源码安装根目录.
@@ -31,7 +33,7 @@ def _resolve_data_dir() -> Path:
         return Path(env_dir).resolve()
     
     # 默认：~/.scout/
-    return Path.home() / ".scout"
+    return get_data_dir()
 
 
 @dataclass

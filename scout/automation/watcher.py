@@ -24,11 +24,13 @@ import logging
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
 logger = logging.getLogger("scout.automation.watcher")
 
-_CONFIG_PATH = Path.home() / ".scout" / "watchers.json"
+_CONFIG_PATH = _SCOUT_DATA_DIR / "watchers.json"
 
 
 @dataclass

@@ -13,10 +13,12 @@ import secrets
 import time
 from base64 import b64decode, b64encode
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
 # JWT 密钥 — 首次启动自动生成并持久化
-SECRET_PATH = Path.home() / ".scout" / "jwt_secret"
+SECRET_PATH = _SCOUT_DATA_DIR / "jwt_secret"
 TOKEN_EXPIRY = 86400 * 7  # 7 天
 
 # PBKDF2 迭代次数 — 对抗离线爆破（登录频率低，200k 兼顾性能与安全）
@@ -142,7 +144,7 @@ def verify_token(token: str) -> dict[str, Any] | None:
 class AuthManager:
     """认证管理器 — 管理用户凭证."""
 
-    CREDENTIALS_PATH = Path.home() / ".scout" / "credentials.json"
+    CREDENTIALS_PATH = _SCOUT_DATA_DIR / "credentials.json"
 
     # 登录失败锁定：连续失败 MAX_LOGIN_FAILURES 次后锁定 LOCK_SECONDS 秒
     MAX_LOGIN_FAILURES = 5

@@ -19,6 +19,8 @@ from typing import Any
 
 import numpy as np
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,10 +79,12 @@ class MemoryStore:
 
     def __init__(
         self,
-        db_path: str | Path = "~/.scout/memory.db",
+        db_path: str | Path | None = None,
         embedding_provider: Any = None,
     ):
-        self.db_path = Path(db_path).expanduser()
+        self.db_path = Path(
+            db_path if db_path is not None else str(_SCOUT_DATA_DIR / "memory.db")
+        ).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
 
@@ -701,17 +705,9 @@ class MemoryStore:
 
     def delete(self, memory_id: int) -> None:
         conn = self._get_conn()
-        # 先取旧内容快照，用 FTS5 'delete' 命令同步索引。
-        # external content 表（content='memories'）删除索引项依赖旧值，
-        # 主表行删除后再 DELETE FROM memories_fts 会失效（残留脏索引）。
-        row = conn.execute(
-            "SELECT content FROM memories WHERE id = ?", (memory_id,)
-        ).fetchone()
-        if row:
-            conn.execute(
-                "INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', ?, ?)",
-                (memory_id, row["content"]),
-            )
+        # 主表删除由 AFTER DELETE 触发器（memories_ad）自动同步 FTS5 索引，
+        # 此处不要再手动执行 FTS5 'delete' 命令，否则同一 rowid 二次删除
+        # 会导致 FTS5 索引状态不一致（database disk image is malformed）。
         conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
         conn.commit()
 

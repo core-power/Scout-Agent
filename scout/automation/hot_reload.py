@@ -11,16 +11,22 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 
 class HotReloader:
     """配置热重载器 — 监听文件变化."""
 
     def __init__(
         self,
-        config_path: str | Path = "~/.scout/config.json",
+        config_path: str | Path | None = None,
         poll_interval: float = 2.0,
     ):
-        self.config_path = Path(config_path).expanduser()
+        self.config_path = Path(
+            config_path
+            if config_path is not None
+            else str(_SCOUT_DATA_DIR / "config.json")
+        ).expanduser()
         self.poll_interval = poll_interval
         self._last_mtime: float = 0
         self._last_content: str = ""

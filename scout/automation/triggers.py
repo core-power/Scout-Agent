@@ -28,11 +28,13 @@ import time
 import uuid
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any, Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
-_TRIGGERS_PATH = Path.home() / ".scout" / "triggers.json"
+_TRIGGERS_PATH = _SCOUT_DATA_DIR / "triggers.json"
 
 # 任务模板占位符: {{event.key}} / {{event.key.sub}}
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*event\.([a-zA-Z0-9_.]+)\s*\}\}")

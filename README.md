@@ -2,46 +2,43 @@
 
 # 🧭 Scout Agent
 
-**The self-evolving AI agent that grows with you · 与你共同进化的智能体**
+**The self-evolving AI agent that grows with you**
+
+[English](README.md) · [简体中文](README.zh-CN.md)
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/Version-1.0.0.0-orange.svg)](VERSION)
 
 *Persistent Memory · Tool Calling · Multi-Channel · Security-First*
-*持久记忆 · 工具调用 · 多渠道接入 · 安全优先*
 
 </div>
 
 ---
 
-## 📖 Table of Contents / 目录
+## 📖 Table of Contents
 
-- [Introduction / 简介](#introduction)
-- [Features / 特性](#features)
-- [Quick Start / 快速开始](#quick-start)
-- [Configuration / 配置](#configuration)
-- [Command Line / 命令行](#cli)
-- [Web UI / 网页界面](#web-ui)
-- [Security / 安全](#security)
-- [Development / 开发](#development)
-- [Testing / 测试](#testing)
-- [Project Structure / 项目结构](#project-structure)
-- [License / 许可证](#license)
-
----
-
-## <a name="introduction"></a>🔍 Introduction / 简介
-
-**English** — Scout Agent is an intelligent personal assistant AI agent with persistent memory, tool calling, and multi-channel access. It grows with you by remembering your preferences, automating tasks, and connecting to the platforms you use every day.
-
-**中文** — Scout Agent 是一个智能个人助手 AI 智能体，支持持久记忆、工具调用和多渠道接入。它通过记住你的偏好、自动化任务，并连接你日常使用的平台，与你共同成长。
+- [Introduction](#introduction)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Command Line](#cli)
+- [Web UI](#web-ui)
+- [Security](#security)
+- [Development](#development)
+- [Testing](#testing)
+- [Project Structure](#project-structure)
+- [License](#license)
 
 ---
 
-## <a name="features"></a>✨ Features / 特性
+## <a name="introduction"></a>🔍 Introduction
 
-**English:**
+Scout Agent is an intelligent personal assistant AI agent with persistent memory, tool calling, and multi-channel access. It grows with you by remembering your preferences, automating tasks, and connecting to the platforms you use every day.
+
+---
+
+## <a name="features"></a>✨ Features
 
 | Feature | Description | Screenshot |
 |---------|-------------|------------|
@@ -59,48 +56,26 @@
 | 🗂 **Pluggable Agent Loop** | ReAct (default) or DAG plan-execute loop, switchable per conversation | §3 |
 | 📜 **Tool Contracts** | Annotation-derived schemas, runtime arg validation, unified error codes | §4 |
 | 🐚 **Persistent Shell** | Long-lived bash sessions preserving cwd/env/background jobs across calls | §4 |
+| 🖥 **PTY Terminal** | Pseudo-terminal interaction: vim/top etc., key injection + explicit interrupt + window resize | — |
+| 📊 **eval Benchmark** | `python -m scout.eval`: isolated evaluation + unbiased Pass@1/3/5 estimates (DSBench-aligned) | — |
+| 🧠 **Memory Engineering** | Cross-session key-memory extraction (LLM structured/heuristic fallback + dedup), cross-session context assembly (memory × importance × time decay + history `<summary>` injection) | §1 |
+| 🧩 **Plugin SPI (all types)** | llm/storage/cache/session/memory five core components can be declaratively replaced | §13 |
+| 📱 **PWA Desktop** | Web UI installable as a standalone app (manifest + Service Worker + icons), offline instant launch | — |
+| 💰 **Cost Visibility** | LLM cost estimation (cache-hit discount pricing), `scout doctor` summarizes hit rate and savings | §8 |
+| 🪟 **Windows Portable** | `desktop/build.bat` one-click packaging, no install/no registry (WinForms + WebView2 + PyInstaller), portable data next to the exe | — |
 
 > 📸 Screenshot numbers (§N) refer to the corresponding sections in [Web UI](#web-ui) below. "—" means a runtime/dev-only feature without a dedicated UI screenshot.
-> 📸 截图编号（§N）对应下方「Web UI / 网页界面」章节的小节；"—" 表示纯运行时/开发特性，无专属界面截图。
-
-**中文:**
-
-| 特性 | 说明 | 截图 |
-|------|------|------|
-| 🧠 **持久记忆** | 自动保存对话上下文和用户偏好；纯文本检索（默认）+ 可选 API 向量语义检索 | §1 |
-| 🔧 **工具调用** | 20+ 内置工具：文件编辑、安全 Shell、代码执行、网络搜索、记忆回溯、定时任务、MCP 等 | §4 |
-| 🌐 **多渠道** | 接入飞书、微信、Telegram、Discord、Slack、钉钉、QQ 等 12+ 平台 | §11 |
-| 🤖 **多智能体** | ReAct 单智能体循环、Multi-Agent 委派架构、DAG 计划-执行循环 | §7 |
-| 🚀 **双模型架构** | 思考者/执行者模型架构，支持深度思考开关 | §2 |
-| 🔒 **安全优先** | 沙箱执行、危险命令拦截、XSS 防护、可选认证 | §5/§6 |
-| 📊 **使用监控** | Token 消耗与模型调用统计 | §8 |
-| 🎙 **语音** | ASR + TTS 语音交互 | — |
-| 🧩 **插件系统** | 基于 EventBus 的插件扩展 + SPI（可替换 LLM/存储等核心组件） | §13 |
-| 📚 **知识库** | 多格式文档解析 + 力导向图可视化 | §10 |
-| 🔄 **测试反馈闭环** | 代码失败自动跑 pytest，结构化失败堆栈喂回上下文自纠错 | — |
-| 🗂 **可插拔循环** | ReAct（默认）或 DAG 计划-执行循环，按会话切换 | §3 |
-| 📜 **工具契约** | 注解推导 schema、运行时参数校验、统一错误码 | §4 |
-| 🐚 **持久 Shell** | 长驻 bash 会话，跨调用保留 cwd/环境变量/后台任务 | §4 |
-| 🖥 **PTY 终端** | 伪终端交互：vim/top 等程序可用，按键注入 + 显式中断 + 窗口尺寸 | — |
-| 📊 **eval 基准** | `python -m scout.eval`：隔离评测 + Pass@1/3/5 无偏估计（对标 DSBench） | — |
-| 🧠 **记忆工程化** | 跨会话关键记忆抽取（LLM 结构化/启发式降级 + 去重）、跨会话上下文组装（记忆 × 重要性 × 时间衰减 + 历史摘要 `<summary>` 注入） | §1 |
-| 🧩 **插件 SPI 全类型** | llm/storage/cache/session/memory 五类核心组件可声明式替换 | §13 |
-| 📱 **PWA 桌面化** | Web UI 可安装为独立应用（manifest + Service Worker + 图标），离线秒开 | — |
-| 💰 **成本可视化** | LLM 调用成本估算（缓存命中折扣计价），`scout doctor` 汇总命中率与节省金额 | §8 |
-| 🪟 **Windows 绿色版** | `desktop/build.bat` 一键打包免安装免注册桌面程序（pywebview + PyInstaller），数据随行便携 | — |
 
 ---
 
-## <a name="quick-start"></a>🚀 Quick Start / 快速开始
+## <a name="quick-start"></a>🚀 Quick Start
 
-### Prerequisites / 环境要求
+### Prerequisites
 
 - Python 3.11+
 - (Optional) Docker for sandbox isolation
 
-### Installation / 安装
-
-**English:**
+### Installation
 
 ```bash
 # 1. Clone the repository
@@ -119,30 +94,11 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env and fill in your own API key
 # (Or open the web UI and configure in the Settings page —
-#  all user data — config, sessions, memories — is stored in ~/.scout/ by default)
+#  all user data — config, sessions, memories — is stored in <drive-root>:\.scout\ by default,
+#  e.g. D:\.scout when the project lives on drive D — never in the project tree or on C:)
 ```
 
-**中文:**
-
-```bash
-# 1. 克隆仓库
-git clone https://github.com/<your-github-username>/scout-agent.git
-cd scout-agent
-
-# 2. 安装依赖
-pip install -r requirements.txt
-
-# 3. (可选) 嵌入模型（用于向量语义检索）
-#    默认纯文本检索，无需模型与 API Key；仅需向量检索时在 .env 配置 SCOUT_EMBEDDING_API_KEY
-#    云 API 或自托管服务二选一，自托管部署见 docs/embedding-server.md
-
-# 4. 配置环境变量（或打开 Web 界面在「设置」页配置）
-cp .env.example .env
-# 编辑 .env 填入你自己的 API Key
-# 所有用户配置、会话、记忆统一保存在 ~/.scout/ 下（首次启动自动生成）
-```
-
-### Start the Service / 启动服务
+### Start the Service
 
 ```bash
 # Start web interface (default port 8848)
@@ -155,19 +111,17 @@ python -m scout.cli
 python -m scout.cli --web --port 9000
 ```
 
-> 安装后也可以直接使用 `scout` 命令（等价于 `python -m scout.cli`）；后台守护方式见下方「命令行」章节（`scout start` / `stop` / `restart`）。
+> After installation you can also use the `scout` command directly (equivalent to `python -m scout.cli`); daemon mode is described in the Command Line section below (`scout start` / `stop` / `restart`).
 
-### Access the UI / 访问界面
+### Access the UI
 
-Open your browser at: `http://localhost:8848` / 打开浏览器访问：`http://localhost:8848`
+Open your browser at: `http://localhost:8848`
 
 ---
 
-## <a name="configuration"></a>⚙️ Configuration / 配置
+## <a name="configuration"></a>⚙️ Configuration
 
-**English** — Copy `.env.example` to `.env` and configure your own API key. **Never commit your `.env` or `config.json` file** — they contain secrets.
-
-**中文** — 复制 `.env.example` 为 `.env` 并配置你自己的 API Key。**切勿提交 `.env` 或 `config.json` 文件**——它们包含敏感信息。
+Copy `.env.example` to `.env` and configure your own API key. **Never commit your `.env` or `config.json` file** — they contain secrets.
 
 ```ini
 # .env  /  .env.example
@@ -195,8 +149,12 @@ SCOUT_LLM_MAX_TOKENS=4096
 # Multiple search engine sources (SearXNG / Bing / Google / Tavily / DuckDuckGo / custom)
 # can be configured in the Web UI: Settings → Tools → Search engine sources.
 
-# Data directory (default: ~/.scout/)
-SCOUT_DATA_DIR=~/.scout
+# Data directory
+# Default (Windows): <drive-root>:\.scout — follows the drive of the program/source tree,
+#   e.g. source on D:\projects\scout-agent -> data in D:\.scout (never on C:, never in the project tree)
+# Other platforms: <project root>/.scout
+# SCOUT_DATA_DIR=<path>       # override data directory
+# SCOUT_CONFIG_DIR=<path>     # separate config dir if needed
 
 # Security
 # SCOUT_AUTO_APPROVE=true
@@ -206,80 +164,80 @@ SCOUT_DATA_DIR=~/.scout
 # SCOUT_GATEWAY_PORT=8848
 ```
 
-### Supported Models / 支持的模型
+### Supported Models
 
-Web UI 设置页内置各 Provider 的模型目录（含能力标签与发布时间，按最新排序），也可通过 `GET /api/config/providers` 获取。常用最新模型如下：
+The Web UI settings page ships a built-in model catalog for each provider (with capability tags and release dates, newest first); it is also available via `GET /api/config/providers`. Popular latest models:
 
-| Provider | 对话模型（最新） | 视觉模型 | 嵌入模型 | 图像模型 |
+| Provider | Chat Models (latest) | Vision | Embedding | Image |
 |---|---|---|---|---|
-| **DashScope** (阿里百炼) | `qwen3.8-max`（旗舰·2026-07）、`qwen3.7-plus`（多模态·推荐）、`qwen3.7-flash`、`qwen3.6-plus`、`deepseek-v4-pro`/`deepseek-v4-flash`、`kimi/kimi-k3`、`glm-5.2`、`MiniMax/MiniMax-M3` | `qwen3.7-plus`、`qwen3.6-plus`、`qwen-vl-max` | `qwen3.7-text-embedding`（最新）、`qwen3-text-embedding-4b`（1024 维）、`text-embedding-v5/v4/v3` | `qwen-image-3.0-pro`（最新）、`qwen-image-2.0-pro`、`wan2.7-image-pro`、`qwen-image-max` |
-| **DeepSeek** | `deepseek-chat`（V4·2026-05）、`deepseek-reasoner`（R1）、`deepseek-v3.1`、`deepseek-r1-distill-*` | — | — | — |
-| **智谱 BigModel** | `glm-5.2`（旗舰·2026-04）、`glm-5-plus`、`glm-5-flash`（免费）、`glm-5`、`glm-4-plus`、`glm-4-long` | `glm-4v-plus`、`glm-4v` | `embedding-3`（2048 维）、`embedding-2` | `cogview-4`、`cogview-3-plus`、`cogview-3-flash`（免费） |
-| **Moonshot (Kimi)** | `kimi-k3`（旗舰·2026-01）、`kimi-k2-thinking`、`kimi-k2`、`moonshot-v1-128k/256k` | — | `embedding-1`（1024 维） | — |
-| **火山引擎 (豆包)** | `doubao-1.5-pro-32k/256k`、`doubao-1.5-lite-32k`、`doubao-vision-pro` | `doubao-1.5-vision-pro-32k`、`doubao-vision-pro` | `doubao-embedding-large-text`（1024 维·最新） | — |
-| **OpenAI** | `gpt-4.1`（多模态·最新）、`gpt-4.1-mini`、`o3`（推理）、`o4-mini`、`gpt-4o`、`gpt-4o-mini` | `gpt-4.1`、`gpt-4o`、`gpt-4o-mini` | `text-embedding-3-large`（3072 维）、`text-embedding-3-small` | `gpt-image-1`、`dall-e-3` |
-| **Anthropic Claude** | `claude-opus-4-20250514`（最强）、`claude-sonnet-4-20250514`（推荐） | `claude-sonnet-4-20250514`、`claude-opus-4-20250514` | — | — |
-| **Google Gemini** | `gemini-2.5-pro`（旗舰·推理·2M 上下文）、`gemini-2.5-flash`、`gemini-2.0-flash` | `gemini-2.5-pro`、`gemini-2.5-flash` | `gemini-embedding-001`（3072 维） | — |
-| **OpenRouter**（聚合） | `anthropic/claude-sonnet-4`、`openai/gpt-4.1`、`google/gemini-2.5-pro`、`qwen/qwen3-235b-a22b`、`deepseek/deepseek-chat`、`google/gemini-2.0-flash-exp:free` | 见对应模型 | `openai/text-embedding-3-large/small` | — |
+| **DashScope** (Alibaba) | `qwen3.8-max` (flagship·2026-07), `qwen3.7-plus` (multimodal·recommended), `qwen3.7-flash`, `qwen3.6-plus`, `deepseek-v4-pro`/`deepseek-v4-flash`, `kimi/kimi-k3`, `glm-5.2`, `MiniMax/MiniMax-M3` | `qwen3.7-plus`, `qwen3.6-plus`, `qwen-vl-max` | `qwen3.7-text-embedding` (newest), `qwen3-text-embedding-4b` (1024d), `text-embedding-v5/v4/v3` | `qwen-image-3.0-pro` (newest), `qwen-image-2.0-pro`, `wan2.7-image-pro`, `qwen-image-max` |
+| **DeepSeek** | `deepseek-chat` (V4·2026-05), `deepseek-reasoner` (R1), `deepseek-v3.1`, `deepseek-r1-distill-*` | — | — | — |
+| **Zhipu BigModel** | `glm-5.2` (flagship·2026-04), `glm-5-plus`, `glm-5-flash` (free), `glm-5`, `glm-4-plus`, `glm-4-long` | `glm-4v-plus`, `glm-4v` | `embedding-3` (2048d), `embedding-2` | `cogview-4`, `cogview-3-plus`, `cogview-3-flash` (free) |
+| **Moonshot (Kimi)** | `kimi-k3` (flagship·2026-01), `kimi-k2-thinking`, `kimi-k2`, `moonshot-v1-128k/256k` | — | `embedding-1` (1024d) | — |
+| **Volcengine (Doubao)** | `doubao-1.5-pro-32k/256k`, `doubao-1.5-lite-32k`, `doubao-vision-pro` | `doubao-1.5-vision-pro-32k`, `doubao-vision-pro` | `doubao-embedding-large-text` (1024d·newest) | — |
+| **OpenAI** | `gpt-4.1` (multimodal·newest), `gpt-4.1-mini`, `o3` (reasoning), `o4-mini`, `gpt-4o`, `gpt-4o-mini` | `gpt-4.1`, `gpt-4o`, `gpt-4o-mini` | `text-embedding-3-large` (3072d), `text-embedding-3-small` | `gpt-image-1`, `dall-e-3` |
+| **Anthropic Claude** | `claude-opus-4-20250514` (strongest), `claude-sonnet-4-20250514` (recommended) | `claude-sonnet-4-20250514`, `claude-opus-4-20250514` | — | — |
+| **Google Gemini** | `gemini-2.5-pro` (flagship·reasoning·2M ctx), `gemini-2.5-flash`, `gemini-2.0-flash` | `gemini-2.5-pro`, `gemini-2.5-flash` | `gemini-embedding-001` (3072d) | — |
+| **OpenRouter** (aggregator) | `anthropic/claude-sonnet-4`, `openai/gpt-4.1`, `google/gemini-2.5-pro`, `qwen/qwen3-235b-a22b`, `deepseek/deepseek-chat`, `google/gemini-2.0-flash-exp:free` | see respective models | `openai/text-embedding-3-large/small` | — |
 
-> 除上述 Provider 外，任意 OpenAI 兼容端点（`provider=compatible` + 自定义 `base_url`）均可接入，包括自建 vLLM / Ollama / PAI-EAS 等私有部署。
-> 模型清单以 Web UI 设置页实时目录为准，代码位于 `scout/adapters/web.py` 的 `/api/config/providers`。
+> Besides the providers above, any OpenAI-compatible endpoint (`provider=compatible` + custom `base_url`) works, including self-hosted vLLM / Ollama / PAI-EAS deployments.
+> The authoritative model list is the live catalog in the Web UI settings page; code lives in `scout/adapters/web.py` at `/api/config/providers`.
 
 ---
 
-## <a name="cli"></a>💻 Command Line / 命令行
+## <a name="cli"></a>💻 Command Line
 
-### Environment Check / 环境自检
+### Environment Check
 
 ```bash
 scout doctor
 ```
 
-一次性检查运行所需的环境、配置、依赖与运行时状态（含 embedding 配置提示），发现问题会给出修复建议。
+One-shot check of environment, config, dependencies and runtime state (including embedding hints), with fix suggestions when problems are found.
 
-### API Key 管理（加密存储）
+### API Key Management (encrypted storage)
 
-后台 / Web 模式不依赖 `.env` 明文，可用 `scout key` 将 Key 加密存入 keyring / 加密文件：
-
-```bash
-scout key --add <provider> <api_key>        # 加密保存并激活该 provider
-scout key --add <provider> <api_key> --no-activate  # 仅保存不激活
-scout key --activate <provider>             # 切换当前激活的 provider
-scout key --list                            # 列出已保存 Key 的 provider（不泄露明文）
-```
-
-### 后台守护 / 服务管理
-
-后台运行 Web 服务，自动管理 PID 与日志（nohup.out）：
+Daemon/Web mode does not rely on plaintext `.env`; use `scout key` to store keys encrypted in keyring / encrypted file:
 
 ```bash
-scout start          # 后台启动 Web 服务（端口 8848，可改配置）
-scout stop           # 安全停止（含 WAL checkpoint 与数据库备份）
-scout restart        # 重启
-scout status         # 查看运行状态
-scout logs           # 查看实时日志
-scout update         # 拉取最新代码并更新依赖
-scout version        # 查看版本
+scout key --add <provider> <api_key>        # encrypt-save and activate this provider
+scout key --add <provider> <api_key> --no-activate  # save without activating
+scout key --activate <provider>             # switch the currently active provider
+scout key --list                            # list saved key providers (never leaks plaintext)
 ```
 
-> ⚠️ **不要用 `pkill -f scout.cli` 强杀进程**——会绕过 WAL checkpoint 与数据库安全备份，可能导致未落盘数据丢失。请使用 `scout stop`。
+### Daemon / Service Management
 
-### 一键脚本 / One-click Scripts
+Run the Web service in the background with automatic PID and log management (nohup.out):
 
-| 脚本 | 作用 |
+```bash
+scout start          # start Web service in background (port 8848, configurable)
+scout stop           # graceful stop (WAL checkpoint + database backup)
+scout restart        # restart
+scout status         # show running status
+scout logs           # tail live logs
+scout update         # pull latest code and update dependencies
+scout version        # show version
+```
+
+> ⚠️ **Never `pkill -f scout.cli`** — it bypasses the WAL checkpoint and safe database backup, which may lose unflushed data. Use `scout stop`.
+
+### One-click Scripts
+
+| Script | Purpose |
 |------|------|
-| `bash install.sh` | 一键安装：检测 Python 3.11+、创建 venv/Conda、安装依赖、生成 `.env` 并引导填写 API Key、注册 `scout` 快捷指令 |
-| `bash update.sh` | 一键更新：安全停止服务 → 备份 `.env` → 拉取代码 → 更新依赖 → 重启 |
-| `bash run.sh --web` | 便捷启动 Web（自动激活环境并加载 `.env`） |
-| `bash run.sh` | 终端对话模式 |
-| `bash version.sh info` | 版本管理：`info / check / bump <major|minor|patch> / set <ver> / history` |
-| `bash run_tests.sh` | 运行全部测试 |
+| `bash install.sh` | One-click install: detects Python 3.11+, creates venv/Conda, installs deps, generates `.env` and guides API key entry, registers the `scout` command |
+| `bash update.sh` | One-click update: graceful stop → backup `.env` → pull code → update deps → restart |
+| `bash run.sh --web` | Convenient web launch (auto-activates env and loads `.env`) |
+| `bash run.sh` | Terminal chat mode |
+| `bash version.sh info` | Version management: `info / check / bump <major|minor|patch> / set <ver> / history` |
+| `bash run_tests.sh` | Run all tests |
 
 ---
 
-## <a name="web-ui"></a>🖥 Web UI / 网页界面
+## <a name="web-ui"></a>🖥 Web UI
 
-**English** — Scout Agent provides a modern web interface with:
+Scout Agent provides a modern web interface with:
 
 - 💬 Chat interface with streaming responses
 - 🧠 Memory / Knowledge management panels
@@ -288,175 +246,143 @@ scout version        # 查看版本
 - 🌐 **Bilingual UI** — switch between Chinese and English interfaces
 - 📊 Usage & observability dashboards
 
-**中文** — Scout Agent 提供现代化的网页界面：
+### Screenshots
 
-- 💬 流式响应聊天界面
-- 🧠 记忆 / 知识管理面板
-- ⏰ 定时任务调度
-- ⚙️ 设置：模型、智能体行为、安全策略、渠道
-- 🌐 **双语界面** — 中英文界面自由切换
-- 📊 用量与可观测性仪表盘
+> The following screenshots are from a running Scout Agent Web UI.
 
-### Screenshots / 界面预览
+#### 1. Main Chat
 
-> 以下截图来自实际运行的 Scout Agent Web UI，展示主要功能区域。
+Session history and quick entries on the left; welcome page with function pills (file ops, memory save, web search, code execution, memory recall, web fetch) in the middle; message input at the bottom.
 
-#### 1. Main Chat / 主聊天界面
+![Main Chat](docs/images/chat-main-en.png)
 
-左侧为会话历史与快捷入口，中间为欢迎页与功能胶囊（文件操作、记忆保存、网络搜索、代码执行、记忆回忆、网页抓取），底部为消息输入框。
+#### 2. Settings — Model
 
-![Main Chat 中文](docs/images/chat-main.png)
-![Main Chat English](docs/images/chat-main-en.png)
+Centrally manage per-provider API keys and Base URLs; selecting a provider shows only its fields. Text / vision / image model blocks reuse credentials automatically.
 
-#### 2. Settings — Model / 模型配置
+![Settings Model](docs/images/settings-model-en.png)
 
-集中管理各服务商 API Key 与 Base URL，选择服务商后仅显示对应厂商的填写项。文本 / 视觉 / 图像模型模块只需选择服务商与模型即可自动复用凭据。
+#### 2.1 Embedding Model
 
-![Settings Model 中文](docs/images/settings-model.png)
-![Settings Model English](docs/images/settings-model-en.png)
+Besides the main chat model, vision understanding, image generation and Embedding models can also use an independent provider; Embedding can follow the main provider or use dedicated credentials. For self-hosted embedding (intranet/private deployment), see [docs/embedding-server.md](docs/embedding-server.md).
 
-#### 2.1 Embedding Model / Embedding 模型
+![Settings Model Embedding](docs/images/settings-model-embedding-en.png)
 
-除主对话模型外，视觉理解、图像生成与 Embedding 模型也支持选择独立服务商，Embedding 可跟随主服务商或使用专属凭据。如需自托管 Embedding 服务（内网/私有化部署），参见 [docs/embedding-server.md](docs/embedding-server.md)。
+#### 3. Settings — Agent
 
-![Settings Model Embedding 中文](docs/images/settings-model-embedding.png)
-![Settings Model Embedding English](docs/images/settings-model-embedding-en.png)
+Configure reply language, run mode (ReAct single-agent loop or Multi-Agent delegation), system prompt, deep thinking and other parameters.
 
-#### 3. Settings — Agent / Agent 行为
+![Settings Agent](docs/images/settings-agent-en.png)
 
-设置回复语言、运行模式（ReAct 单智能体循环 或 Multi-Agent 委派架构）、系统提示词与深度思考等参数。
+#### 4. Settings — Tools
 
-![Settings Agent 中文](docs/images/settings-agent.png)
-![Settings Agent English](docs/images/settings-agent-en.png)
+Configure search engine sources (multi-source concurrent + auto failover), file/code/sandbox tool switches and parameters; applied instantly after saving.
 
-#### 4. Settings — Tools / 工具配置
+![Settings Tools](docs/images/settings-tools-en.png)
 
-配置搜索引擎源（支持多源并发与自动切换）、文件 / 代码 / 沙箱等工具的开关与参数，保存后即时生效。
+#### 5. Settings — Security
 
-![Settings Tools 中文](docs/images/settings-tools.png)
-![Settings Tools English](docs/images/settings-tools-en.png)
+Visual configuration of dangerous command detection (`rm -rf /`, `dd if=`, `mkfs`, `curl | sh` and 13 more patterns), auto-approve toggle, Docker sandbox isolation — keeps the Agent in a restricted environment.
 
-#### 5. Settings — Security / 安全策略
+![Settings Security](docs/images/settings-security-en.png)
 
-可视化配置危险命令检测（`rm -rf /`、`dd if=`、`mkfs`、`curl | sh` 等 13 种模式）、自动审批开关、Docker 沙箱隔离，让 Agent 在受限环境中运行。
+### Runtime Features
 
-![Settings Security 中文](docs/images/settings-security.png)
-![Settings Security English](docs/images/settings-security-en.png)
+#### 6. ReAct Reflection + Security Block
 
-### Runtime Features / 运行时特色
+In ReAct mode, after any action failure or security policy block, the Agent performs **self-reflection** (e.g. "reflection@step 2/3" in the screenshot) and adjusts strategy dynamically instead of mechanically retrying. In the screenshot a Docker query was blocked by the system security layer due to whitelist/dangerous-parameter rules.
 
-#### 6. ReAct 反思 + 安全拦截
+![Runtime Security Block](docs/images/runtime-security-block-en.png)
 
-ReAct 模式下，Agent 会在每一步行动失败或被安全策略拦截后进行**自我反思**（如截图中的“反思@步骤2/3”），动态调整策略而不是机械重试。图中的 Docker 查询因命中白名单/危险参数规则被系统层安全策略拦截。
+#### 7. Multi-Agent Mode
 
-![Runtime Security Block 中文](docs/images/runtime-security-block-zh.png)
-![Runtime Security Block English](docs/images/runtime-security-block-en.png)
+After switching to Multi-Agent mode, the main Agent splits complex tasks into subtasks and delegates them in parallel to different roles (planning, search, coding, ...). The screenshot shows the delegation process and reflection output.
 
-#### 7. Multi-Agent 模式
+![Runtime Multi Agent](docs/images/runtime-multi-agent-en.png)
 
-切换到 Multi-Agent 模式后，主 Agent 将复杂任务拆分为子任务并并行委派给不同角色（规划、搜索、编码等），截图中可见“这两部分相互独立，我会并行处理”的委派过程与反思输出。
+#### 8. Model Monitoring
 
-![Runtime Multi Agent 中文](docs/images/runtime-multi-agent-zh.png)
-![Runtime Multi Agent English](docs/images/runtime-multi-agent-en.png)
+Daily / weekly / monthly / yearly statistics of model calls, token consumption, cache hit rate, average latency, daily trends and per-model breakdown.
 
-#### 8. Model Monitoring / 模型监控
+![Monitor Usage](docs/images/monitor-usage-en.png)
 
-按今日 / 本周 / 本月 / 全年维度统计模型调用次数、Token 消耗、缓存命中率、平均延迟、每日趋势与按模型 breakdown。
+#### 9. System Monitoring
 
-![Monitor Usage 中文](docs/images/monitor-usage.png)
-![Monitor Usage English](docs/images/monitor-usage-en.png)
+Real-time CPU, memory, disk, network, Agent runtime status and historical curves.
 
-#### 9. System Monitoring / 系统监控
+![Monitor System](docs/images/monitor-system-en.png)
 
-实时查看 CPU、内存、磁盘、网络、Agent 运行状态与历史曲线。
+#### 10. Knowledge Base
 
-![Monitor System 中文](docs/images/monitor-system.png)
-![Monitor System English](docs/images/monitor-system-en.png)
+Upload documents, auto-parse and index; semantic search, knowledge graph visualization, chunk preview and document management.
 
-#### 10. Knowledge Base / 知识库
+![Knowledge Base](docs/images/knowledge-base-en.png)
 
-上传文档后自动解析并建立索引，支持语义搜索、知识图谱可视化、Chunk 预览与文档管理。
+#### 11. Settings — Channels
 
-![Knowledge Base 中文](docs/images/knowledge-base.png)
-![Knowledge Base English](docs/images/knowledge-base-en.png)
+Feishu, WeChat, WeChat Official Account, WeCom, WeCom Group Bot, WeChat Customer Service, Personal WeChat, Telegram, DingTalk, Discord, Slack, QQ — 12+ platforms; chat with Scout from any of them.
 
-#### 11. Settings — Channels / 渠道管理
+![Settings Channels](docs/images/settings-channels-en.png)
 
-支持飞书、微信、微信公众号、企业微信、企微群机器人、微信客服、个人微信、Telegram、钉钉、Discord、Slack、QQ 等 12+ 平台接入，配置后即可在这些平台与 Scout 对话。
+#### 12. Settings — Auth
 
-![Settings Channels 中文](docs/images/settings-channels.png)
-![Settings Channels English](docs/images/settings-channels-en.png)
+Optional JWT login password protection for the Web UI and APIs.
 
-#### 12. Settings — Auth / 登录认证
+![Settings Auth](docs/images/settings-auth-en.png)
 
-可选启用 JWT 登录密码保护 Web 界面与 API，提升服务安全性。
+#### 13. Plugins
 
-![Settings Auth 中文](docs/images/settings-auth.png)
-![Settings Auth English](docs/images/settings-auth-en.png)
+View installed plugins and Skills, unload and reload; Skills discovered online can be installed and auto-triggered in conversations.
 
-#### 13. Plugins / 插件管理
+![Plugins](docs/images/plugins-en.png)
 
-查看已安装插件与 Skill，支持卸载与重新加载；从网上发现的 Skill 安装后可在对话中自动触发。
+#### 14. Plugin Builder
 
-![Plugins 中文](docs/images/plugins.png)
-![Plugins English](docs/images/plugins-en.png)
+Describe the plugin you want and the AI generates complete plugin code; you can also search existing Skills/plugins on the web first.
 
-#### 14. Plugin Builder / AI 插件生成器
+![Plugin Builder](docs/images/plugin-builder-en.png)
 
-描述想要的插件功能，AI 自动生成完整插件代码，也可以先搜索全网现有 Skill/插件。
+#### 15. Automation
 
-![Plugin Builder 中文](docs/images/plugin-builder.png)
-![Plugin Builder English](docs/images/plugin-builder-en.png)
+Event triggers, run history, unattended policy and cron tasks — let Scout react to EventBus events or run tasks on a schedule.
 
-#### 15. Automation / 自动化中心
+![Automation](docs/images/automation-en.png)
 
-基于事件触发器、运行历史、无人值守策略与定时任务，让 Scout 响应 EventBus 事件或按 Cron 自动执行任务。
+#### 16. Observability
 
-![Automation 中文](docs/images/automation.png)
-![Automation English](docs/images/automation-en.png)
+Aggregate recent session timelines, success rates and token consumption per trace to quickly locate anomalies.
 
-#### 16. Observability / 运行观测时间线
+![Observe](docs/images/observe-en.png)
 
-按 trace 聚合查看最近会话的运行时间线、成功率与 Token 消耗，快速定位异常。
+#### 17. Notifications
 
-![Observe 中文](docs/images/observe.png)
-![Observe English](docs/images/observe-en.png)
+Configure push rules, type toggles and IM channel targets; centrally manage all notification history.
 
-#### 17. Notifications / 通知中心
+![Notify](docs/images/notify-en.png)
 
-配置通知推送规则、类型开关与 IM 渠道目标，集中管理所有通知历史。
+#### 18. Events
 
-![Notify 中文](docs/images/notify.png)
-![Notify English](docs/images/notify-en.png)
+Browse the EventBus event stream (types, sources, payload summaries); plugins and automation both hook into this bus.
 
-#### 18. Events / 事件总线
+![Events](docs/images/events-en.png)
 
-查看系统内 EventBus 广播的事件流（含事件类型、来源、载荷摘要），插件与自动化均基于该总线触发。
+#### 19. Watcher
 
-![Events 中文](docs/images/events.png)
-![Events English](docs/images/events-en.png)
+Watch directories for file changes (added/modified/deleted) and push events to the Agent; configurable paths and filter rules.
 
-#### 19. Watcher / 文件监听
+![Watcher](docs/images/watcher-en.png)
 
-监听指定目录的文件变化（新增 / 修改 / 删除），事件自动推送给 Agent 处理，可配置监听路径与过滤规则。
+#### 20. Webhooks
 
-![Watcher 中文](docs/images/watcher.png)
-![Watcher English](docs/images/watcher-en.png)
+Register HTTP webhooks to receive external pushes and inject events into Scout sessions or trigger automations; signature verification and routing supported.
 
-#### 20. Webhooks / 外部回调
-
-注册 HTTP Webhook 接收外部系统推送，将事件注入 Scout 会话或触发自动化任务，支持签名校验与路由配置。
-
-![Webhooks 中文](docs/images/webhooks.png)
-![Webhooks English](docs/images/webhooks-en.png)
-
-> 以上 1–20 为完整功能界面截图；英文版截图位于对应 `-en` 文件。
+![Webhooks](docs/images/webhooks-en.png)
 
 ---
 
-## <a name="security"></a>🔒 Security / 安全
+## <a name="security"></a>🔒 Security
 
-**English** — Scout Agent takes security seriously:
+Scout Agent takes security seriously:
 
 - 🛡 **Sandbox execution**: Docker-isolated command execution (optional)
 - ⛔ **Dangerous command blocking**: blacklist for `rm -rf /`, fork bombs, etc.
@@ -466,63 +392,52 @@ ReAct 模式下，Agent 会在每一步行动失败或被安全策略拦截后�
 - 📁 **File access control**: downloads restricted to workspace
 - 🔐 **Secret storage**: API keys stored in keyring or encrypted files
 
-**中文** — Scout Agent 高度重视安全：
-
-- 🛡 **沙箱执行**：Docker 隔离的命令执行（可选）
-- ⛔ **危险命令拦截**：`rm -rf /`、fork 炸弹等黑名单
-- 🔒 **Shell 注入防护**：白名单 + 元字符拦截
-- 🧹 **XSS 防护**：DOMPurify 消毒渲染内容
-- 🔑 **可选认证**：Web API 的 JWT 认证（设置页「登录认证」开关控制，默认关闭）
-- 📁 **文件访问控制**：下载限制在工作空间内
-- 🔐 **密钥存储**：API Key 存于 keyring 或加密文件
-
 ---
 
-## <a name="development"></a>🧑‍💻 Development / 开发
+## <a name="development"></a>🧑‍💻 Development
 
-### Project Structure / 项目结构
+### Project Structure
 
 ```
 scout-agent/
-├── scout/                    # Core code / 核心代码
-│   ├── adapters/             # Platform adapters / 平台适配器
-│   ├── tools/                # Tool implementations / 工具实现
-│   │   └── builtin/          # Built-in tools / 内置工具
-│   ├── memory/               # Memory storage / 记忆存储
-│   ├── session/              # Session management / 会话管理
-│   ├── security/             # Security layer / 安全层
-│   ├── llm/                  # LLM providers / 模型接入
-
-│   ├── engine/               # Agent engine / 智能体引擎
-│   ├── multiagent/           # Multi-agent coordination / 多智能体
-│   ├── plugins/              # Plugin system / 插件系统
-│   ├── voice/                # Voice (ASR/TTS) / 语音
-│   ├── web/                  # Web UI / 网页界面
-│   └── cli.py                # CLI entry / 命令行入口
-├── tests/                    # Tests / 测试
-├── plugins/                  # Example plugins / 示例插件
-├── examples/                 # Examples / 示例
-├── docs/                     # Documentation / 文档
+├── scout/                    # Core code
+│   ├── adapters/             # Platform adapters
+│   ├── tools/                # Tool implementations
+│   │   └── builtin/          # Built-in tools
+│   ├── memory/               # Memory storage
+│   ├── session/              # Session management
+│   ├── security/             # Security layer
+│   ├── llm/                  # LLM providers
+│   ├── engine/               # Agent engine
+│   ├── multiagent/           # Multi-agent coordination
+│   ├── plugins/              # Plugin system
+│   ├── voice/                # Voice (ASR/TTS)
+│   ├── web/                  # Web UI
+│   └── cli.py                # CLI entry
+├── tests/                    # Tests
+├── plugins/                  # Example plugins
+├── examples/                 # Examples
+├── docs/                     # Documentation
 ├── pyproject.toml
 ├── requirements.txt
-├── install.sh            # 一键安装脚本
-├── update.sh             # 一键更新脚本
-├── run.sh                # 便捷启动脚本（--web / 终端对话）
-├── version.sh            # 版本管理脚本
-├── run_tests.sh          # 测试脚本
+├── install.sh            # One-click install script
+├── update.sh             # One-click update script
+├── run.sh                # Convenient launcher (--web / terminal chat)
+├── version.sh            # Version management script
+├── run_tests.sh          # Test script
 ├── Dockerfile
 ├── docker-compose.yml
-└── desktop/build.bat     # Windows 绿色版打包
+└── desktop/build.bat     # Windows portable build
 ```
 
-### Adding a New Tool / 添加新工具
+### Adding a New Tool
 
 1. Create a new directory under `scout/tools/builtin/`
 2. Implement a tool class inheriting `ToolDefinition`
 3. Register the tool in `__init__.py`
 4. Add tests in `tests/unit/`
 
-### Adding a New Platform / 添加新平台
+### Adding a New Platform
 
 1. Create an adapter under `scout/adapters/platforms/`
 2. Implement the `ChannelAdapter` interface
@@ -531,42 +446,26 @@ scout-agent/
 
 ---
 
-## <a name="testing"></a>🧪 Testing / 测试
+## <a name="testing"></a>🧪 Testing
 
 ```bash
-# Run all tests / 运行全部测试
+# Run all tests
 pytest tests/unit tests/integration -v
 
-# Run unit tests only / 仅运行单元测试
+# Run unit tests only
 pytest tests/unit -v
 
-# Run a specific file / 运行指定文件
+# Run a specific file
 pytest tests/unit/test_tools.py -v
 
-# Use the test script / 使用测试脚本
+# Use the test script
 ./run_tests.sh
 ```
 
 ---
 
-## <a name="license"></a>📄 License / 许可证
+## <a name="license"></a>📄 License
 
 **Apache-2.0** — See [LICENSE](LICENSE) for details.
 
-**Apache-2.0** — 详见 [LICENSE](LICENSE)。
-
 ---
-
-## ⚠️ Notes / 注意事项
-
-**English:**
-
-- This project is **not affiliated with** the products/services mentioned in the demo configurations.
-- All API keys, credentials, and personal data are **excluded** from the repository via `.gitignore`.
-- Review the [SECURITY](docs/security.md) documentation before deploying publicly.
-
-**中文:**
-
-- 本项目**与**演示配置中提及的产品/服务**无关联**。
-- 所有 API Key、凭证和个人数据均通过 `.gitignore` **排除在仓库之外**。
-- 公开部署前请阅读 [SECURITY](docs/security.md) 文档。

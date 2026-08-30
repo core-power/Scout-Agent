@@ -24,6 +24,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,8 +79,10 @@ class GoalManager:
         manager.update_task_progress(task.id, 50)
     """
 
-    def __init__(self, db_path: str | Path = "~/.scout/goals.db", llm=None):
-        self.db_path = Path(db_path).expanduser()
+    def __init__(self, db_path: str | Path | None = None, llm=None):
+        self.db_path = Path(
+            db_path if db_path is not None else str(_SCOUT_DATA_DIR / "goals.db")
+        ).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self.llm = llm  # 用于自动目标提取

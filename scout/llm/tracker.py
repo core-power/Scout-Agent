@@ -6,6 +6,8 @@ import sqlite3
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 
 
@@ -54,7 +56,7 @@ class LLMUsageTracker:
 
     def __init__(self, db_path: str | Path | None = None):
         if db_path is None:
-            db_path = Path.home() / ".scout" / "usage.db"
+            db_path = _SCOUT_DATA_DIR / "usage.db"
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

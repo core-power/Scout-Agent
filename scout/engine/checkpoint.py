@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,8 +100,12 @@ class CheckpointManager:
             ...
     """
 
-    def __init__(self, storage_path: str = "~/.scout/checkpoints"):
-        self.storage_path = Path(storage_path).expanduser()
+    def __init__(self, storage_path: str | Path | None = None):
+        self.storage_path = Path(
+            storage_path
+            if storage_path is not None
+            else str(_SCOUT_DATA_DIR / "checkpoints")
+        ).expanduser()
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
     def save_checkpoint(

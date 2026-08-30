@@ -17,6 +17,8 @@ import socket
 import sys
 from pathlib import Path
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 from rich.console import Console
 from rich.table import Table
 
@@ -51,7 +53,7 @@ def _data_dir() -> Path:
     env_dir = os.getenv("SCOUT_DATA_DIR")
     if env_dir:
         return Path(env_dir).resolve()
-    return Path.home() / ".scout"
+    return _SCOUT_DATA_DIR
 
 
 def _has_saved_key() -> bool:

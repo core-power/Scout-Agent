@@ -16,10 +16,12 @@ from datetime import datetime, timedelta
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 
 def get_default_log_dir() -> Path:
     """获取默认日志目录 (~/.scout/logs)."""
-    return Path.home() / ".scout" / "logs"
+    return _SCOUT_DATA_DIR / "logs"
 
 
 def _cleanup_old_logs(log_dir: Path, retention_days: int) -> int:

@@ -20,6 +20,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("scout.storage.migrate")
 
@@ -272,7 +274,7 @@ def main():
     parser = argparse.ArgumentParser(description="Scout Agent 数据迁移工具")
     parser.add_argument("--from", dest="source", default="sqlite", choices=["sqlite"])
     parser.add_argument("--to", dest="target", default="postgres", choices=["postgres"])
-    parser.add_argument("--sqlite-path", default="~/.scout/sessions.db")
+    parser.add_argument("--sqlite-path", default=None, help="SQLite 数据库路径（默认 <盘符>:\\.scout\\sessions.db）")
     parser.add_argument("--usage-path", default="data/usage/usage_history.jsonl")
     parser.add_argument("--pg-dsn", default="postgresql://scout:scout@localhost:5432/scout")
     parser.add_argument("--dry-run", action="store_true")
@@ -280,8 +282,10 @@ def main():
 
     args = parser.parse_args()
 
+    sqlite_path = args.sqlite_path or str(_SCOUT_DATA_DIR / "sessions.db")
+
     asyncio.run(migrate_sqlite_to_postgres(
-        sqlite_path=args.sqlite_path,
+        sqlite_path=sqlite_path,
         pg_dsn=args.pg_dsn,
         dry_run=args.dry_run,
     ))

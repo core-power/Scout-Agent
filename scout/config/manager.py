@@ -28,7 +28,9 @@ from scout.security.secret import (
 # 项目根目录 — 动态计算，不再硬编码
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-CONFIG_PATH = Path.home() / ".scout" / "config.json"
+# 统一路径（2026-08-30）：SCOUT_CONFIG_DIR 或 <项目根>/.scout，随项目迁移；
+# exe 便携模式由 launcher 设置 SCOUT_CONFIG_DIR=exe旁data，不再写死 C 盘 ~/.scout
+from scout.config.paths import CONFIG_PATH  # noqa: E402
 
 # 需要加密存储的敏感字段（直接值）
 _SENSITIVE_FIELDS = ("api_key",)

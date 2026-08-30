@@ -16,6 +16,8 @@ import json
 import os
 import re
 from pathlib import Path
+
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from typing import Any
 from urllib.parse import urlparse
 
@@ -143,8 +145,8 @@ class BrowserTool(ToolDefinition):
         self._context = None
         self._page = None
         self._pages: list[Any] = []       # 所有打开的 tab
-        self._cookies_dir = Path.home() / ".scout" / "browser_cookies"
-        self._download_dir = Path.home() / ".scout" / "browser_downloads"
+        self._cookies_dir = _SCOUT_DATA_DIR / "browser_cookies"
+        self._download_dir = _SCOUT_DATA_DIR / "browser_downloads"
         self._cookies_dir.mkdir(parents=True, exist_ok=True)
         self._download_dir.mkdir(parents=True, exist_ok=True)
 
