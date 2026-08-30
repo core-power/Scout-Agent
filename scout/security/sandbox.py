@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import shutil
+import tempfile
 from enum import Enum
 from typing import Any
 
@@ -57,6 +58,9 @@ class Sandbox:
             cwd: 工作目录（Docker 模式下相对于容器内）
 
         Returns: (stdout, stderr, returncode)
+
+        安全说明：本地 shell 分支执行的是调用方（shell 工具等）已完成
+        多层命令校验的字符串；此处仅做执行边界，不重复校验。
         """
         if self.is_docker and self.container_id:
             # Docker 执行：构建完整命令
@@ -102,8 +106,6 @@ class Sandbox:
         """写入文件到沙箱."""
         if self.is_docker and self.container_id:
             # Docker: 通过 docker cp 或 exec 写入
-            import tempfile
-            import os
             with tempfile.NamedTemporaryFile(mode='w', suffix='.tmp', delete=False) as f:
                 f.write(content)
                 tmp_path = f.name
@@ -120,12 +122,12 @@ class Sandbox:
         else:
             # 本地：直接写入
             try:
-                import os
                 os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
                 with open(path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 return True
-            except Exception:
+            except OSError as e:
+                logger.error("沙箱本地写入失败 %s: %s", path, e)
                 return False
 
     async def read_file(self, path: str) -> str | None:
@@ -142,7 +144,8 @@ class Sandbox:
             try:
                 with open(path, 'r', encoding='utf-8') as f:
                     return f.read()
-            except Exception:
+            except OSError as e:
+                logger.error("沙箱本地读取失败 %s: %s", path, e)
                 return None
 
 
@@ -168,8 +171,21 @@ class SandboxManager:
             require_docker = os.environ.get("SCOUT_SANDBOX_REQUIRE_DOCKER", "0") == "1"
         self.require_docker = require_docker
         self._sandboxes: dict[str, Sandbox] = {}
-        self._docker_available = self._check_docker()
+        # 惰性探测：None 表示尚未探测。构造期不再同步跑 docker info，
+        # 避免在事件循环/子代理构造时阻塞最多 5 秒。
+        self._docker_available: bool | None = None
         self._creating: dict[str, asyncio.Lock] = {}  # 防止并发创建同一容器
+
+    async def _ensure_docker_available(self) -> None:
+        """惰性探测 Docker 可用性（首次需要沙箱时执行，不阻塞事件循环）."""
+        if self._docker_available is not None:
+            return
+        if SandboxManager._docker_cache is not None:
+            # 进程级缓存：本进程已有结论则直接复用
+            self._docker_available = SandboxManager._docker_cache
+        else:
+            # 同步探测放进线程池，避免阻塞事件循环
+            self._docker_available = await asyncio.to_thread(self._check_docker)
 
     def _check_docker(self) -> bool:
         """检查 Docker 是否可用（二进制 + daemon 可用性，非仅 which）.
@@ -223,6 +239,10 @@ class SandboxManager:
         """
         if self.mode == SandboxMode.OFF:
             return Sandbox()  # 本地执行（显式关闭沙箱）
+
+        # 首次需要 Docker 时再探测（惰性，不阻塞构造）
+        if self._docker_available is None:
+            await self._ensure_docker_available()
 
         if not self._docker_available:
             if self.require_docker:
@@ -318,15 +338,14 @@ class SandboxManager:
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             if proc.returncode != 0:
-                import logging
-                logging.getLogger(__name__).warning(
-                    f"Docker sandbox create failed: {_decode(stderr)}"
-                )
+                logger.warning("Docker sandbox create failed: %s", _decode(stderr))
                 return None
             return _decode(stdout).strip()
         except asyncio.TimeoutError:
+            logger.warning("Docker 容器创建超时")
             return None
-        except Exception:
+        except Exception as e:
+            logger.error("Docker 容器创建异常: %s", e)
             return None
 
     async def cleanup(self, key: str | None = None) -> None:
@@ -359,7 +378,7 @@ class SandboxManager:
         return {
             "mode": self.mode.value,
             "scope": self.scope,
-            "docker_available": self._docker_available,
+            "docker_available": bool(self._docker_available),
             "active_sandboxes": len(self._sandboxes),
             "sandbox_keys": list(self._sandboxes.keys()),
         }

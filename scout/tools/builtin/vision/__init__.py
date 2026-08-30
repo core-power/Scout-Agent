@@ -62,7 +62,9 @@ class VisionTool(ToolDefinition):
             model = os.getenv("VISION_MODEL", "gpt-4o-mini")
 
         if not api_key:
-            return Observation(tool_name="vision", success=False, output="未配置 API Key（请检查 ~/.scout/config.json 或 OPENAI_API_KEY/DASHSCOPE_API_KEY）")
+            from scout.config.paths import DATA_DIR
+            cfg_hint = str(DATA_DIR / "config.json")
+            return Observation(tool_name="vision", success=False, output=f"未配置 API Key（请检查 {cfg_hint} 或 OPENAI_API_KEY/DASHSCOPE_API_KEY）")
 
         try:
             # 构建消息

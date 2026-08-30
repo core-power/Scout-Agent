@@ -118,8 +118,9 @@ bump_version() {
         exit 1
     fi
     
-    # 解析当前版本
-    IFS='.' read -r major minor patch <<< "$VERSION"
+    # 解析当前版本（兼容 3 段 X.Y.Z 与 4 段 X.Y.Z.BUILD，4 段时保留 build 段）
+    IFS='.' read -r major minor patch build <<< "$VERSION"
+    build="${build:-0}"
     
     # 根据类型升级
     case $type in
@@ -127,13 +128,16 @@ bump_version() {
             major=$((major + 1))
             minor=0
             patch=0
+            build=0
             ;;
         minor)
             minor=$((minor + 1))
             patch=0
+            build=0
             ;;
         patch)
             patch=$((patch + 1))
+            build=0
             ;;
         *)
             echo -e "${RED}错误:${NC} 无效的升级类型: $type"
@@ -142,7 +146,7 @@ bump_version() {
             ;;
     esac
     
-    NEW_VERSION="${major}.${minor}.${patch}"
+    NEW_VERSION="${major}.${minor}.${patch}.${build}"
     echo "$NEW_VERSION" > VERSION
     
     echo -e "${GREEN}✓ 版本已升级${NC}"
@@ -163,10 +167,10 @@ set_version() {
         exit 1
     fi
     
-    # 验证版本格式
-    if ! [[ $new_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    # 验证版本格式（支持 X.Y.Z 或 X.Y.Z.BUILD）
+    if ! [[ $new_version =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
         echo -e "${RED}错误:${NC} 无效的版本格式: $new_version"
-        echo -e "${YELLOW}正确格式:${NC} X.Y.Z (例如: 1.2.3)"
+        echo -e "${YELLOW}正确格式:${NC} X.Y.Z 或 X.Y.Z.BUILD (例如: 1.2.3 / 1.0.0.0)"
         exit 1
     fi
     

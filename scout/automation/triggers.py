@@ -6,7 +6,7 @@
 3. **event**: 外部事件 — Webhook（已有）/ EventBus 事件订阅（新增）
 4. **cascade**: 级联 — 前一个触发器的运行成功完成后自动触发下一个
 
-触发器配置持久化在 ~/.scout/triggers.json，每条规则支持：
+触发器配置持久化在 $SCOUT_DATA_DIR/triggers.json，每条规则支持：
 - task_template: 任务模板，支持 {{event.xxx}} 占位符注入事件载荷
 - verification: 验证规则列表（交给 TaskVerifier）
 - enabled / cooldown_seconds: 冷却防抖

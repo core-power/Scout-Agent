@@ -20,11 +20,11 @@ secrets/
 # ===== 模型文件（体积大，需自行下载）=====
 scout/models/bge-small-zh-v1.5-onnx/
 
-# ===== 打包产物 =====
+# ===== 打包产物（spec 是打包配置，保留入库便于复现构建）=====
 build/
 dist/
 ScoutPortable/
-*.spec
+!desktop/*.spec
 
 # ===== Python =====
 __pycache__/
@@ -59,9 +59,13 @@ bench/
 # ===== 临时与开发脚本 =====
 _verify_*.py
 run_sandbox_test.sh
-test_*.py
+# 仅忽略根目录的临时测试脚本，避免误伤 tests/ 下的正式测试用例
+/test_*.py
 !test_*.md
 run_e2e*.py
 run_quick_test.sh
 run_test.sh
 *.bak_*
+# 根目录下划线前缀的一次性脚本 / 扫描产物（用完即删，如 _fix_paths.py、_scout_refs.txt）
+/_*.py
+/_*.txt

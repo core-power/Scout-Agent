@@ -26,6 +26,7 @@ from typing import Any
 from uuid import uuid4
 
 from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+from scout.storage.schema import ensure_schema
 
 logger = logging.getLogger(__name__)
 
@@ -165,14 +166,8 @@ class ObservabilityTracker:
 
             CREATE INDEX IF NOT EXISTS idx_spans_trace ON spans(trace_id);
         """)
-        # 迁移：旧库补 error 列（2026-08-28，异常路径 trace 标记）
-        try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(traces)")]
-            if "error" not in cols:
-                conn.execute("ALTER TABLE traces ADD COLUMN error TEXT")
-            conn.commit()
-        except sqlite3.Error:
-            pass
+        # 统一 schema 版本管理：自动执行缺失版本的增量迁移（幂等）
+        ensure_schema(conn)
         conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_traces_session ON traces(session_id);
             CREATE INDEX IF NOT EXISTS idx_traces_time ON traces(start_time DESC);

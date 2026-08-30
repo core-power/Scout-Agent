@@ -9,18 +9,13 @@
 from __future__ import annotations
 
 import re
-from enum import Enum
 from typing import Any
 
 from scout.core.annotations import ToolAnnotations
 from scout.core.types import ToolCall
 
-
-class SandboxMode(str, Enum):
-    """沙箱模式."""
-    OFF = "off"          # 不沙箱
-    NON_MAIN = "non-main"  # 非主会话沙箱
-    ALL = "all"          # 全部沙箱
+# SandboxMode 唯一来源在 scout.security.sandbox，避免双份定义漂移
+from scout.security.sandbox import SandboxMode  # noqa: E402
 
 
 # ── 路径安全常量（统一来源，供 shell / web 等工具共享引用）──

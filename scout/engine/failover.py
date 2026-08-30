@@ -34,7 +34,7 @@ class FailoverReason(Enum):
     SELF_DECLARED_UNCERTAIN = "self_uncertain"  # thinking 中明确表达无法处理
 
 
-# 模型配置 — 默认值（可被 ~/.scout/config.json 中的 failover_primary_model / failover_fallback_model 覆盖）
+# 模型配置 — 默认值（可被 $SCOUT_DATA_DIR/config.json 中的 failover_primary_model / failover_fallback_model 覆盖）
 PRIMARY_MODEL = "deepseek-v4-flash-0731"
 FALLBACK_MODEL = "qwen3.7-max"
 

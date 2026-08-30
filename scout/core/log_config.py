@@ -2,7 +2,7 @@
 
 特性:
 - 自动轮转：按天轮转，保留最近 30 天（可配置）
-- 日志目录：统一存放到 ~/.scout/logs/（可通过 log_dir 覆盖）
+- 日志目录：统一存放到 $SCOUT_DATA_DIR/logs/（可通过 log_dir 覆盖）
 - 自动清理：超过保留天数的旧日志自动删除（启动时 + 每日轮转时）
 - 统一格式：时间 | 级别 | 模块 | 消息
 - 控制台 + 文件双输出
@@ -20,7 +20,7 @@ from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 
 
 def get_default_log_dir() -> Path:
-    """获取默认日志目录 (~/.scout/logs)."""
+    """获取默认日志目录 ($SCOUT_DATA_DIR/logs)."""
     return _SCOUT_DATA_DIR / "logs"
 
 
@@ -66,7 +66,7 @@ def setup_logging(
 
     Args:
         log_file: 日志文件名（默认 scout.log）
-        log_dir: 日志目录（默认 ~/.scout/logs）
+        log_dir: 日志目录（默认 $SCOUT_DATA_DIR/logs）
         retention_days: 保留天数（默认 30，超过自动清理）
         level: 日志级别
         console: 是否输出到控制台
@@ -143,7 +143,7 @@ def cleanup_logs(retention_days: int = 30, log_dir: str | Path | None = None) ->
 
     Args:
         retention_days: 保留天数
-        log_dir: 日志目录（默认 ~/.scout/logs）
+        log_dir: 日志目录（默认 $SCOUT_DATA_DIR/logs）
 
     Returns:
         删除的文件数量

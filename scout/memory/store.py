@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
+from scout.storage.schema import ensure_schema
 
 logger = logging.getLogger(__name__)
 
@@ -154,12 +155,8 @@ class MemoryStore:
         """)
         conn.commit()
 
-        # 迁移：如果旧表没有 embedding 列，添加它
-        try:
-            conn.execute("SELECT embedding FROM memories LIMIT 1")
-        except sqlite3.OperationalError:
-            conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB DEFAULT NULL")
-            conn.commit()
+        # 统一 schema 版本管理：自动执行缺失版本的增量迁移（幂等）
+        ensure_schema(conn)
 
     def _load_vector_index(self) -> None:
         """从数据库加载向量索引到内存."""
@@ -269,7 +266,7 @@ class MemoryStore:
         - API Key/Token/密码等自动脱敏（对标 Codex secret redaction）
         - 返回 -1 表示被安全策略拒绝
         """
-        # ── 记忆安全扫描（可用 ~/.scout/memories.json 的 security_scan 开关）──
+        # ── 记忆安全扫描（可用 $SCOUT_DATA_DIR/memories.json 的 security_scan 开关）──
         try:
             from scout.memory.governance import MemoriesConfig
             from scout.memory.security_scan import scan_memory_content

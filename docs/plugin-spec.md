@@ -11,7 +11,7 @@ Scout Agent 的插件系统允许你轻松扩展 AI 助手的对话能力。每�
 ### 目录结构
 
 ```
-~/.scout/plugins/
+$SCOUT_DATA_DIR/plugins/
 └── your_plugin_name/           # 插件目录（小写字母、数字、下划线）
     ├── __init__.py            # 主插件文件（必须）
     └── config.json            # 配置文件（可选）

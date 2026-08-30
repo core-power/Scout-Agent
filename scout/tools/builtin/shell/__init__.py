@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import shlex
@@ -31,14 +32,8 @@ from scout.tools.registry import ToolRegistry
 
 
 # ── 跨平台解码 ──────────────────────────────────────────────
-def decode_output(raw: bytes) -> str:
-    """鲁棒解码：UTF-8 → GBK → latin-1 fallback."""
-    for enc in ("utf-8", "gbk", "gb2312", "latin-1"):
-        try:
-            return raw.decode(enc)
-        except (UnicodeDecodeError, LookupError):
-            continue
-    return raw.decode("utf-8", errors="replace")
+# 与 scout.security.sandbox._decode 共用同一实现，避免双份维护
+from scout.security.sandbox import _decode as decode_output  # noqa: E402
 
 
 # ── 安全策略 ────────────────────────────────────────────────
@@ -149,7 +144,9 @@ DANGEROUS_ARGS = [
 
 # Shell 元字符 — 个人版放宽：仅拦截命令注入/编码攻击模式，不拦截正常用法
 # 原全面拦截(所有 |;&$` 等)误伤太严重，改为只针对性拦截
-SHELL_META = re.compile(r'\$\s*\(|`[^`]+`|\$\{|\b(?:curl|wget)\s+.*\|\s*(?:sh|bash)')
+SHELL_META = re.compile(
+    r"\$\s*\(|`[^`]+`|\$\{|\$'\x[0-9a-fA-F]{2}|\b(?:curl|wget)\s+.*\|\s*(?:sh|bash)"
+)
 
 # 参数注入检测 — 检测可能的命令注入模式
 # 2026-08-27 放宽：移除 r'\$\w+'（$var 简单变量展开属 shell 常规用法，非注入攻击；
@@ -476,8 +473,8 @@ class ShellTool(ToolDefinition):
                     output_lines.append(decoded)
                     if on_output:
                         on_output(decoded)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger(__name__).warning("读取命令输出流异常: %s", e)
 
             # 等待进程结束，带超时
             try:
@@ -633,8 +630,8 @@ class ShellTool(ToolDefinition):
             try:
                 async for line in process.stdout:
                     output_lines.append(decode_output(line))
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger(__name__).warning("读取命令输出流异常: %s", e)
             try:
                 await asyncio.wait_for(process.wait(), timeout=timeout)
             except TimeoutError:

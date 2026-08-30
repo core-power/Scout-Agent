@@ -5,12 +5,12 @@
 ### 第一步：创建插件目录
 
 ```bash
-mkdir -p ~/.scout/plugins/time
+mkdir -p $SCOUT_DATA_DIR/plugins/time
 ```
 
 ### 第二步：创建插件文件
 
-创建 `~/.scout/plugins/time/__init__.py`：
+创建 `$SCOUT_DATA_DIR/plugins/time/__init__.py`：
 
 ```python
 """
@@ -65,7 +65,7 @@ class TimePlugin(Plugin):
 
 ### 📁 插件位置
 
-所有插件位于：`~/.scout/plugins/` 或项目根目录 `plugins/`
+所有插件位于：`$SCOUT_DATA_DIR/plugins/` 或项目根目录 `plugins/`
 
 ### 1️⃣ **hello** - 问候插件
 
@@ -185,10 +185,10 @@ for word in banwords:
 
 ```bash
 # 编辑插件代码
-nano ~/.scout/plugins/keyword/__init__.py
+nano $SCOUT_DATA_DIR/plugins/keyword/__init__.py
 
 # 编辑配置
-nano ~/.scout/plugins/keyword/config.json
+nano $SCOUT_DATA_DIR/plugins/keyword/config.json
 ```
 
 ### 方法 3：查看源码
@@ -197,10 +197,10 @@ nano ~/.scout/plugins/keyword/config.json
 
 ```bash
 # 查看 hello 插件
-cat ~/.scout/plugins/hello/__init__.py
+cat $SCOUT_DATA_DIR/plugins/hello/__init__.py
 
 # 查看 keyword 插件
-cat ~/.scout/plugins/keyword/__init__.py
+cat $SCOUT_DATA_DIR/plugins/keyword/__init__.py
 ```
 
 ---

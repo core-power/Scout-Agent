@@ -639,6 +639,15 @@ class WebAdapter:
             
             # 判断是否是首次（尚未设置凭证）
             is_first = not self.auth_mgr.has_credentials()
+            if is_first:
+                # 首次初始化凭证仅允许本机回环来源：防止默认配置下
+                # 外部或本地恶意进程抢先注册凭证（先到先得抢占）。
+                host = (req.client.host if req.client else "") or ""
+                if host not in ("127.0.0.1", "::1", "localhost"):
+                    return JSONResponse(
+                        {"error": "首次初始化仅允许本机访问，请通过 127.0.0.1 访问服务"},
+                        status_code=403,
+                    )
             
             token = self.auth_mgr.login(username, password)
             if token:
@@ -1395,7 +1404,7 @@ class WebAdapter:
 
         @self.app.delete("/api/skills/{name}")
         async def delete_skill(name: str):
-            """卸载技能（从 ~/.scout/skills 删除 SKILL.md 目录）."""
+            """卸载技能（从 $SCOUT_DATA_DIR/skills 删除 SKILL.md 目录）."""
             if not self._agent or not getattr(self._agent, "skill_mgr", None):
                 return JSONResponse({"error": "技能系统未启用"}, status_code=503)
             ok = self._agent.skill_mgr.remove_skill(name, scope="user")
@@ -1450,7 +1459,7 @@ class WebAdapter:
 
             修复（2026-08-13）：原本 CronManager 只是数据容器，调度循环未启动、
             无 agent 回调，UI 创建的任务永远不会执行。现在：
-            1. 任务持久化到 ~/.scout/cron_tasks.json（重启不丢）
+            1. 任务持久化到 $SCOUT_DATA_DIR/cron_tasks.json（重启不丢）
             2. 绑定 AutomationRunner 作为执行器（策略门控 + 留痕 + 验证）
             3. 启动调度循环
             """
@@ -2489,7 +2498,7 @@ class WebAdapter:
 
         @self.app.post("/api/skills/install-from-url")
         async def install_skill_from_url(req: Request):
-            """一键安装技能 — 从 GitHub/Gitee 克隆含 SKILL.md 的技能仓库到 ~/.scout/skills/.
+            """一键安装技能 — 从 GitHub/Gitee 克隆含 SKILL.md 的技能仓库到 $SCOUT_DATA_DIR/skills/.
 
             Body: {"url": "https://github.com/user/repo", "branch": "main"}
             安全措施：
@@ -2776,7 +2785,7 @@ class WebAdapter:
 # Scout Agent 插件开发规范
 
 ## 基本结构
-- 插件目录：~/.scout/plugins/your_plugin_name/
+- 插件目录：$SCOUT_DATA_DIR/plugins/your_plugin_name/
 - 主文件：__init__.py
 - 配置文件：config.json（可选）
 

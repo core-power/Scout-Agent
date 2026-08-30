@@ -62,7 +62,7 @@ class PluginManager:
         """3 个来源发现并加载插件."""
         self._plugins = []
 
-        # 1. 用户目录: ~/.scout/plugins/
+        # 1. 用户目录: $SCOUT_DATA_DIR/plugins/
         self._load_from_dir(self.user_dir, "user_dir")
 
         # 2. 项目目录: .scout/plugins/

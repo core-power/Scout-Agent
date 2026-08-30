@@ -101,7 +101,7 @@ Scout Agent 现在提供了一个直观的 Web 界面来管理所有插件，无
 
 ## 示例：创建自定义插件
 
-1. 创建插件目录：`~/.scout/plugins/my_plugin/`
+1. 创建插件目录：`$SCOUT_DATA_DIR/plugins/my_plugin/`
 2. 创建 `__init__.py` 文件
 3. 在插件管理界面点击"重新加载全部"
 4. 新插件会出现在列表中

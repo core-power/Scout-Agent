@@ -148,6 +148,71 @@ def _check_data_dir(report: list[tuple[str, str, str]]) -> None:
         report.append(("数据目录", "FAIL", f"{data} 不可写: {e}"))
 
 
+def _check_data_format(report: list[tuple[str, str, str]]) -> None:
+    """检查数据目录格式版本兼容性（升级/迁移能力）."""
+    try:
+        from scout.config.manifest import (
+            DATA_FORMAT_VERSION,
+            check_data_format,
+            get_data_format_version,
+        )
+
+        compatible, msg = check_data_format()
+        if compatible:
+            report.append((
+                "数据格式版本",
+                "OK" if get_data_format_version() >= DATA_FORMAT_VERSION else "WARN",
+                msg,
+            ))
+        else:
+            report.append(("数据格式版本", "FAIL", msg))
+    except Exception as e:  # noqa: BLE001
+        report.append(("数据格式版本", "WARN", f"检查失败: {e}"))
+
+
+def _check_schema_versions(report: list[tuple[str, str, str]]) -> None:
+    """检查各数据库 schema 版本是否与当前代码一致（升级/迁移能力）."""
+    try:
+        from scout.config.paths import DATA_DIR
+        from scout.storage.schema import SCHEMA_VERSION, get_schema_version
+
+        dbs = [
+            "sessions.db",
+            "runs.db",
+            "usage.db",
+            "goals.db",
+            "observability.db",
+            "memory.db",
+            "vector_memory.db",
+        ]
+        mismatches = []
+        for name in dbs:
+            path = DATA_DIR / name
+            if not path.exists():
+                continue
+            try:
+                import sqlite3
+                conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                try:
+                    version = get_schema_version(conn)
+                finally:
+                    conn.close()
+                if version < SCHEMA_VERSION:
+                    mismatches.append(f"{name}(v{version}→v{SCHEMA_VERSION})")
+            except Exception:  # noqa: BLE001
+                mismatches.append(f"{name}(读取失败)")
+        if mismatches:
+            report.append((
+                "数据库 Schema",
+                "WARN",
+                f"{'、'.join(mismatches)} — 启动时将自动迁移",
+            ))
+        else:
+            report.append(("数据库 Schema", "OK", f"全部为当前版本 v{SCHEMA_VERSION}"))
+    except Exception as e:  # noqa: BLE001
+        report.append(("数据库 Schema", "WARN", f"检查失败: {e}"))
+
+
 def _check_dependencies(report: list[tuple[str, str, str]]) -> None:
     """检查核心依赖是否可导入."""
     failed = []
@@ -215,6 +280,8 @@ def run_doctor() -> int:
     _check_api_keys(report)
     _check_embedding_model(report)
     _check_data_dir(report)
+    _check_data_format(report)
+    _check_schema_versions(report)
     _check_dependencies(report)
     _check_service(report)
     _check_cache_stats(report)

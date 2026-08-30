@@ -48,16 +48,15 @@ Be concise, helpful, and proactive.
 
 
 def load_env() -> None:
-    """加载 .env 文件 — 从多个候选路径查找."""
+    """加载 .env 文件 — 从多个候选路径查找（cwd 与项目根）."""
     candidates = [
         os.path.join(os.getcwd(), ".env"),
         os.path.join(os.path.dirname(__file__), "..", ".env"),
-        os.path.expanduser("~/scout-agent/.env"),
     ]
     for env_path in candidates:
         env_path = os.path.normpath(env_path)
         if os.path.exists(env_path):
-            with open(env_path) as f:
+            with open(env_path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line or line.startswith("#"):
@@ -115,6 +114,22 @@ def init_plugins() -> None:
         
     except Exception as e:
         console.print(f"[yellow]警告: 插件系统初始化失败: {e}[/]")
+
+
+def ensure_manifest(app_version: str | None = None) -> None:
+    """确保数据目录 manifest 存在并记录版本，检测数据格式兼容性."""
+    try:
+        from scout import __version__
+        from scout.config.manifest import check_data_format, ensure_manifest as _ensure
+
+        _ensure(app_version or __version__)
+        compatible, msg = check_data_format()
+        if not compatible:
+            console.print(f"[bold red]升级检查失败: {msg}[/]")
+        elif "迁移" in msg or "高于" in msg:
+            console.print(f"[yellow]{msg}[/]")
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[yellow]警告: manifest 检查失败: {e}[/]")
 
 
 # ── CLI 精简工具集 ──────────────────────────────
@@ -309,6 +324,9 @@ def main() -> None:
     
     # 初始化插件系统
     init_plugins()
+
+    # 数据目录版本检查 / manifest（升级能力）
+    ensure_manifest()
 
     parser = argparse.ArgumentParser(
         prog="scout",

@@ -55,8 +55,8 @@ def _get_allowed_origins() -> list[str]:
         cfg_origins = getattr(cfg, "cors_origins", None) or []
         if cfg_origins:
             return [o.strip() for o in cfg_origins if o.strip()]
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger(__name__).debug("读取 CORS 配置失败，使用默认本地地址: %s", e)
     # 3. 默认允许本地开发地址
     return [
         "http://localhost:8848",
@@ -104,8 +104,8 @@ def create_web_app(agent=None) -> FastAPI:
                     logging.getLogger("scout.log_cleanup").info(
                         f"启动清理: 已删除 {removed} 个超过 {_LOG_RETENTION_DAYS} 天的旧日志"
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger("scout.log_cleanup").warning("启动日志清理失败: %s", e)
             yield
         finally:
             cleanup_task.cancel()
@@ -127,8 +127,8 @@ def create_web_app(agent=None) -> FastAPI:
         try:
             from scout.config.manager import ConfigManager
             _docs_enabled = bool(ConfigManager().load().web_docs)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.getLogger(__name__).debug("读取 web_docs 配置失败: %s", e)
     app = FastAPI(
         title="Scout Agent",
         version="1.0.0.0",
@@ -186,8 +186,8 @@ def create_web_app(agent=None) -> FastAPI:
                 _cfg = ConfigManager().load()
                 if not getattr(_cfg, "auth_enabled", False):
                     return await call_next(request)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger(__name__).warning("读取登录认证配置失败，按默认鉴权处理: %s", e)
             # 未设置凭证 → 仅放行初始化引导接口（登录引导 / 外部 webhook / 静态资源）。
             # 其余 API 一律 401：防止默认配置下服务暴露在 0.0.0.0 时整个 API 面（含
             # 插件上传、A2A 任务、会话读取、配置修改）无鉴权可访问。
@@ -195,10 +195,13 @@ def create_web_app(agent=None) -> FastAPI:
             if not auth_mgr.has_credentials():
                 if _is_initialization_whitelist(path):
                     return await call_next(request)
-                # 本地回环访问放行（本地首次使用无需登录即可查看历史会话/配置），
-                # 非回环地址仍 401：防止默认配置下服务暴露在 0.0.0.0 时被外部无鉴权访问。
+                # 本地回环访问：未初始化凭证时仅放行只读 GET 与初始化引导接口，
+                # 写操作（配置修改/插件上传/A2A 任务等）一律 401——
+                # 防止默认配置下本地恶意进程在首次初始化前无鉴权越权操作。
                 client_host = (request.client.host if request.client else "") or ""
-                if client_host in ("127.0.0.1", "::1", "localhost"):
+                if client_host in ("127.0.0.1", "::1", "localhost") and (
+                    request.method == "GET" or _is_initialization_whitelist(path)
+                ):
                     return await call_next(request)
                 return JSONResponse(
                     {"error": "未初始化登录凭证，请先通过 /api/auth/login 完成初始化"},
