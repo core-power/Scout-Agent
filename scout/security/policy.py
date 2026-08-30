@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -24,6 +25,14 @@ SYSTEM_DIRS = [
     "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
     "/boot", "/sys", "/proc", "/dev", "/var", "/root",
 ]
+
+# Windows 系统敏感目录（仅 Windows 生效，2026-08-30 新增：
+# 原先只有 Unix 路径，Windows 下 C:\Windows 等完全无保护）
+if os.name == "nt":
+    SYSTEM_DIRS += [
+        r"C:\Windows", r"C:\Program Files", r"C:\Program Files (x86)",
+        r"C:\ProgramData", r"C:\Recovery", r"C:\System Volume Information",
+    ]
 
 # 允许访问的路径前缀白名单（个人版放宽，与 shell cwd 白名单保持一致）
 ALLOWED_PATH_PREFIXES = [

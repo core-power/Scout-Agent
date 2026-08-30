@@ -93,6 +93,11 @@ hiddenimports = [
     "scout.scheduler",
     "scout.security.secret",
     "scout.doctor",
+    # playwright CLI（首次运行自动安装 chromium 用，2026-08-30）
+    "playwright.__main__",
+    "playwright.async_api",
+    "playwright.sync_api",
+    "playwright._impl._driver",
 ]
 
 # ── 打包配置 ─────────────────────────────────────────────
@@ -109,10 +114,12 @@ a = Analysis(
         # 削减体积（桌面端不启用 IM 渠道）
         "discord",
         "wechaty",
-        "playwright",
         "torch",
         "transformers",  # 嵌入用 onnxruntime 直跑，无需 transformers
         "tkinter",       # 绿色版不依赖 tk 消息框
+        # 注: playwright 不再排除（2026-08-30）——浏览器工具开箱即用：
+        # Python 包本体进包（~20MB），chromium 二进制首次使用时自动安装到用户目录。
+        # 官方 hook 会自动收集 playwright/driver 下的 node 驱动。
     ],
     noarchive=False,
 )

@@ -22,17 +22,39 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import logging
 import os
 import struct
 import subprocess
-import termios
 import time
 
 from scout.tools.builtin.shell.session import MAX_SESSIONS, SENTINEL
 
+# ── 平台保护（2026-08-30）：fcntl/termios/pty 均为 Unix 专属模块，
+# Windows 上 import 直接抛 ImportError，会导致 shell 工具 __session_reset__ 等
+# 引用本模块的路径整体崩溃。改为条件导入 + PTY_SUPPORTED 标志。
+try:
+    import fcntl  # noqa: F401
+    import termios  # noqa: F401
+    import pty  # noqa: F401
+
+    PTY_SUPPORTED = True
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+    termios = None  # type: ignore[assignment]
+    pty = None  # type: ignore[assignment]
+    PTY_SUPPORTED = False
+
 logger = logging.getLogger("scout.pty_session")
+
+
+def _require_pty() -> None:
+    """PTY 不可用（Windows）时抛出明确错误."""
+    if not PTY_SUPPORTED:
+        raise RuntimeError(
+            "PTY 交互式终端仅支持 Linux/macOS（依赖 fcntl/termios/pty 模块），"
+            "当前平台不支持。Windows 下请使用普通 shell 或 persistent 持久会话（cmd.exe）。"
+        )
 
 
 class PtyShellSession:
@@ -65,6 +87,7 @@ class PtyShellSession:
 
     async def start(self) -> None:
         """拉起 PTY bash（若已有则先清理）."""
+        _require_pty()
         await self._kill()
         master, slave = pty_openpty()
         self.master_fd = master
@@ -294,8 +317,7 @@ class PtyShellSession:
 
 def pty_openpty() -> tuple[int, int]:
     """创建 PTY 对（master, slave）."""
-    import pty
-
+    _require_pty()
     master, slave = pty.openpty()
     return master, slave
 

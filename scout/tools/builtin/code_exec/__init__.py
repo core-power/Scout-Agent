@@ -114,8 +114,17 @@ def _create_safe_os():
                 setattr(safe_os, attr, getattr(_real_os, attr))
             except (AttributeError, TypeError):
                 pass
-    import posixpath
-    safe_os.path = posixpath
+    # 路径语义按平台选择（2026-08-30）：Windows 用 ntpath（反斜杠分隔），
+    # 否则 posixpath；统一用 posixpath 会导致 os.path.join 在 Windows 上返回
+    # "a/b" 而非 "a\\b"，路径操作语义错乱。
+    if _real_os.name == "nt":
+        import ntpath
+
+        safe_os.path = ntpath
+    else:
+        import posixpath
+
+        safe_os.path = posixpath
     return safe_os
 
 

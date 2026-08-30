@@ -30,6 +30,67 @@ from scout.security.policy import ALLOWED_PATH_PREFIXES, SYSTEM_DIRS
 from scout.tools.base import ToolDefinition
 from scout.tools.registry import ToolRegistry
 
+# 平台常量（2026-08-30 新增 Windows 适配）
+IS_WINDOWS = os.name == "nt"
+
+# Windows cmd.exe 内建命令（无对应 .exe，必须经 cmd /c 执行；
+# 直接 create_subprocess_exec 会报"命令未找到"）
+WIN_BUILTIN_CMDS = {
+    "assoc", "break", "call", "cd", "chcp", "chdir", "cls", "color", "copy",
+    "date", "del", "dir", "echo", "endlocal", "erase", "exit", "ftype",
+    "goto", "if", "md", "mkdir", "move", "path", "pause", "popd", "prompt",
+    "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal",
+    "shift", "start", "time", "title", "type", "ver", "verify", "vol",
+}
+
+
+def _win_quote(arg: str) -> str:
+    """Windows cmd 参数引用：含空白/特殊字符时加双引号包裹，内部双引号转义为两个双引号.
+
+    注意：cmd /c 模式 % 会做变量展开（%PATH% 等），未定义变量保持原样，符合用户预期；
+    不使用 shlex.quote（其 POSIX 引号对 cmd 无效，且反斜杠会被当转义符）。
+    """
+    if arg and not re.search(r'[\s"&|<>^]', arg):
+        return arg
+    return '"' + arg.replace('"', '""') + '"'
+
+
+_META_ONLY = re.compile(r'^[|><;&]+$')
+
+
+def _build_proc_cmd(cmd_list: list[str]) -> list[str]:
+    """跨平台子进程命令构造（Windows 适配核心）：
+    - 单元素整串命令（command 原样，可能含空格参数/元字符）→ 整体交给 shell 解析，
+      Windows 用 cmd.exe /d /s /c，Linux/macOS 用 bash -c（避免 create_subprocess_exec
+      把 "where python" 当可执行文件名）。
+    - 多元素（command + args 拆分）：含元字符 → shell 执行；Windows 的 cmd 内建命令
+      （dir/type 等无 .exe）走 cmd /c；其余直接 exec。
+    - 引号决策：纯元字符 token（|、&& 等）保持原样保留 shell 语义；
+      混合内容 token（如 "a b&c"）加引号保护，避免 & 被误当命令分隔符。
+    """
+    _meta = re.compile(r'[|><;&]')
+    if len(cmd_list) == 1:
+        single = cmd_list[0].strip()
+        if not single:
+            return cmd_list
+        if _meta.search(single) or re.search(r'\s', single):
+            # 整串命令（含元字符或空格参数）：原样交给 shell 解析，不额外加引号
+            if IS_WINDOWS:
+                return ["cmd.exe", "/d", "/s", "/c", single]
+            return ["bash", "-c", single]
+        if IS_WINDOWS and os.path.basename(single).lower() in WIN_BUILTIN_CMDS:
+            return ["cmd.exe", "/d", "/s", "/c", single]
+        return cmd_list
+    if any(_meta.search(a) for a in cmd_list):
+        if IS_WINDOWS:
+            _quoted = [a if _META_ONLY.match(a) else _win_quote(a) for a in cmd_list]
+            return ["cmd.exe", "/d", "/s", "/c", " ".join(_quoted)]
+        _quoted = [a if _META_ONLY.match(a) else shlex.quote(a) for a in cmd_list]
+        return ["bash", "-c", " ".join(_quoted)]
+    if IS_WINDOWS and os.path.basename(cmd_list[0]).lower() in WIN_BUILTIN_CMDS:
+        return ["cmd.exe", "/d", "/s", "/c", " ".join(_win_quote(a) for a in cmd_list)]
+    return cmd_list
+
 
 # ── 跨平台解码 ──────────────────────────────────────────────
 # 与 scout.security.sandbox._decode 共用同一实现，避免双份维护
@@ -109,6 +170,19 @@ SAFE_COMMANDS = {
     # 其他
     "watch", "seq", "yes", "sleep", "time", "timeout", "nproc", "arch",
     "getconf", "logger", "crontab",
+    # ── Windows 常用命令 (2026-08-30 新增: 个人版 Windows 用户；Linux/macOS 无副作用) ──
+    # cmd 内建（配合 WIN_BUILTIN_CMDS 经 cmd /c 执行）
+    "chcp", "cls", "color", "title", "path", "prompt", "copy", "move",
+    "del", "erase", "ren", "rename", "md", "rd", "rmdir", "vol", "ver",
+    "verify", "assoc", "ftype", "start", "exit", "pause", "rem", "chdir",
+    "setlocal", "endlocal",
+    # Windows 外部命令
+    "where", "tasklist", "taskkill", "ipconfig", "systeminfo", "schtasks",
+    "reg", "wmic", "attrib", "findstr", "forfiles", "mklink", "setx",
+    "xcopy", "robocopy", "mode", "compact", "driverquery", "netsh", "net",
+    "cscript", "wscript", "msinfo32", "winver", "powershell", "pwsh",
+    "cmd", "sfc", "takeown", "subst", "cipher", "fsutil", "powercfg",
+    "gpupdate", "w32tm", "tzutil", "taskmgr", "chkdsk",
 }
 
 # 绝对禁止的参数模式（扩展版）
@@ -145,7 +219,8 @@ DANGEROUS_ARGS = [
 # Shell 元字符 — 个人版放宽：仅拦截命令注入/编码攻击模式，不拦截正常用法
 # 原全面拦截(所有 |;&$` 等)误伤太严重，改为只针对性拦截
 SHELL_META = re.compile(
-    r"\$\s*\(|`[^`]+`|\$\{|\$'\x[0-9a-fA-F]{2}|\b(?:curl|wget)\s+.*\|\s*(?:sh|bash)"
+    # 注: $'\xNN' 需写 \\x 匹配字面反斜杠+x；裸 \x 是残缺转义，Python 3.14 起 re.compile 直接报错
+    r"\$\s*\(|`[^`]+`|\$\{|\$'\\x[0-9a-fA-F]{2}|\b(?:curl|wget)\s+.*\|\s*(?:sh|bash)"
 )
 
 # 参数注入检测 — 检测可能的命令注入模式
@@ -351,6 +426,14 @@ class ShellTool(ToolDefinition):
 
         # 2.2 PTY 交互式终端（2026-08-27）：伪终端会话，支持 vim/top 等交互程序
         if interactive:
+            if IS_WINDOWS:
+                # PTY 依赖 fcntl/termios/pty，均为 Unix 专属模块
+                return Observation(
+                    tool_name=self.name,
+                    success=False,
+                    output="PTY 交互式终端仅支持 Linux/macOS（依赖 fcntl/termios/pty 模块）。"
+                           "Windows 下请使用普通 shell 或 persistent 持久会话（cmd.exe）。",
+                )
             from scout.tools.builtin.shell.pty_session import PtyShellSessionManager
 
             work_dir = os.path.abspath(cwd) if os.path.isdir(os.path.abspath(cwd)) else "."
@@ -438,7 +521,14 @@ class ShellTool(ToolDefinition):
                     output=f"安全拦截: 不允许在系统目录 {work_dir} 下执行命令",
                 )
             # 允许主目录、临时目录、常见项目/数据目录（个人版放宽）
-            _allowed_prefixes = [_home + os.sep] + list(ALLOWED_PATH_PREFIXES)
+            if IS_WINDOWS:
+                # Windows：允许主目录 + 任意盘符根下的工作目录（系统目录已在上面拦截）
+                _drive, _ = os.path.splitdrive(work_dir)
+                _allowed_prefixes = [_home + os.sep]
+                if _drive:
+                    _allowed_prefixes.append(_drive + os.sep)
+            else:
+                _allowed_prefixes = [_home + os.sep] + list(ALLOWED_PATH_PREFIXES)
             if not (work_dir == _home or any(work_dir.startswith(p) for p in _allowed_prefixes)):
                 return Observation(
                     tool_name=self.name,
@@ -447,18 +537,11 @@ class ShellTool(ToolDefinition):
                 )
 
         try:
-            # ── 支持 Shell 管道/重定向（2026-08-11）──
-            # 当命令含 shell 元字符（| > ; & <）时，用 bash -c 执行完整命令，
-            # 否则保持 create_subprocess_exec 直接执行（避免注入）。
-            # 注意：元字符（| > ; & <）不能 quote，否则 bash 会当字面量；只 quote 普通参数。
-            _shell_meta_re = re.compile(r'[|><;&]')
-            _use_shell = any(_shell_meta_re.search(a) for a in cmd_list)
-            if _use_shell:
-                _quoted = [a if _shell_meta_re.search(a) else shlex.quote(a) for a in cmd_list]
-                full_shell_cmd = " ".join(_quoted)
-                _proc_cmd = ["bash", "-c", full_shell_cmd]
-            else:
-                _proc_cmd = cmd_list
+            # ── 跨平台执行构造（2026-08-30 Windows 适配）──
+            # 元字符（| > ; & <）→ Linux/macOS 用 bash -c、Windows 用 cmd.exe /c；
+            # Windows 的 cmd 内建命令（dir/type 等无 .exe）同样经 cmd /c。
+            # 注意：元字符不能 quote，否则 shell 会当字面量；只 quote 普通参数。
+            _proc_cmd = _build_proc_cmd(cmd_list)
             process = await asyncio.create_subprocess_exec(
                 *_proc_cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -610,16 +693,10 @@ class ShellTool(ToolDefinition):
         if not os.path.isdir(work_dir):
             return Observation(tool_name=self.name, success=False, output=f"目录不存在: {cwd}")
         try:
-            _shell_meta_re = re.compile(r"[|><;&]")
             cmd_list = shlex.split(command) if command else []
             if not cmd_list:
                 return Observation(tool_name=self.name, success=False, output="命令为空")
-            _use_shell = any(_shell_meta_re.search(a) for a in cmd_list)
-            if _use_shell:
-                _quoted = [a if _shell_meta_re.search(a) else shlex.quote(a) for a in cmd_list]
-                _proc_cmd = ["bash", "-c", " ".join(_quoted)]
-            else:
-                _proc_cmd = cmd_list
+            _proc_cmd = _build_proc_cmd(cmd_list)
             process = await asyncio.create_subprocess_exec(
                 *_proc_cmd,
                 stdout=asyncio.subprocess.PIPE,

@@ -377,7 +377,17 @@ class Agent:
         if enable_context:
             from scout.context.manager import ContextManager
 
-            self.context_mgr = ContextManager()
+            # token 预算从配置读取（2026-08-30）：SCOUT_CONTEXT_MAX_TOKENS
+            # 或 config.context_max_tokens，默认 0=仅按条数治理
+            _max_tokens = 0
+            try:
+                from scout.config.manager import ConfigManager
+
+                _cfg = ConfigManager().load()
+                _max_tokens = int(getattr(_cfg, "context_max_tokens", 0) or 0)
+            except Exception:
+                _max_tokens = 0
+            self.context_mgr = ContextManager(max_tokens=_max_tokens)
 
         else:
             self.context_mgr = None

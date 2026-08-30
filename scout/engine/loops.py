@@ -14,6 +14,7 @@ Agent.run_conversation 内部，循环策略无法替换（DAGPlanner 有实现�
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import uuid
 from abc import ABC, abstractmethod
@@ -167,6 +168,51 @@ class DAGLoop(AgentLoop):
             logger.warning(f"DAG 汇总失败，回退拼接结果: {e}")
             return "\n\n".join(r["response"] for r in results)
 
+    async def _exec_step(
+        self,
+        step: dict[str, Any],
+        dag_meta: dict[str, Any],
+        session: Session,
+        attachments: list[dict] | None,
+    ) -> dict[str, Any]:
+        """执行单个 DAG 步骤（独立子会话/子代理）.
+
+        并行安全（2026-08-30）：step_max_turns 通过浅拷贝 agent 隔离设置，
+        避免并发步骤间互相覆盖共享实例的 max_turns；callbacks/llm/tools 共享引用。
+        """
+        agent = self.agent
+        step_id = step["id"]
+        description = step.get("description", step_id)
+
+        # 收集依赖步骤的结果作为上下文
+        dep_text = ""
+        dep_ids = [d for d in (step.get("depends_on") or []) if d in dag_meta["steps"]]
+        if dep_ids:
+            dep_text = "。参考前置结果:\n" + "\n".join(
+                f"- {d}: {dag_meta['steps'][d].get('summary', '')[:500]}"
+                for d in dep_ids
+            )
+
+        await self._notify("planning", f"执行步骤 {step_id}: {description[:60]}")
+
+        step_msg = f"[子任务 {step_id}] {description}{dep_text}"
+        step_session = Session(
+            id=str(uuid.uuid4()),
+            parent_id=session.id,
+            agent_id=session.agent_id,
+        )
+        if self.step_max_turns:
+            worker = copy.copy(agent)
+            worker.max_turns = self.step_max_turns
+        else:
+            worker = agent
+        try:
+            res = await worker._run_react(step_msg, step_session, attachments)
+            return {"response": res.get("response", ""), "steps": res.get("steps", 0)}
+        except Exception as e:
+            logger.warning(f"DAG 步骤 {step_id} 执行异常: {e}")
+            return {"response": f"（步骤执行异常: {e}）", "steps": 0}
+
     # ── 主流程 ────────────────────────────────────────────
 
     async def run(
@@ -193,49 +239,49 @@ class DAGLoop(AgentLoop):
             steps = [{"id": "default_step", "description": user_message, "depends_on": []}]
         dag_meta["plan"] = steps
 
-        # 2. 按拓扑序执行
+        # 2. 按拓扑序分层，同层无依赖步骤并发执行（2026-08-30 多 agent 并行）
+        #    对齐 WorkBuddy 的"多 Agents 并行交付"：同一层的子任务并行跑，
+        #    跨层保持依赖顺序。步骤数 ≤1 时退化为串行（无并发开销）。
         order = self._topo_order(steps)
+        step_map = {s["id"]: s for s in steps}
+
+        # 计算每步所属层：level = max(依赖层)+1
+        level_idx: dict[str, int] = {}
+        for sid in order:
+            deps = [d for d in (step_map[sid].get("depends_on") or []) if d in step_map]
+            lvl = 0
+            for d in deps:
+                lvl = max(lvl, level_idx.get(d, 0) + 1)
+            level_idx[sid] = lvl
+        levels: dict[int, list[str]] = {}
+        for sid, lvl in level_idx.items():
+            levels.setdefault(lvl, []).append(sid)
+
         results: list[dict[str, str]] = []
         total_steps = 0
-        for step_id in order:
-            step = next(s for s in steps if s["id"] == step_id)
-            description = step.get("description", step_id)
-
-            # 收集依赖步骤的结果作为上下文
-            dep_text = ""
-            dep_ids = [d for d in (step.get("depends_on") or []) if d in dag_meta["steps"]]
-            if dep_ids:
-                dep_text = "。参考前置结果:\n" + "\n".join(
-                    f"- {d}: {dag_meta['steps'][d].get('summary', '')[:500]}"
-                    for d in dep_ids
+        for lvl in sorted(levels):
+            group = levels[lvl]
+            if len(group) > 1:
+                await self._notify(
+                    "planning",
+                    f"并行执行第 {lvl + 1} 层（{len(group)} 个独立子任务）...",
                 )
-
-            await self._notify("planning", f"执行步骤 {step_id}: {description[:60]}")
-
-            step_msg = f"[子任务 {step_id}] {description}{dep_text}"
-            step_session = Session(
-                id=str(uuid.uuid4()),
-                parent_id=session.id,
-                agent_id=session.agent_id,
-            )
-
-            saved_turns = agent.max_turns
-            if self.step_max_turns:
-                agent.max_turns = self.step_max_turns
-            res = None
-            try:
-                res = await agent._run_react(step_msg, step_session, attachments)
-                response = res.get("response", "")
-            except Exception as e:
-                logger.warning(f"DAG 步骤 {step_id} 执行异常: {e}")
-                response = f"（步骤执行异常: {e}）"
-            finally:
-                agent.max_turns = saved_turns
-
-            # 步骤异常时 res 保持 None，避免沿用上一轮的陈旧结果
-            total_steps += res.get("steps", 0) if res else 0
-            dag_meta["steps"][step_id] = {"description": description, "summary": response[:500]}
-            results.append({"id": step_id, "description": description, "response": response})
+            coros = [self._exec_step(step_map[sid], dag_meta, session, attachments) for sid in group]
+            group_results = await asyncio.gather(*coros, return_exceptions=True)
+            for step_id, r in zip(group, group_results):
+                description = step_map[step_id].get("description", step_id)
+                if isinstance(r, Exception):
+                    response = f"（步骤执行异常: {r}）"
+                    step_steps = 0
+                else:
+                    response = r["response"]
+                    step_steps = r.get("steps", 0)
+                total_steps += step_steps
+                dag_meta["steps"][step_id] = {
+                    "description": description,
+                    "summary": response[:500],
+                }
+                results.append({"id": step_id, "description": description, "response": response})
 
         # 3. 汇总
         dag_meta["status"] = "done"
