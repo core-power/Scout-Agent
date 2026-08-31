@@ -5,7 +5,7 @@
   1. pip download --platform win_amd64 交叉下载所有依赖的 Windows wheel
   2. 下载 Windows embeddable Python 3.11.9（免安装运行时）
   3. 组装便携目录: python/ + scout/ + desktop/launcher.py + 启动Scout.bat + config
-  4. 打包为 ScoutPortable-win64.zip —— 拷到任意 Windows 机器解压，双击即用
+  4. 打包为 ScoutDesktop-win64.zip —— 拷到任意 Windows 机器解压，双击即用
 
 用法:
     python3 tools/build_windows_portable.py [--out dist] [--wheels-dir /tmp/winwheels] [--no-zip]
@@ -51,7 +51,7 @@ if not exist "%PYTHON%" (
     exit /b 1
 )
 
-rem 数据随程序走：默认数据目录为 ScoutPortable\data，可整体拷走
+rem 数据随程序走：默认数据目录为 ScoutDesktop\data，可整体拷走
 "%PYTHON%" desktop\launcher.py
 if errorlevel 1 (
     echo.
@@ -213,7 +213,7 @@ def write_aux(portable: Path) -> None:
 
 def make_zip(portable: Path, out: Path) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
-    zpath = out / "ScoutPortable-win64.zip"
+    zpath = out / "ScoutDesktop-win64.zip"
     if zpath.exists():
         zpath.unlink()
     log(f"打包 {zpath}")
@@ -223,7 +223,7 @@ def make_zip(portable: Path, out: Path) -> Path:
             for f in files:
                 full = Path(root) / f
                 rel = full.relative_to(portable)
-                z.write(full, arcname=f"ScoutPortable/{rel}")
+                z.write(full, arcname=f"ScoutDesktop/{rel}")
     log(f"完成: {zpath} ({zpath.stat().st_size / 1024 / 1024:.1f} MB)")
     return zpath
 
@@ -237,7 +237,7 @@ def main() -> int:
 
     out = Path(args.out)
     wheels_dir = Path(args.wheels_dir)
-    portable = out / "ScoutPortable"
+    portable = out / "ScoutDesktop"
 
     # 整体重建便携目录，避免上次构建残留（如旧版 croniter 6.x 目录）
     if portable.exists():

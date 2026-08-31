@@ -5,10 +5,10 @@
 ## 一、使用（最终用户）
 
 ### 方式 A：绿色版 zip（推荐）
-`dist/ScoutPortable-win64.zip` 解压到任意 Windows 10/11 机器（可放 U 盘/移动硬盘），双击 `启动Scout.bat` 即用。
+`dist/ScoutDesktop-win64.zip` 解压到任意 Windows 10/11 机器（可放 U 盘/移动硬盘），双击 `启动Scout.bat` 即用。
 
 ### 方式 B：PyInstaller exe
-`dist/ScoutPortable/` 整个文件夹拷贝到目标机器，双击 `Scout.exe` 启动。
+`dist/ScoutDesktop/` 整个文件夹拷贝到目标机器，双击 `ScoutAgent.exe` 启动。
 
 两种方式通用特性：
 - **免安装**：不写注册表、不做文件关联、不设开机自启
@@ -27,7 +27,7 @@
 ```bash
 # 任意系统，无需 Python 环境安装（只需 pip + 网络）
 python3 tools/build_windows_portable.py
-# 产物: dist/ScoutPortable-win64.zip
+# 产物: dist/ScoutDesktop-win64.zip
 ```
 
 参数：`--out` 输出目录、`--wheels-dir` wheel 缓存（避免重复下载）、`--no-zip` 只组装目录。
@@ -43,7 +43,7 @@ cd scout-agent
 desktop\build.bat
 ```
 
-构建产物：`dist\ScoutPortable\`（含 `Scout.exe` + 依赖）。
+构建产物：`dist\ScoutDesktop\`（含 `ScoutAgent.exe` + 依赖）。
 
 ## 三、开发调试（跨平台）
 

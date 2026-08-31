@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 
@@ -13,6 +15,10 @@ from scout.core.annotations import ToolAnnotations
 from scout.core.types import Observation
 from scout.tools.base import ToolDefinition
 from scout.tools.registry import ToolRegistry
+
+# 平台自适应默认保存目录（2026-08-30）：Windows → %TEMP%\scout\images，
+# Linux/macOS → /tmp/scout_images/。仅用于 schema 描述文本。
+_DEFAULT_IMG_DIR = str(Path(tempfile.gettempdir()) / "scout" / "images")
 
 
 class ImageGenTool(ToolDefinition):
@@ -25,7 +31,7 @@ class ImageGenTool(ToolDefinition):
         "properties": {
             "prompt": {"type": "string", "description": "图片描述（建议用英文，效果更好）"},
             "size": {"type": "string", "description": "图片尺寸: 1024x1024(默认), 1792x1024, 1024x1792", "default": "1024x1024"},
-            "save_path": {"type": "string", "description": "保存路径（默认 /tmp/scout_images/）", "default": ""},
+            "save_path": {"type": "string", "description": f"保存路径（默认 {_DEFAULT_IMG_DIR}/）", "default": ""},
         },
         "required": ["prompt"],
     }

@@ -45,6 +45,11 @@ class ToolDefinition(ABC):
     # 减少多工具轮次的等待时间（参考 CowAgent 简洁 ReAct + 更进一步）。
     pure_read: bool = False
 
+    # 支持的平台（2026-08-30）：("windows", "linux", "darwin") 元组；
+    # None = 全平台可用。registry 暴露 schema 时据此过滤，
+    # 保证「不同的系统只看到适合该系统的工具」。
+    platforms: tuple[str, ...] | None = None
+
     # 类型注解 → JSON Schema type 的映射（尽力而为）
     _TYPE_MAP: dict[Any, dict[str, str]] = {
         str: {"type": "string"},
@@ -173,7 +178,7 @@ class ToolDefinition(ABC):
 
     def to_schema(self) -> dict:
         """生成 OpenAI function-calling 格式."""
-        return {
+        schema = {
             "type": "function",
             "function": {
                 "name": self.name,
@@ -181,6 +186,17 @@ class ToolDefinition(ABC):
                 "parameters": self.ensure_schema(),
             },
         }
+        return self.adapt_schema(schema)
+
+    def adapt_schema(self, schema: dict) -> dict:
+        """平台自适应钩子（2026-08-30）：根据当前操作系统微调给 LLM 的 schema.
+
+        默认原样返回。跨平台工具可覆写本方法，在 Windows / Linux / macOS 上
+        提供各自合适的命令示例与参数说明——例如 shell 工具在 Windows 下应
+        展示 dir/type/findstr 而非 ls/cat/grep，并标注 PTY 仅 Unix 可用，
+        避免 LLM 在 Windows 上尝试不存在的命令与行为。
+        """
+        return schema
 
 
 # 向后兼容别名：重构前的类名为 BaseTool，

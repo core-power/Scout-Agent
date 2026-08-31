@@ -1,13 +1,14 @@
 """统一路径解析 — 用户配置与运行时数据目录.
 
-设计原则 (2026-08-30):
-- 所有用户产生的配置（config.json / credentials.json / jwt_secret / secret_key /
-  automation_policy.json）与运行时数据（数据库、日志、技能、向量库等）
-  默认统一保存在【程序所在盘符根目录下的 .scout/】：
-  源码在 D 盘 → D:\\.scout；exe 在 D 盘 → D:\\.scout。
-  既不落到 C 盘用户目录，也不埋在项目目录里（避免上传代码时误提交）。
-- 环境变量覆盖：
-    SCOUT_CONFIG_DIR — 配置文件目录（默认 <盘符>:\\.scout）
+设计原则 (2026-08-31):
+- Windows 桌面版默认使用 %APPDATA%\\Scout（始终可写、更新绿色版不会清空、
+  升级/覆盖安装后配置仍在），彻底解决"每次更新都要重填 API Key/配置"问题。
+- 旧版本曾把数据放在盘符根目录 <盘符>\\.scout（如 D:\\.scout）——该位置
+  存在权限问题（盘符根目录可能不可写 → 回退到 exe 旁 data/，更新即丢），
+  现仅作为一次性迁移来源，不再作为新默认位置。
+- 其他平台默认保存在项目根目录下的 .scout/（避免写入 / 根目录）。
+- 环境变量覆盖（桌面版 launcher 启动时强制设置，保持与 data_dir() 一致）：
+    SCOUT_CONFIG_DIR — 配置文件目录
     SCOUT_DATA_DIR   — 运行时数据目录（默认同配置文件目录）
   覆盖后配置文件与数据目录可分离（如 Docker volume 挂载）。
 """
@@ -21,11 +22,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _default_root() -> Path:
-    """默认数据根目录:
-    - Windows: 项目所在盘符根目录下的 .scout（如 D:\\.scout）
+    """默认数据根目录（2026-08-31 起）:
+    - Windows: %APPDATA%\\Scout（始终可写、不随程序更新丢失）;
+      无 APPDATA 时回退 <盘符>\\.scout 兼容旧版。
     - 其他平台: 项目根目录下的 .scout（避免写入 / 根目录）
     """
     if os.name == "nt":
+        try:
+            base = os.getenv("APPDATA") or str(Path.home())
+            if base:
+                return Path(base) / "Scout"
+        except Exception:  # noqa: BLE001
+            pass
         anchor = PROJECT_ROOT.anchor  # 如 "D:\\"
         if anchor:
             return Path(anchor) / ".scout"

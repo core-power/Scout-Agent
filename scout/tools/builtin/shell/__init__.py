@@ -360,6 +360,47 @@ class ShellTool(ToolDefinition):
         destructive=False,
     )
 
+    def adapt_schema(self, schema: dict) -> dict:
+        """平台自适应（2026-08-30）：按运行系统调整给 LLM 的命令示例与参数说明.
+
+        Windows → cmd.exe 示例（dir/type/findstr），标注 PTY 仅 Unix 可用；
+        Linux/macOS → 保持 bash 示例不变。避免 LLM 在 Windows 上尝试
+        ls/cat/grep 等不存在于 cmd 的命令。
+        """
+        fn = schema.get("function") or {}
+        props = ((fn.get("parameters") or {}).get("properties")) or {}
+        if IS_WINDOWS:
+            fn["description"] = (
+                "Execute a shell command in a restricted environment. "
+                "Commands run via cmd.exe on Windows; only whitelisted utilities are allowed. "
+                "Dangerous operations (recursive delete, disk format, piping to shell) are blocked. "
+                "System dirs (C:\\Windows, C:\\Program Files) are blocked. "
+                "Prefer args parameter for arguments."
+            )
+            cmd = props.get("command")
+            if cmd:
+                cmd["description"] = (
+                    "The base command to execute (e.g. 'dir', 'type', 'findstr', 'where', 'python')."
+                )
+            for key in ("interactive", "session_keys"):
+                p = props.get(key)
+                if p:
+                    p["description"] = (
+                        p.get("description", "")
+                        + "（仅 Linux/macOS 支持；Windows 下 PTY 不可用，此参数无效）"
+                    )
+            persistent = props.get("persistent")
+            if persistent:
+                persistent["description"] = (
+                    "持久会话（2026-08-27）：Windows 下复用长驻 cmd.exe 进程，跨调用保留 cd/环境变量。"
+                )
+            session_key = props.get("session_key")
+            if session_key:
+                session_key["description"] = (
+                    "持久会话标识（仅 persistent=True 时使用），同一 key 共享同一 cmd.exe 进程。"
+                )
+        return schema
+
     async def execute(
         self,
         command: str,

@@ -37,6 +37,39 @@ from scout.security.auth import AuthManager, rotate_secret, verify_token
 logger = logging.getLogger(__name__)
 
 
+# ── API Key 脱敏 / 回填解析 ────────────────────────────────
+# 2026-08-31：前端输入框回填的是脱敏值（sk-abc...wxyz 或 ***），
+# 保存/测试时若收到脱敏值必须回落已存明文，绝不能把掩码当新 key 落盘。
+
+def _mask_key(key: str) -> str:
+    """API Key 脱敏显示：sk-abc123...wxyz；<=12 位一律 ***（防泄露短 key）."""
+    if not key:
+        return ""
+    return key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
+
+
+def _resolve_key(incoming: str, stored: str = "") -> str:
+    """把前端可能回传的脱敏值解析为应落盘的明文.
+
+    规则：
+    - 空值 → 保留 stored（不修改）
+    - '***'（短 key 掩码）→ 保留 stored
+    - 含 '...' 且与 stored 的脱敏形态一致，或长度明显小于真实 key（< 24）→ 保留 stored
+    - 其余按新明文处理
+    """
+    incoming = (incoming or "").strip()
+    if not incoming:
+        return stored or ""
+    if incoming == "***":
+        return stored or ""
+    if "..." in incoming:
+        if stored and incoming == _mask_key(stored):
+            return stored
+        if len(incoming) < 24:
+            return stored or ""
+    return incoming
+
+
 # ── 请求/响应模型 ──────────────────────────────────────────
 
 class ChatRequest(PydanticModel):
@@ -737,8 +770,7 @@ class WebAdapter:
             data = config.model_dump()
             # 脱敏 API Key
             if data.get("api_key"):
-                key = data["api_key"]
-                data["api_key"] = key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
+                data["api_key"] = _mask_key(data["api_key"])
                 data["has_api_key"] = True
             else:
                 data["has_api_key"] = False
@@ -751,7 +783,7 @@ class WebAdapter:
                         e = dict(e)
                         k = e.get("api_key") or ""
                         if k:
-                            e["api_key"] = k[:8] + "..." + k[-4:] if len(k) > 12 else "***"
+                            e["api_key"] = _mask_key(k)
                         masked.append(e)
                     else:
                         masked.append(e)
@@ -778,9 +810,8 @@ class WebAdapter:
             if "base_url" in req:
                 config.base_url = req["base_url"]
             if "api_key" in req and req["api_key"]:
-                # 如果传入的不是脱敏格式，才更新
-                if "..." not in req["api_key"]:
-                    config.api_key = req["api_key"]
+                # 2026-08-31：传入脱敏回显值（…/***）时回落已存明文，绝不覆盖为掩码
+                config.api_key = _resolve_key(str(req["api_key"]), config.api_key or "")
             if "max_turns" in req:
                 config.max_turns = int(req["max_turns"])
             if "temperature" in req:
@@ -838,8 +869,8 @@ class WebAdapter:
                     url = str(item.get("url") or "").strip()
                     name = str(item.get("name") or "").strip() or etype
                     api_key = str(item.get("api_key") or "").strip()
-                    if "..." in api_key:
-                        api_key = existing.get((name, etype, url), "")
+                    # 2026-08-31：脱敏回显值回落已存明文
+                    api_key = _resolve_key(api_key, existing.get((name, etype, url), ""))
                     enabled = bool(item.get("enabled", True))
                     engines.append({
                         "name": name, "type": etype, "url": url,
@@ -869,12 +900,19 @@ class WebAdapter:
 
         @self.app.get("/api/config/keys")
         async def list_saved_keys(request: Request):
-            """列出已保存 key 的 provider（不泄露明文）+ 当前激活项."""
+            """列出已保存 key 的 provider（不泄露明文）+ 当前激活项.
+
+            2026-08-31: 新增 masked_keys（脱敏回显，如 sk-abc***xyz），
+            供前端输入框回填 —— 即使 WebView2 localStorage 被清空，
+            设置页也能看到"已保存"的 Key，避免每次更新后误以为配置丢失而重填。
+            """
             if not self._require_auth(request):
                 return JSONResponse({"error": "未授权"}, status_code=401)
             config = self.config_mgr.load()
+            saved = config.provider_keys or {}
             return {
                 "keys": self.config_mgr.list_provider_keys(),
+                "masked_keys": {p: _mask_key(k) for p, k in saved.items() if k},
                 "base_urls": self.config_mgr.list_provider_base_urls(),
                 "active": config.provider,
                 "active_model": config.model,
@@ -896,9 +934,17 @@ class WebAdapter:
                 return JSONResponse({"error": "api_key 或 base_url 至少填一项"}, status_code=400)
             activate = bool(req.get("activate", True))
             if api_key:
-                self.config_mgr.save_provider_key(
-                    provider, api_key, activate=activate, base_url=base_url
-                )
+                # 2026-08-31：前端回填的是脱敏值（…/***），必须回落已存明文再保存，
+                # 否则掩码会被当作新 key 落盘导致配置失效
+                stored_key, _ = self.config_mgr.get_provider_credentials(provider)
+                effective_key = _resolve_key(api_key, stored_key)
+                if effective_key:
+                    self.config_mgr.save_provider_key(
+                        provider, effective_key, activate=activate, base_url=base_url
+                    )
+                else:
+                    # 仅回传脱敏值且无已存明文 → 只更新 base_url
+                    self.config_mgr.save_provider_base_url(provider, base_url, activate=activate)
             else:
                 self.config_mgr.save_provider_base_url(provider, base_url, activate=activate)
             config = self.config_mgr.load()
@@ -1252,11 +1298,19 @@ class WebAdapter:
                 return JSONResponse({"error": "请求体必须是 JSON"}, status_code=400)
             from scout.llm.providers.registry import create_provider
             try:
+                provider = req.get("provider", "dashscope")
+                api_key = str(req.get("api_key", "") or "")
+                base_url = str(req.get("base_url", "") or "").strip()
+                stored_key, stored_url = self.config_mgr.get_provider_credentials(provider)
+                # 2026-08-31：输入框为空 / 回填脱敏值时回落已存明文，避免测试用掩码连接
+                api_key = _resolve_key(api_key, stored_key)
+                if not base_url:
+                    base_url = stored_url
                 llm = create_provider(
-                    provider=req.get("provider", "dashscope"),
-                    api_key=req.get("api_key", ""),
+                    provider=provider,
+                    api_key=api_key,
                     model=req.get("model", "qwen-plus"),
-                    base_url=req.get("base_url", ""),
+                    base_url=base_url,
                 )
                 resp = await llm.complete([{"role": "user", "content": "Hi"}])
                 return {"status": "ok", "message": f"连接成功: {resp.content[:50]}"}

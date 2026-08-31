@@ -424,25 +424,6 @@
         </div>
     </aside>
 
-    <!-- ═══════════════ 文件树面板（代码工作流 UI，2026-08-30） ═══════════════ -->
-    <aside id="fs-panel" class="hidden w-72 bg-[#0e0e0e] border-r border-white/5 flex-col flex-shrink-0 min-h-0">
-        <div class="flex items-center gap-2 px-3 h-14 border-b border-white/5">
-            <svg class="w-4 h-4 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-            <span class="text-sm font-medium text-slate-200 flex-1" data-i18n="文件">文件</span>
-            <button onclick="fsRefresh()" class="p-1.5 rounded hover:bg-white/5 text-slate-400 transition-colors" title="刷新" data-i18n-title="刷新">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-            </button>
-            <button onclick="toggleFsPanel()" class="p-1.5 rounded hover:bg-white/5 text-slate-400 transition-colors" title="收起" data-i18n-title="收起">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-            </button>
-        </div>
-        <div class="px-2 py-2 border-b border-white/5">
-            <select id="fs-root" onchange="fsLoadTree(this.value)" class="w-full bg-[#1a1a1a] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-scout-500/50"></select>
-        </div>
-        <div id="fs-tree" class="flex-1 overflow-y-auto px-2 py-2 space-y-0.5 min-h-0 text-xs"></div>
-        <div class="px-3 py-2 border-t border-white/5 text-[10px] text-slate-600" data-i18n="点击文件查看内容">点击文件查看内容</div>
-    </aside>
-
     <!-- ═══════════════ MAIN ═══════════════ -->
     <div class="flex-1 flex flex-col min-w-0">
         <header class="h-14 flex items-center gap-3 px-4 border-b border-white/5 bg-[#0d0d0d] flex-shrink-0">
@@ -460,11 +441,6 @@
             </a>
             <!-- Workspace 功能区 (桌面端显示) -->
             <div class="hidden md:flex items-center gap-2">
-                <!-- 文件树（代码工作流，2026-08-30） -->
-                <button onclick="toggleFsPanel()" class="flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-white/5 text-slate-400 transition-colors" title="文件" data-i18n-title="文件">
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-                    <span class="text-xs" data-i18n="文件">文件</span>
-                </button>
                 <!-- 知识管理组 -->
                 <div class="relative group">
                     <button class="flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-white/5 text-slate-400 transition-colors" title="知识管理" data-i18n-title="知识管理">
@@ -2958,6 +2934,13 @@ function newChat() {
     msgCount = 0;
     msgSeqCounter = 0;
     currentSessionId = null;
+    // ★ 2026-08-31：归零流式状态——若上一次会话因网络异常/关闭残留 isProcessing=true，
+    //   下一次 session_init 触发的 loadSession 会被 3151 早返回拦截，导致 UI 不更新。
+    isProcessing = false;
+    forceReloaded = false;
+    // 清掉会话快照，否则 3160 路径会用旧 activeSessionHtml 覆盖 welcome
+    activeSessionId = null;
+    activeSessionHtml = null;
     localStorage.removeItem('scout_last_session');
     updateMsgCount();
     document.getElementById('chat-title').textContent = __t('新对话');
@@ -2994,7 +2977,23 @@ function toggleSidebar() {
     overlay.classList.toggle('open');
 }
 // 点击会话后自动关闭侧边栏（移动端）
+// ★ 2026-08-31 黑屏终极兜底：DOMContentLoaded 最早时机，强制把欢迎界面拉回。
+//   原因：loadSession / newChat / addMessage 等多个路径都会在初始化阶段"先藏 welcome + 显 messages"，
+//   后续异步流程（ws session_init、消息渲染、恢复快照）一旦被 isProcessing 阻塞、404 异常、
+//   或 WebView2 缓存旧 JS，就会停在"messages 显但空"的中间状态 → 整片黑屏。
+//   这里的兜底：DOMContentLoaded 第一行就检查，如果消息为空就把 welcome/messages 状态
+//   强制纠正为"显 welcome + 藏 messages + 标题新对话"，不论后续任何代码做了什么。
 document.addEventListener('DOMContentLoaded', () => {
+    try {
+        const _welcome = document.getElementById('welcome-screen');
+        const _messages = document.getElementById('messages');
+        if (_welcome && _messages && _messages.children.length === 0) {
+            _welcome.classList.remove('hidden');
+            _messages.classList.add('hidden');
+            const _title = document.getElementById('chat-title');
+            if (_title) _title.textContent = (typeof __t === 'function' ? __t('新对话') : '新对话');
+        }
+    } catch (_) { /* 兜底逻辑失败不影响后续初始化 */ }
     // 初始化界面语言（应用已保存的语言偏好）
     if (typeof I18N !== 'undefined') {
         I18N.apply();
@@ -3146,6 +3145,31 @@ function searchSessions(q) {
 }
 async function loadSession(sid, opts = {}) {
     console.log('[DEBUG] loadSession called with sid:', sid, 'force:', !!opts.force);
+    // ★ 2026-08-31 UI 兜底（v2）：任何早返回/异常路径前，先把"新会话欢迎界面"恢复——
+    //   避免消息区纯黑。判定条件：消息区为空、welcome 当前被藏、目标 sid 与当前
+    //   活动会话不同（切会话/新对话）→ 立即显 welcome + 标题"新对话"。
+    //   上一版修复（仅在 loadSession 末尾 children 判空）会在以下场景失效：
+    //     1) isProcessing=true 早返回（残留流式状态）→ 根本不进入末尾逻辑
+    //     2) 后端 404/网络异常被 catch → 末尾代码也跑不到
+    //     3) messages 已显但 children 仍为 0（手动触发 addMessage 空内容后清理）→ welcome 被覆盖
+    //   入口兜底 = 不管后面发生什么，新会话的欢迎界面一定先回来。
+    try {
+        const msgBoxEarly = document.getElementById('messages');
+        const welcomeEarly = document.getElementById('welcome-screen');
+        // ★ 2026-08-31 终极兜底（v3）：去掉 sid !== activeSessionId 条件——
+        //   即使切回当前会话、children 为空（DOM 被意外清空）也强制恢复欢迎界面。
+        //   旧版条件会导致：切会话时 DOM 仍残留旧消息 → children > 0 → 兜底不触发，
+        //   但若后续 loadSession 主体又清空了消息（force 分支）→ 整个 messages 显但空 → 黑屏。
+        if (msgBoxEarly && welcomeEarly &&
+            msgBoxEarly.children.length === 0 &&
+            welcomeEarly.classList.contains('hidden')) {
+            welcomeEarly.classList.remove('hidden');
+            msgBoxEarly.classList.add('hidden');
+            const _t = document.getElementById('chat-title');
+            if (_t) _t.textContent = (typeof __t === 'function' ? __t('新对话') : '新对话');
+        }
+    } catch (_) { /* 兜底逻辑失败不影响主流程 */ }
+
     // 如果当前正在回复中，不加载会话（避免清空当前对话）
     // force=true 用于"断线重连时补齐历史"，此时允许在生成中重建 DOM
     if (isProcessing && !opts.force) {
@@ -3154,7 +3178,7 @@ async function loadSession(sid, opts = {}) {
     }
     // 非强制加载（新会话/正常切换）：重置断线重建标志，允许后续再次触发
     if (!opts.force) forceReloaded = false;
-    
+
     // 如果切回正在回复的会话，恢复 DOM 快照
     if (sid === activeSessionId && activeSessionHtml !== null) {
         document.getElementById('welcome-screen').classList.add('hidden');
@@ -3198,6 +3222,33 @@ async function loadSession(sid, opts = {}) {
                 restoreWarned = true;
                 toast && toast.warning ? toast.warning('该历史会话已不存在，已为你新建对话') : null;
             }
+            return;
+        }
+        // ★ 2026-08-31 修复（v4 终极版）：空会话（messages 为空数组）必须**早于 3251 行**走欢迎界面，
+        //   根本不让"welcome 藏 + messages 显 + messages 清空"这一组危险操作执行。
+        //   旧兜底（3401 行 try 块末尾）会因 3401-3405 之间任何 throw
+        //   （如 __t('新对话') 在 I18N 未初始化时 ReferenceError）而失效。
+        //   这里的空数组早返回 = 空会话根本不会进入"messages 显但空"的中间态。
+        if (Array.isArray(d.messages) && d.messages.length === 0) {
+            console.log('[loadSession] 空会话，恢复欢迎界面 sid=', sid);
+            const _welcome0 = document.getElementById('welcome-screen');
+            const _msgBox0 = document.getElementById('messages');
+            if (_welcome0) _welcome0.classList.remove('hidden');
+            if (_msgBox0) {
+                _msgBox0.classList.add('hidden');
+                _msgBox0.innerHTML = '';
+            }
+            msgCount = 0;
+            msgSeqCounter = 0;
+            agentBubble.reset();
+            currentSessionId = sid;
+            try { localStorage.setItem('scout_last_session', sid); } catch (_) {}
+            const _title0 = document.getElementById('chat-title');
+            if (_title0) _title0.textContent = (typeof __t === 'function' ? __t('新对话') : '新对话');
+            // 重连 ws 保持后端 session 一致（与正常路径一致）
+            wsReconnecting = true;
+            if (ws) ws.close();
+            connect(sid);
             return;
         }
         document.getElementById('welcome-screen').classList.add('hidden');
@@ -3345,7 +3396,19 @@ async function loadSession(sid, opts = {}) {
         wsReconnecting = true;  // 阻止 onclose 自动重连
         if (ws) ws.close();
         connect(sid);
-        document.getElementById('chat-title').textContent = __t('对话');
+        // ★ 2026-08-31 修复：空会话（消息列表为空）保留欢迎界面 + "新对话"标题，
+        //   避免"刚进页面/点新对话"后聊天区纯黑、无任何指引信息。
+        //   根因：此前的 children.length 检查发生在消息渲染之后，
+        //   若后端返回 messages: []，render 不会 append 任何节点，welcome 仍被前面的代码隐藏 → 黑屏。
+        //   现在改为：会话没有可用消息时直接走欢迎界面。
+        const msgBox = document.getElementById('messages');
+        if (msgBox.children.length === 0) {
+            document.getElementById('welcome-screen').classList.remove('hidden');
+            msgBox.classList.add('hidden');
+            document.getElementById('chat-title').textContent = __t('新对话');
+        } else {
+            document.getElementById('chat-title').textContent = __t('对话');
+        }
         // 历史消息加载完成后滚动到底部（消息多时可滑动浏览）
         setTimeout(() => scrollToBottom(true), 100);
     } catch(e) { console.error("loadSession error:", e); }
@@ -5195,10 +5258,17 @@ function fillProviderScopes() {
     });
 }
 
-// 后端已保存的服务商凭据状态（GET /api/config/keys 的 keys/base_urls 映射）
-let providerCredState = { keys: {}, base_urls: {} };
+// 后端已保存的服务商凭据状态（GET /api/config/keys 的 keys/base_urls/masked_keys 映射）
+// keys: { provider: 是否已保存 }；masked_keys: { provider: 脱敏回显(sk-abc...wxyz) }
+let providerCredState = { keys: {}, base_urls: {}, masked_keys: {} };
 let providerCredDraft = {};      // 集中区未保存的编辑草稿 { provider: { key, url } }
 let currentCredProvider = '';    // 集中区当前显示的厂商
+
+// 判断是否为脱敏回显值（sk-abc...wxyz 或 ***），是则不应作为新 key 提交/缓存
+function isMaskedKey(k) {
+    k = (k || '').trim();
+    return k === '***' || (k.indexOf('...') !== -1 && k.length < 24);
+}
 
 function onProviderChange(scope) {
     const s = PROVIDER_SCOPES[scope] || PROVIDER_SCOPES.text;
@@ -5269,8 +5339,11 @@ function renderProviderCredFields(p) {
     if (!wrap || !p) return;
     currentCredProvider = p;
     const hasKey = !!providerCredState.keys[p] || !!localStorage.getItem('scout_apikey_' + p);
+    // 2026-08-31 修复：优先回填后端已保存 Key 的脱敏回显（masked_keys 来自服务端
+    // config.json，程序更新后仍在），localStorage 仅作兜底 —— 避免更新后输入框空白、
+    // 被误认为"配置丢失"而重复填写；绝不使用布尔 keys 标志（会注入 "true"）。
     const keyVal = (providerCredDraft[p] && providerCredDraft[p].key !== undefined) ? providerCredDraft[p].key
-        : (localStorage.getItem('scout_apikey_' + p) || '');
+        : (providerCredState.masked_keys[p] || localStorage.getItem('scout_apikey_' + p) || '');
     const urlVal = (providerCredDraft[p] && providerCredDraft[p].url !== undefined) ? providerCredDraft[p].url
         : (providerCredState.base_urls[p] || localStorage.getItem('scout_baseurl_' + p) || (BASE_URLS[p] || ''));
     const statusCls = hasKey ? 'text-emerald-400' : 'text-amber-400';
@@ -5347,7 +5420,7 @@ async function saveProviderCreds(silent) {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ api_key: c.api_key, base_url: c.base_url, activate: false }),
             });
-            if (r.ok) { ok++; if (c.api_key) localStorage.setItem('scout_apikey_' + c.provider, c.api_key); if (c.base_url) localStorage.setItem('scout_baseurl_' + c.provider, c.base_url); }
+            if (r.ok) { ok++; if (c.api_key && !isMaskedKey(c.api_key)) localStorage.setItem('scout_apikey_' + c.provider, c.api_key); if (c.base_url) localStorage.setItem('scout_baseurl_' + c.provider, c.base_url); }
             else fail++;
         } catch (e) { fail++; }
     }
@@ -5365,7 +5438,7 @@ async function loadProviderCredState() {
         const r = await fetch('/api/config/keys');
         if (r.ok) {
             const d = await r.json();
-            providerCredState = { keys: d.keys || {}, base_urls: d.base_urls || {}, active: d.active || '' };
+            providerCredState = { keys: d.keys || {}, base_urls: d.base_urls || {}, masked_keys: d.masked_keys || {}, active: d.active || '' };
         }
     } catch (e) { /* 忽略 */ }
 }
@@ -5813,8 +5886,10 @@ async function testConfig() {
     const data = {
         provider: prov,
         model: model,
-        base_url: mc.url || (localStorage.getItem('scout_baseurl_' + prov) || ''),
-        api_key: mc.key || (localStorage.getItem('scout_apikey_' + prov) || ''),
+        // 2026-08-31 修复：兜底顺序 后端已存配置(脱敏回显) > localStorage > 空；
+        // 后端 /api/config/test 会把脱敏值回落已存明文再测试
+        base_url: mc.url || (providerCredState.base_urls[prov] || localStorage.getItem('scout_baseurl_' + prov) || ''),
+        api_key: mc.key || (providerCredState.masked_keys[prov] || localStorage.getItem('scout_apikey_' + prov) || ''),
     };
     try {
         const resp = await fetch('/api/config/test', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) });
@@ -6956,166 +7031,6 @@ if ('serviceWorker' in navigator) {
             console.warn('Service Worker 注册失败:', err);
         });
     });
-}
-
-// ═══════════════ 文件树面板（代码工作流 UI，2026-08-30） ═══════════════
-let fsCurrentPath = '';
-
-function fsEsc(s) {
-    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-function toggleFsPanel() {
-    const panel = document.getElementById('fs-panel');
-    if (!panel) return;
-    const show = panel.classList.contains('hidden');
-    panel.classList.toggle('hidden');
-    if (show) fsInit();
-}
-
-function fsInit() {
-    const sel = document.getElementById('fs-root');
-    if (!sel) return;
-    fetch('/api/fs/roots')
-        .then(r => r.json())
-        .then(data => {
-            sel.innerHTML = (data.roots || []).map(r => `<option value="${fsEsc(r.path)}">${fsEsc(r.name)}</option>`).join('');
-            if (data.roots && data.roots.length) fsLoadTree(data.roots[0].path);
-        })
-        .catch(e => console.error('文件树初始化失败:', e));
-}
-
-function fsJoin(base, name) {
-    if (!base) return name;
-    return base.replace(/[\\/]+$/, '') + '/' + name;
-}
-
-function fsLoadTree(path) {
-    fsCurrentPath = path;
-    const tree = document.getElementById('fs-tree');
-    if (!tree) return;
-    tree.innerHTML = '<div class="text-slate-600 px-2 py-1">加载中...</div>';
-    fetch('/api/fs/tree?path=' + encodeURIComponent(path) + '&depth=1')
-        .then(async r => {
-            if (!r.ok) { tree.innerHTML = '<div class="text-red-400 px-2 py-1">' + fsEsc(await r.text()) + '</div>'; return; }
-            return r.json();
-        })
-        .then(data => {
-            if (!data) return;
-            tree.innerHTML = '';
-            fsRenderDir(data.tree || [], tree, 0);
-            if (!data.tree || !data.tree.length) tree.innerHTML = '<div class="text-slate-600 px-2 py-1">（空目录）</div>';
-        })
-        .catch(e => { tree.innerHTML = '<div class="text-red-400 px-2 py-1">加载失败: ' + fsEsc(e) + '</div>'; });
-}
-
-function fsRenderDir(entries, container, level) {
-    const pad = level * 14;
-    for (const it of entries) {
-        if (it.type === 'dir') {
-            const row = document.createElement('div');
-            row.className = 'flex items-center gap-1 py-1 px-2 rounded hover:bg-white/5 cursor-pointer text-slate-300 select-none';
-            row.style.paddingLeft = (pad + 8) + 'px';
-            row.innerHTML = '<span class="fs-caret text-slate-500 w-3 text-center shrink-0">▸</span><span class="shrink-0">📁</span><span class="truncate">' + fsEsc(it.name) + '</span>';
-            row.onclick = () => fsToggleDir(row, it.name, level);
-            container.appendChild(row);
-        } else {
-            const row = document.createElement('div');
-            row.className = 'flex items-center gap-1.5 py-1 px-2 rounded hover:bg-white/5 cursor-pointer text-slate-400 select-none';
-            row.style.paddingLeft = (pad + 8) + 'px';
-            row.innerHTML = '<span class="w-3 shrink-0"></span><span class="shrink-0">📄</span><span class="truncate">' + fsEsc(it.name) + '</span><span class="ml-auto text-[10px] text-slate-600 shrink-0">' + fmtSize(it.size) + '</span>';
-            row.onclick = () => fsOpenFile(fsJoin(fsCurrentPath, it.name));
-            container.appendChild(row);
-        }
-    }
-}
-
-function fsToggleDir(row, name, level) {
-    const sub = row.nextSibling;
-    const caret = row.querySelector('.fs-caret');
-    if (sub && sub.classList && sub.classList.contains('fs-sub')) {
-        sub.classList.toggle('hidden');
-        caret.textContent = sub.classList.contains('hidden') ? '▸' : '▾';
-        return;
-    }
-    caret.textContent = '▾';
-    const path = fsJoin(fsCurrentPath, name);
-    const subDiv = document.createElement('div');
-    subDiv.className = 'fs-sub';
-    row.parentNode.insertBefore(subDiv, row.nextSibling);
-    subDiv.innerHTML = '<div class="text-slate-600 px-2 py-1" style="padding-left:' + ((level + 1) * 14 + 8) + 'px">加载中...</div>';
-    fetch('/api/fs/tree?path=' + encodeURIComponent(path) + '&depth=1')
-        .then(r => r.json())
-        .then(data => {
-            subDiv.innerHTML = '';
-            fsRenderDir(data.tree || [], subDiv, level + 1);
-            if (!data.tree || !data.tree.length) subDiv.innerHTML = '<div class="text-slate-600 px-2 py-1" style="padding-left:' + ((level + 1) * 14 + 8) + 'px">（空）</div>';
-        })
-        .catch(() => { subDiv.innerHTML = '<div class="text-red-400 px-2 py-1">加载失败</div>'; });
-}
-
-function fsOpenFile(path) {
-    let modal = document.getElementById('fs-modal');
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'fs-modal';
-        modal.className = 'fixed inset-0 z-[9500] bg-black/70 flex items-center justify-center p-4';
-        modal.innerHTML =
-            '<div class="w-full max-w-3xl h-[80vh] bg-[#111] border border-white/10 rounded-xl flex flex-col overflow-hidden">' +
-            '<div class="flex items-center gap-2 px-4 h-11 border-b border-white/10">' +
-            '<span id="fs-modal-path" class="text-xs text-slate-400 truncate flex-1"></span>' +
-            '<span id="fs-modal-enc" class="text-[10px] text-slate-600 shrink-0"></span>' +
-            '<button onclick="document.getElementById(\'fs-modal\').remove()" class="p-1.5 rounded hover:bg-white/5 text-slate-400 shrink-0">✕</button></div>' +
-            '<pre id="fs-modal-content" class="flex-1 overflow-auto p-4 text-xs leading-relaxed font-mono text-slate-300 whitespace-pre-wrap break-all"></pre>' +
-            '<div class="px-4 py-2 border-t border-white/10 text-xs text-slate-500 flex items-center gap-2">' +
-            '<button onclick="fsCopyContent()" class="px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 transition-colors">复制</button>' +
-            '<span id="fs-modal-status" class="text-[10px] text-slate-600"></span></div></div>';
-        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
-        document.body.appendChild(modal);
-    }
-    const content = document.getElementById('fs-modal-content');
-    const p = document.getElementById('fs-modal-path');
-    const st = document.getElementById('fs-modal-status');
-    p.textContent = path;
-    st.textContent = '加载中...';
-    content.textContent = '';
-    fetch('/api/fs/read?path=' + encodeURIComponent(path))
-        .then(async r => {
-            if (!r.ok) {
-                const txt = await r.text().catch(() => '');
-                st.textContent = txt || ('HTTP ' + r.status);
-                return;
-            }
-            const data = await r.json();
-            p.textContent = data.path;
-            if (data.encoding === 'binary') {
-                content.textContent = '[二进制文件，无法预览] (' + fmtSize(data.size) + ')';
-            } else {
-                content.textContent = data.content;
-                st.textContent = fmtSize(data.size) + ' · ' + data.encoding;
-            }
-        })
-        .catch(e => { st.textContent = '加载失败: ' + e; });
-}
-
-function fsCopyContent() {
-    const c = document.getElementById('fs-modal-content');
-    if (!c) return;
-    navigator.clipboard.writeText(c.textContent).catch(() => {});
-    const st = document.getElementById('fs-modal-status');
-    if (st) st.textContent = '已复制';
-}
-
-function fsRefresh() {
-    if (fsCurrentPath) fsLoadTree(fsCurrentPath);
-}
-
-function fmtSize(n) {
-    if (n === undefined || n === null) return '';
-    if (n < 1024) return n + ' B';
-    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
-    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
-    return (n / 1073741824).toFixed(1) + ' GB';
 }
 
 </script>

@@ -43,22 +43,23 @@ def app_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """数据目录:
-    - Windows: 程序所在盘符根目录/.scout（如 D:\\.scout），不可写时回退 exe 旁 data/
-    - 其他平台: exe 旁 data/，不可写时回退用户目录 ~/.scout
+    """数据目录（2026-08-31 修复"更新丢配置"）:
+    - Windows 主目录: %APPDATA%\\Scout —— 始终可写、程序更新/覆盖不会清空,
+      升级后 API Key/配置自动保留（旧数据目录会一次性迁移）。
+    - 回退: exe 旁 data/，再回退用户目录 ~/.scout
     """
     if os.name == "nt":
-        anchor = Path(sys.executable if _is_frozen() else __file__).resolve().anchor
-        if anchor:
-            d = Path(anchor) / ".scout"
-            try:
+        try:
+            base = os.getenv("APPDATA") or str(Path.home())
+            if base:
+                d = Path(base) / "Scout"
                 d.mkdir(parents=True, exist_ok=True)
                 probe = d / ".write_probe"
                 probe.write_text("ok", encoding="utf-8")
                 probe.unlink()
                 return d
-            except OSError:
-                pass
+        except OSError:
+            pass
     d = app_dir() / "data"
     try:
         d.mkdir(parents=True, exist_ok=True)
@@ -68,6 +69,52 @@ def data_dir() -> Path:
         return d
     except OSError:
         return Path.home() / ".scout"
+
+
+def _migrate_old_data(new_dir: Path) -> None:
+    """一次性迁移旧数据目录（2026-08-31）.
+
+    旧版本可能把配置写在: <盘符>\\.scout、exe 旁 data/、~/.scout。
+    仅当 new_dir 尚无 config.json 且旧目录存在 config.json 时迁移，
+    避免覆盖新配置；迁移来源按优先级取第一个有效目录。
+    """
+    if os.name != "nt":
+        return
+    try:
+        if (new_dir / "config.json").exists():
+            return
+    except OSError:
+        return
+    import shutil
+
+    old_candidates = []
+    try:
+        anchor = Path(sys.executable if _is_frozen() else __file__).resolve().anchor
+        if anchor:
+            old_candidates.append(Path(anchor) / ".scout")
+    except OSError:
+        pass
+    old_candidates.extend([app_dir() / "data", Path.home() / ".scout"])
+
+    for old in old_candidates:
+        try:
+            if not old.is_dir() or not (old / "config.json").exists():
+                continue
+            new_dir.mkdir(parents=True, exist_ok=True)
+            for item in old.iterdir():
+                target = new_dir / item.name
+                if item.name in ("launcher.log", ".write_probe"):
+                    continue
+                if target.exists():
+                    continue
+                if item.is_dir():
+                    shutil.copytree(item, target, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, target)
+            print(f"[migrate] data dir migrated: {old} -> {new_dir}")
+            return  # 只迁移一个来源，避免多份数据互相覆盖
+        except OSError:
+            continue
 
 
 def load_env_files() -> None:
@@ -430,6 +477,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── 环境准备（必须在导入 scout 之前） ──
     ddir = data_dir()
+    # ★ 2026-08-31：一次性迁移旧数据目录（盘符根 .scout / exe 旁 data / ~/.scout）
+    #   必须在导入 scout 之前执行，保证 config.json/secret_key 落到新目录。
+    _migrate_old_data(ddir)
     os.environ.setdefault("SCOUT_DATA_DIR", str(ddir))
     # ★ 2026-08-30：配置文件目录同样跟随 exe（config.json 不再写 C 盘 ~/.scout）
     os.environ.setdefault("SCOUT_CONFIG_DIR", str(ddir))
