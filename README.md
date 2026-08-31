@@ -74,23 +74,23 @@ Scout Agent is an intelligent personal assistant AI agent with persistent memory
 
 Don't want to set up Python? Use the **portable green build** — double-click and go:
 
-1. Download the latest **Windows portable build** from the **GitHub Releases** page: [releases](https://github.com/core-power/scout-agent/releases) (grab the newest `scout-agent-*-win-x64.zip` asset).
+1. Download the **Windows portable build** from **GitHub Releases**: [v1.0.0.0](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.0) — direct link: [scout-agent-1.0.0.0-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.0/scout-agent-1.0.0.0-win-x64.zip) (check [all releases](https://github.com/core-power/Scout-Agent/releases) for newer versions).
 2. Unzip it, then copy the **whole folder** to any Windows 10/11 machine — no installation, no registry, no admin rights.
-3. Double-click **`Scout.exe`** — the chat window opens instantly.
+3. Open the unzipped folder and double-click **`ScoutDesktop\ScoutAgent.exe`** — the chat window opens instantly.
 4. On first use, open **Settings** and paste your LLM API key (dashscope / DeepSeek / OpenAI / any OpenAI-compatible endpoint).
 
 Data lives **next to the program** (e.g. `D:\.scout` when the folder is on drive D — never on C:, never inside the app folder), so it travels with you: copy the folder + data to another PC and pick up where you left off.
 
 #### 🔄 Upgrading the portable build
 
-1. Check the [Releases](https://github.com/core-power/scout-agent/releases) page — when a newer version is out, download the newest `scout-agent-*-win-x64.zip`.
-2. **Quit `Scout.exe`** (click "Yes" when asked to exit).
+1. Check the [Releases](https://github.com/core-power/Scout-Agent/releases) page — when a newer version is out, download the newest `scout-agent-*-win-x64.zip`.
+2. **Quit `ScoutDesktop\ScoutAgent.exe`** (click "Yes" when asked to exit).
 3. Extract the new zip and **overwrite the old folder** with the new files (copy & replace works fine).
-4. Double-click `Scout.exe` again — your data and settings are untouched, no migration needed.
+4. Double-click `ScoutDesktop\ScoutAgent.exe` again — your data and settings are untouched, no migration needed.
 
 > All your chat history, API key and settings live in `D:\.scout` (at the drive root), **not** inside the app folder — so overwriting the app folder never touches your data.
 
-> The Windows build is distributed **via GitHub Releases only** — the exe is **not** committed to this repository, keeping the repo lightweight. Want to build it yourself? Run `desktop\build.bat` on Windows (needs Python 3.11+) — it packages everything into `dist\ScoutPortable\` automatically.
+> The Windows build is distributed **via GitHub Releases only** — the exe is **not** committed to this repository, keeping the repo lightweight. Want to build it yourself? Run `desktop\build.bat` on Windows (needs Python 3.11+) — it packages everything into `dist\ScoutDesktop\` automatically.
 >
 > Every release also ships **auto-generated source archives** (`Source code (zip)` / `Source code (tar.gz)`) — developers can grab those and follow the [Installation](#installation) section below.
 
