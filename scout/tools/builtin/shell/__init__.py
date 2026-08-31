@@ -293,9 +293,12 @@ EXEC_LAUNCH_BYPASS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _validate_command(command: str, args: list[str] | None = None) -> tuple[bool, str]:
+def _validate_command(command: str, args: list[str] | None = None, allow_app_launch: bool = False) -> tuple[bool, str]:
     """三重安全校验：白名单 + 黑名单 + 注入检测.
-    
+
+    allow_app_launch=True（Windows 个人版，配置文件开关）：放行"启动本地应用"载荷
+    （start xxx.exe / Start-Process / 引号内 .exe 等），仍保留 -EncodedCommand 编码命令拦截。
+
     Returns:
         (is_safe, error_message)
     """
@@ -333,6 +336,10 @@ def _validate_command(command: str, args: list[str] | None = None) -> tuple[bool
         # 去掉命令名本身（兼容 command 字段直接带参的情况，如 "powershell -Command ..."）
         _payload = full_cmd.replace(base_cmd, "", 1).lstrip()
         for _pat in EXEC_LAUNCH_BYPASS[base_cmd]:
+            # allow_app_launch=True：放行"启动本地应用"载荷（Start-Process / .exe 路径等），
+            # 仅保留 -EncodedCommand 拦截——base64 编码命令完全不可审计，属另一类风险，无论开关都拦
+            if allow_app_launch and "-EncodedCommand" not in _pat:
+                continue
             if re.search(_pat, _payload, re.IGNORECASE):
                 return False, (
                     "安全拦截: 检测到通过解释器启动外部程序的绕过载荷"
@@ -342,6 +349,10 @@ def _validate_command(command: str, args: list[str] | None = None) -> tuple[bool
 
     # 3. 危险参数模式检测
     for pattern in DANGEROUS_ARGS:
+        # allow_app_launch=True：放行 "start xxx.exe"（Windows 启动应用），
+        # 其余危险参数（rm -rf、dd、curl|sh 等）仍拦截
+        if allow_app_launch and pattern == r"start\s+.*\.exe":
+            continue
         if re.search(pattern, full_cmd, re.IGNORECASE):
             return False, "安全拦截: 检测到危险参数模式"
 
@@ -502,7 +513,11 @@ class ShellTool(ToolDefinition):
             )
 
         # 1. 安全校验（PTY 纯按键注入场景：interactive + 空命令 + session_keys → 放行到 interactive 分支）
-        is_safe, error = _validate_command(command, args)
+        # allow_app_launch：Windows 个人版默认开启（配置文件可关），放行 start/Start-Process 启动本地应用
+        from scout.config.manager import ConfigManager
+
+        _allow_launch = bool(getattr(ConfigManager().load(), "allow_app_launch", False))
+        is_safe, error = _validate_command(command, args, allow_app_launch=_allow_launch)
         if not is_safe:
             if interactive and not command.strip() and session_keys:
                 pass  # 走 interactive 分支处理按键注入
@@ -510,7 +525,7 @@ class ShellTool(ToolDefinition):
                 # 复合命令自动拆分（2026-08-29）：命令含 && / ; 且被安全校验拦截时，
                 # 尝试拆成单条序列逐条执行（每条仍走完整安全校验，不拆管道/重定向）。
                 # 避免"整条命令被拦 → 反思"的无效循环。
-                split_obs = await self._try_split_execute(command, args, timeout, cwd)
+                split_obs = await self._try_split_execute(command, args, timeout, cwd, allow_app_launch=_allow_launch)
                 if split_obs is not None:
                     return split_obs
                 return Observation(tool_name=self.name, success=False, output=error)
@@ -716,7 +731,7 @@ class ShellTool(ToolDefinition):
             )
 
     # ── 复合命令自动拆分（2026-08-29）──────────────────────────
-    async def _try_split_execute(self, command: str, args: list[str] | None, timeout: int, cwd: str) -> Observation | None:
+    async def _try_split_execute(self, command: str, args: list[str] | None, timeout: int, cwd: str, allow_app_launch: bool = False) -> Observation | None:
         """把被安全校验拦截的复合命令拆成单条序列逐条执行；无法安全拆分返回 None.
 
         拆分规则：
@@ -779,7 +794,7 @@ class ShellTool(ToolDefinition):
             tokens = shlex.split(p)
             if not tokens:
                 return None
-            ok, _ = _validate_command(tokens[0], tokens[1:] if len(tokens) > 1 else None)
+            ok, _ = _validate_command(tokens[0], tokens[1:] if len(tokens) > 1 else None, allow_app_launch=allow_app_launch)
             if not ok:
                 return None
 
