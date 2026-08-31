@@ -5,7 +5,7 @@
 
 两级策略（组织级覆盖用户级，对标 Codex requirements.toml 强制约束）：
 1. **组织级** /etc/scout/requirements.toml — 管理员强制，用户配置无法突破
-2. **用户级** $SCOUT_DATA_DIR/automation_policy.json — 用户自定义
+2. **用户级** ~/.scout/automation_policy.json — 用户自定义
 
 approval_policy 四档（对标 Codex default_tools_approval_mode）：
 - "auto": 只读工具直接执行，写操作按 allowlist 判断

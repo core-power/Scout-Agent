@@ -370,7 +370,7 @@ def get_plugin_manager() -> PluginManager:
     """获取全局插件管理器实例（首次创建时自动加载所有插件）"""
     global _plugin_manager
     if _plugin_manager is None:
-        # 默认插件目录: $SCOUT_DATA_DIR/plugins
+        # 默认插件目录: ~/.scout/plugins
         plugins_dir = _SCOUT_DATA_DIR / "plugins"
         _plugin_manager = PluginManager(plugins_dir)
         # 与 scout/plugins/api.py 行为一致：首次访问即加载所有插件

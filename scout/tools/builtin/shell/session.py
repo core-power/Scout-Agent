@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 
+from scout.core.resources import no_window_kwargs
 from scout.security.sandbox import _decode as decode_output  # noqa: E402
 
 logger = logging.getLogger("scout.shell_session")
@@ -51,6 +52,7 @@ class ShellSession:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=self.cwd,
+                **no_window_kwargs(),
             )
             # 丢弃启动横幅（若有）
             try:

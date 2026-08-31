@@ -1,7 +1,7 @@
 """分层指令链 — 借鉴 Codex AGENTS.md 的三级指令体系.
 
 指令发现机制（每次运行重建，无缓存）：
-1. **全局作用域**: $SCOUT_DATA_DIR/INSTRUCTIONS.override.md（若存在）否则 INSTRUCTIONS.md — 只取第一个非空
+1. **全局作用域**: ~/.scout/INSTRUCTIONS.override.md（若存在）否则 INSTRUCTIONS.md — 只取第一个非空
 2. **项目作用域**: 从项目根到当前目录，每级目录依次检查 INSTRUCTIONS.override.md → INSTRUCTIONS.md — 每级至多用一个
 3. **合并顺序**: root-first 拼接，离工作目录越近的文件越靠后出现（后出现的覆盖前面的语义）
 
@@ -71,7 +71,7 @@ class InstructionLoader:
     ):
         """
         Args:
-            global_dir: 全局指令目录（默认 $SCOUT_DATA_DIR）
+            global_dir: 全局指令目录（默认 ~/.scout）
             max_bytes: 组合大小上限
             custom_fallback_names: 自定义回退文件名（对标 Codex project_doc_fallback_filenames）
         """

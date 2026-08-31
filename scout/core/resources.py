@@ -131,6 +131,21 @@ def get_resource_manager() -> ResourceManager:
     return _resource_manager
 
 
+def no_window_kwargs() -> dict:
+    """Windows 下隐藏子进程控制台窗口的 kwargs.
+
+    GUI 程序（console=False 打包的 exe 无控制台）用 subprocess 启动控制台
+    子进程（cmd.exe / git / python / ruff）时，若不指定 CREATE_NO_WINDOW，
+    Windows 会为每个子进程新建一个可见的黑色 cmd 窗口。此函数返回
+    需要追加到 create_subprocess_exec / subprocess.run 的 kwargs。
+    """
+    if os.name == "nt":
+        import subprocess
+
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 @asynccontextmanager
 async def managed_process(*args, **kwargs) -> AsyncIterator[asyncio.subprocess.Process]:
     """托管子进程上下文管理器 — 自动清理.
@@ -140,6 +155,7 @@ async def managed_process(*args, **kwargs) -> AsyncIterator[asyncio.subprocess.P
             stdout, stderr = await process.communicate()
     """
     manager = get_resource_manager()
+    kwargs = {**no_window_kwargs(), **kwargs}
     process = await asyncio.create_subprocess_exec(*args, **kwargs)
     manager.track_process(process)
     

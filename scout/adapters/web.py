@@ -514,7 +514,7 @@ class WebAdapter:
 
         new_agent = Agent(
             llm=llm,
-            max_turns=config.max_turns,
+            max_turns=config.max_turns or 60,  # 2026-08-31：0 值兜底，防止旧配置缺省导致预算 0 步立即耗尽
             max_loop_seconds=config.max_loop_seconds,
             temperature=config.temperature,
             deep_thinking=config.deep_thinking,
@@ -2607,7 +2607,8 @@ class WebAdapter:
                         cmd += ["--branch", branch]
                     cmd += [url, tmp_dir]
                     try:
-                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45, start_new_session=True)
+                        _nowin = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45, start_new_session=True, **_nowin)
                     except subprocess.TimeoutExpired as _te:
                         try:
                             os.killpg(os.getpgid(_te.pid), signal.SIGKILL)

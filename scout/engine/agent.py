@@ -75,7 +75,7 @@ class Agent:
         system_prompt: str = "",
         tools: ToolRegistry | None = None,
         callbacks: Callbacks | None = None,
-        max_turns: int = 30,
+        max_turns: int = 60,
         max_loop_seconds: int = 600,  # 2026-08-28：回合总时长看门狗（防无限执行卡死）
         temperature: float = 0.7,
         deep_thinking: bool = True,
@@ -1237,6 +1237,35 @@ class Agent:
                             logging.getLogger(__name__).debug(
                                 "归档被剪枝消息失败", exc_info=True
                             )
+
+                # ── Checkpoint：工具执行后保存状态（每3步，与 stream 路径一致，2026-08-31）──
+                if self.checkpoint_manager and budget.current % 3 == 0:
+                    try:
+                        _ckpt_tools = []
+                        for _m in session.messages:
+                            if _m.role == Role.TOOL:
+                                _ckpt_tools.append(
+                                    {
+                                        "tool_name": _m.metadata.get("tool_name", ""),
+                                        "call_id": _m.metadata.get("call_id", ""),
+                                        "success": _m.metadata.get("success", False),
+                                    }
+                                )
+                        self.checkpoint_manager.save_checkpoint(
+                            session_id=session.id,
+                            step=budget.current,
+                            status="acting",
+                            messages=[_m.to_api_dict() for _m in session.messages],
+                            pending_tools=[],
+                            completed_tools=_ckpt_tools,
+                            budget_used=budget.current,
+                            budget_max=budget.max_turns,
+                            context_summary=f"已执行 {len(_ckpt_tools)} 个工具调用",
+                        )
+                    except Exception as _ckpt_err:
+                        logging.getLogger(__name__).warning(
+                            f"保存 checkpoint 失败: {_ckpt_err}"
+                        )
 
                 continue
 

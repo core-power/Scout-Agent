@@ -6,7 +6,7 @@ from __future__ import annotations
 class IterationBudget:
     """迭代预算追踪."""
 
-    def __init__(self, max_turns: int = 30):
+    def __init__(self, max_turns: int = 60):
         self.max_turns = max_turns
         self.current = 0
 

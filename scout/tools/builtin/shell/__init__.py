@@ -13,6 +13,9 @@
 - 跨平台输出解码（UTF-8→GBK→latin-1）
 - 路径遍历防护 + 系统目录访问拦截（SYSTEM_DIRS / ALLOWED_PATH_PREFIXES）
 - 参数注入检测（INJECTION_PATTERNS，同时覆盖 command 与 args）
+- 解释器载荷深度检查（2026-08-31）：powershell/python/cmd 的 -Command/-c 参数是任意
+  代码执行面，参数中出现"启动外部程序"载荷（Start-Process / subprocess / .exe 路径等）
+  一律拦截，防止 agent 用解释器绕过白名单启动任意 exe。
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ import shlex
 from typing import Any
 
 from scout.core.annotations import ToolAnnotations
+from scout.core.resources import no_window_kwargs
 from scout.core.types import Observation
 from scout.security.policy import ALLOWED_PATH_PREFIXES, SYSTEM_DIRS
 from scout.tools.base import ToolDefinition
@@ -209,6 +213,8 @@ DANGEROUS_ARGS = [
     r"nc\s+-[a-zA-Z]*e",      # nc -e 反向 shell
     r"ncat\s+-[a-zA-Z]*e",    # ncat -e 反向 shell
     r"socat.*\bexec\b",       # socat exec 反向 shell
+    r"start\s+.*\.exe",       # Windows start 启动可执行文件（2026-08-31：start 是白名单命令，
+                              # 但 start any.exe 会启动任意程序，仅拦 .exe，不拦文档/网页）
     # 个人版移除：python -c import os 等属正常用法，execute_code 工具已足够安全
     # r"python.*-c.*import\s+os",
     # r"python.*-c.*subprocess",
@@ -233,6 +239,58 @@ INJECTION_PATTERNS = [
     r'\\x[0-9a-fA-F]{2}',  # \x hex escape
     r'\\[0-7]{1,3}',  # \octal escape
 ]
+
+# ── 解释器载荷深度检查（2026-08-31 补强）────────────────────
+# 背景：白名单允许 powershell/python/cmd 等解释器，但其 -Command/-c 参数是任意
+# 代码执行面，可用来绕过白名单启动任意外部程序。
+# 真实案例：agent 用 powershell -Command "Start-Process 'D:\Weixin\Weixin.exe'"
+# 绕过了对直接执行 Weixin.exe 的拦截，成功启动微信。
+# 策略：解释器参数中出现"启动外部程序"载荷 → 拦截，引导用户到终端手动执行。
+# 注意：bash/sh 不做深度检查（Linux 下 bash -c "python3 x.py" 属正常开发用法，
+# 误伤面太大）；Windows 主要绕过面是 powershell/cmd/python，已全覆盖。
+EXEC_LAUNCH_BYPASS: dict[str, tuple[str, ...]] = {
+    "powershell": (
+        r"-EncodedCommand",               # base64 编码命令不可审计，一律拦截
+        r"Start-Process",
+        r"Invoke-Expression", r"\biex\b",
+        r"Invoke-Item", r"\bii\b",
+        r"System\.Diagnostics\.Process",
+        r"WScript\.Shell",
+        r"Shell\.Application",
+        r"['\"][^'\"]+\.exe['\"]",        # 引号内 .exe 路径（启动目标）
+    ),
+    "pwsh": (
+        r"-EncodedCommand",
+        r"Start-Process",
+        r"Invoke-Expression", r"\biex\b",
+        r"Invoke-Item", r"\bii\b",
+        r"System\.Diagnostics\.Process",
+        r"WScript\.Shell",
+        r"Shell\.Application",
+        r"['\"][^'\"]+\.exe['\"]",
+    ),
+    "cmd": (
+        r"\bstart\b",                     # cmd 内建 start 启动程序
+        r"powershell",                    # cmd 里再调 powershell 通常是绕过
+        r"['\"][^'\"]+\.exe['\"]",        # 引号内 .exe 路径
+    ),
+    "python": (
+        r"\bimport\s+subprocess\b",
+        r"\bos\.system\b",
+        r"\bos\.startfile\b",
+        r"\bPopen\b",
+        r"\beval\s*\(",
+        r"\bexec\s*\(",
+    ),
+    "python3": (
+        r"\bimport\s+subprocess\b",
+        r"\bos\.system\b",
+        r"\bos\.startfile\b",
+        r"\bPopen\b",
+        r"\beval\s*\(",
+        r"\bexec\s*\(",
+    ),
+}
 
 
 def _validate_command(command: str, args: list[str] | None = None) -> tuple[bool, str]:
@@ -267,6 +325,20 @@ def _validate_command(command: str, args: list[str] | None = None) -> tuple[bool
     base_cmd = os.path.basename(parts[0])
     if base_cmd not in SAFE_COMMANDS:
         return False, f"安全拦截: 命令 '{base_cmd}' 不在白名单中。允许: {', '.join(sorted(SAFE_COMMANDS)[:20])}..."
+
+    # 2.5 解释器载荷深度检查（2026-08-31）：powershell/python/cmd 的 -Command/-c
+    # 参数是任意代码执行面，白名单允许解释器本身，但参数中"启动外部程序"的载荷
+    # 必须拦截——否则 agent 可用 powershell -Command "Start-Process 'x.exe'" 绕过白名单。
+    if base_cmd in EXEC_LAUNCH_BYPASS:
+        # 去掉命令名本身（兼容 command 字段直接带参的情况，如 "powershell -Command ..."）
+        _payload = full_cmd.replace(base_cmd, "", 1).lstrip()
+        for _pat in EXEC_LAUNCH_BYPASS[base_cmd]:
+            if re.search(_pat, _payload, re.IGNORECASE):
+                return False, (
+                    "安全拦截: 检测到通过解释器启动外部程序的绕过载荷"
+                    f"（{base_cmd} 参数含 Start-Process / subprocess / .exe 路径等，"
+                    "这类操作应在你自己的终端里手动执行）。"
+                )
 
     # 3. 危险参数模式检测
     for pattern in DANGEROUS_ARGS:
@@ -588,6 +660,7 @@ class ShellTool(ToolDefinition):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=work_dir,
+                **no_window_kwargs(),
             )
 
             output_lines = []
@@ -743,6 +816,7 @@ class ShellTool(ToolDefinition):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=work_dir,
+                **no_window_kwargs(),
             )
             output_lines = []
             try:

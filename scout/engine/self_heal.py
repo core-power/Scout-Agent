@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from scout.core.resources import no_window_kwargs
+
 logger = logging.getLogger("scout.self_heal")
 
 
@@ -59,6 +61,7 @@ class VerifyPipeline:
                 cwd=self.work_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **no_window_kwargs(),
             )
             stdout, stderr = await proc.communicate()
             
@@ -99,6 +102,7 @@ class VerifyPipeline:
                 cwd=self.work_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **no_window_kwargs(),
             )
             stdout, stderr = await proc.communicate()
             

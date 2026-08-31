@@ -55,7 +55,7 @@ INITIAL_CONFIG = {
     "vision_provider": "",
     "image_provider": "",
     "embedding_provider": "",
-    "max_turns": 30,
+    "max_turns": 60,  # 2026-08-31：单回合步数上限，由 30 提升到 60（长时间高复杂度任务需要更多轮次）
     "max_loop_seconds": 600,  # 2026-08-28：对话回合总时长上限（秒），超时强制收尾，防止卡死
     "temperature": 0.7,
     "system_prompt": "",  # 已弃用（2026-08-25）：禁止自定义，统一内置模板，仅保留字段兼容旧配置
