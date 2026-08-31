@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import pkgutil
+import sys
 import time
 from typing import Any
 
@@ -124,6 +126,9 @@ class ToolRegistry:
         # 条件禁用过滤：工具可定义 is_enabled() 返回 False，表示当前未启用
         # （如未配置搜索引擎时 web_search 不暴露给 LLM）
         names = [n for n in names if cls._tool_is_enabled(cls._tools[n])]
+        # 平台过滤（2026-08-30）：工具声明 platforms 且不含当前系统时，
+        # 不暴露给 LLM —— 保证「不同的系统只看到适合该系统的工具」。
+        names = [n for n in names if cls._tool_supported_on_platform(cls._tools[n])]
         schemas = [cls._tools[name].to_schema() for name in names]
         if compact:
             for s in schemas:
@@ -140,6 +145,17 @@ class ToolRegistry:
             except Exception:
                 return True
         return True
+
+    @staticmethod
+    def _tool_supported_on_platform(tool: ToolDefinition) -> bool:
+        """平台过滤 — 工具声明 platforms 且不含当前系统时不暴露（2026-08-30）."""
+        platforms = getattr(tool, "platforms", None)
+        if not platforms:
+            return True  # None = 全平台可用
+        current = "windows" if os.name == "nt" else (
+            "darwin" if sys.platform == "darwin" else "linux"
+        )
+        return current in platforms
 
     @classmethod
     async def execute(cls, call: ToolCall | Action, **kwargs) -> Observation:

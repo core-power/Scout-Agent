@@ -44,16 +44,20 @@ def test_load_env_files_only_fills_missing(monkeypatch, tmp_path: Path):
     assert "注释行" not in os.environ
 
 
-def test_data_dir_follows_drive_root(monkeypatch, tmp_path: Path):
-    """Windows: 数据目录 = 程序所在盘符根目录/.scout（如 D:\\.scout）."""
-    monkeypatch.setattr(launcher, "app_dir", lambda: tmp_path)
-    d = launcher.data_dir()
+def test_data_dir_prefers_appdata(monkeypatch, tmp_path: Path):
+    """Windows: 数据目录 = %APPDATA%\\Scout（2026-08-31 修复"更新丢配置"）."""
     if os.name == "nt":
-        anchor = Path(launcher.__file__).resolve().anchor
-        assert d == Path(anchor) / ".scout", f"应为盘符根目录: {anchor}/.scout, 实际 {d}"
+        monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+        d = launcher.data_dir()
+        assert d == tmp_path / "appdata" / "Scout", f"应为 %APPDATA%\\Scout, 实际 {d}"
+        assert d.is_dir()
+        # 写探针应被清理
+        assert not (d / ".write_probe").exists()
     else:
+        monkeypatch.setattr(launcher, "app_dir", lambda: tmp_path)
+        d = launcher.data_dir()
         assert d == tmp_path / "data"
-    assert d.is_dir()
+        assert d.is_dir()
 
 
 def test_data_dir_fallback_when_unwritable(monkeypatch, tmp_path: Path):

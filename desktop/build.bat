@@ -2,7 +2,7 @@
 rem ============================================================
 rem  Scout Agent 绿色版桌面程序 — Windows 一键构建脚本
 rem  需先安装 Python 3.11+（勾选 Add to PATH）
-rem  产物: dist\ScoutPortable\ 整个文件夹拷走即用（绿色免安装）
+rem  产物: dist\ScoutDesktop\ 整个文件夹拷走即用（绿色免安装）
 rem ============================================================
 setlocal
 cd /d "%~dp0.."
@@ -25,16 +25,16 @@ echo [4/5] PyInstaller 打包（约 1-3 分钟）...
 pyinstaller desktop\scout_desktop.spec --noconfirm --clean || (echo [x] 打包失败 & pause & exit /b 1)
 
 echo [5/5] 校验产物 ...
-if exist "dist\ScoutPortable\Scout.exe" (
+if exist "dist\ScoutDesktop\ScoutAgent.exe" (
     echo.
     echo  ============================================
     echo   构建成功！
-    echo   绿色版位置: dist\ScoutPortable\
-    echo   用法: 双击 Scout.exe 启动；整个文件夹拷到任意
+    echo   绿色版位置: dist\ScoutDesktop\
+    echo   用法: 双击 ScoutAgent.exe 启动；整个文件夹拷到任意
     echo         Windows 10/11 机器即可运行，免安装免注册。
     echo   首次使用: 打开界面后到 设置 页配置 LLM API Key。
     echo  ============================================
 ) else (
-    echo [x] 未找到产物 Scout.exe，请检查上方报错
+    echo [x] 未找到产物 ScoutAgent.exe，请检查上方报错
 )
 pause

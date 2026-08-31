@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller 打包配置 — Scout Agent 绿色版桌面程序.
 
-产物: dist/ScoutPortable/Scout.exe + 依赖文件夹（绿色便携，免安装）。
+产物: dist/ScoutDesktop/ScoutAgent.exe + 依赖文件夹（绿色便携，免安装）。
 
 打包前需先生成图标:
     python tools/gen_pwa_icons.py
@@ -136,7 +136,7 @@ exe = EXE(
     pyz,
     a.scripts,
     exclude_binaries=True,
-    name="Scout",
+    name="ScoutAgent",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -156,5 +156,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="ScoutPortable",
+    name="ScoutDesktop",
 )
