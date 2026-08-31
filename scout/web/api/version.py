@@ -32,22 +32,26 @@ def get_git_info() -> dict:
     """获取 Git 信息（桌面版无 git 时返回 unknown）"""
     try:
         base = Path(__file__).parent.parent.parent.parent
+        _nowin = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
         branch = subprocess.check_output(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=base,
             stderr=subprocess.DEVNULL,
+            **_nowin,
         ).decode().strip()
 
         commit = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
             cwd=base,
             stderr=subprocess.DEVNULL,
+            **_nowin,
         ).decode().strip()
 
         commit_time = subprocess.check_output(
             ["git", "log", "-1", "--format=%cd", "--date=iso"],
             cwd=base,
             stderr=subprocess.DEVNULL,
+            **_nowin,
         ).decode().strip()
 
         return {

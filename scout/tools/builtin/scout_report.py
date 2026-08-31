@@ -1,11 +1,11 @@
 """自我报告工具 — 汇总 Scout 自身运行状况（对话/自动化/技能/记忆）.
 
 数据全部来自本地存储（零外部依赖）：
-- $SCOUT_DATA_DIR/observability.db: 对话轮次、成功率、token、成本、热门工具
-- $SCOUT_DATA_DIR/runs.db: 自动化任务运行与成功率
-- $SCOUT_DATA_DIR/introspection_log.json: 自省动作（技能淘汰/记忆合并）
-- $SCOUT_DATA_DIR/skills.db (VectorSkillStore): 沉淀技能健康度
-- $SCOUT_DATA_DIR/memory.db: 记忆总量与当日新增
+- ~/.scout/observability.db: 对话轮次、成功率、token、成本、热门工具
+- ~/.scout/runs.db: 自动化任务运行与成功率
+- ~/.scout/introspection_log.json: 自省动作（技能淘汰/记忆合并）
+- ~/.scout/skills.db (VectorSkillStore): 沉淀技能健康度
+- ~/.scout/memory.db: 记忆总量与当日新增
 
 配合 scheduler 工具的 ai_task 可实现定时自我报告，例如：
 "每天早上9点调用 scout_report 生成自我报告并发送给我"

@@ -4,7 +4,7 @@
 1. 订阅 EventBus 的 notification 事件（已有 WebSocket 广播，此模块补足 IM/邮件）
 2. 根据通知偏好（scout/notify/preferences.json）决定发送哪些渠道
 3. 支持按类型（type）过滤、按级别（level）过滤、去重防打扰（dedupe window）
-4. 推送历史持久化到 $SCOUT_DATA_DIR/notify_history.jsonl（JSON Lines，便于追加审计）
+4. 推送历史持久化到 ~/.scout/notify_history.jsonl（JSON Lines，便于追加审计）
 5. 暴露 Web API：查看偏好、更新偏好、查看推送历史、手动测试推送
 
 渠道适配：

@@ -13,7 +13,7 @@
   "文件变化 → Agent 执行" 的自动化闭环
 - 去抖：同一文件在 debounce 窗口内只发一次事件
 
-配置持久化在 $SCOUT_DATA_DIR/watchers.json，可管理多个监听目录。
+配置持久化在 ~/.scout/watchers.json，可管理多个监听目录。
 """
 
 from __future__ import annotations

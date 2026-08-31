@@ -70,7 +70,7 @@ class Checkpoint:
             pending_tools=data.get("pending_tools", []),
             completed_tools=data.get("completed_tools", []),
             budget_used=data.get("budget_used", 0),
-            budget_max=data.get("budget_max", 30),
+            budget_max=data.get("budget_max", 60),
             context_summary=data.get("context_summary", ""),
             created_at=datetime.fromisoformat(data["created_at"]),
             metadata=data.get("metadata", {}),
@@ -117,7 +117,7 @@ class CheckpointManager:
         pending_tools: list[dict] | None = None,
         completed_tools: list[dict] | None = None,
         budget_used: int = 0,
-        budget_max: int = 30,
+        budget_max: int = 60,
         context_summary: str = "",
         metadata: dict | None = None,
     ) -> Checkpoint:

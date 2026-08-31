@@ -1,6 +1,6 @@
 """Memories 治理 — 借鉴 Codex Memories 的配置化治理.
 
-配置键（$SCOUT_DATA_DIR/memories.json，对标 Codex config.toml 的 memories.* 段）：
+配置键（~/.scout/memories.json，对标 Codex config.toml 的 memories.* 段）：
 - generate_memories: 任务结束后是否允许生成记忆（默认 true）
 - use_memories: 是否将记忆注入未来会话（默认 true）
 - background_only: 仅在空闲时后台生成，不打断进行中的任务（默认 true）
@@ -53,7 +53,7 @@ class MemoriesConfig:
 
     @classmethod
     def load(cls) -> "MemoriesConfig":
-        """从 $SCOUT_DATA_DIR/memories.json 加载，缺失项用默认值补齐."""
+        """从 ~/.scout/memories.json 加载，缺失项用默认值补齐."""
         data = dict(_DEFAULTS)
         try:
             if _CONFIG_PATH.exists():

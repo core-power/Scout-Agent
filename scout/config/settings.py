@@ -26,13 +26,13 @@ def _resolve_data_dir() -> Path:
 
     优先级:
     1. 环境变量 SCOUT_DATA_DIR (如果设置)
-    2. $SCOUT_DATA_DIR/ (默认)
+    2. ~/.scout/ (默认)
     """
     env_dir = os.getenv("SCOUT_DATA_DIR")
     if env_dir:
         return Path(env_dir).resolve()
     
-    # 默认：$SCOUT_DATA_DIR/
+    # 默认：~/.scout/
     return get_data_dir()
 
 
