@@ -89,7 +89,14 @@ INITIAL_CONFIG = {
     "search_engine": "",
     "search_engines": [],
     "auth_enabled": False,  # 登录认证开关（默认关闭；开启后访问 Web 界面需登录）
+    # 允许 shell 启动本地应用（QQ/微信等 exe）。Windows 个人版默认开启，
+    # 放行 start/Start-Process 等启动载荷（仍保留 -EncodedCommand 编码命令拦截）
+    "allow_app_launch": False,
 }
+
+# Windows 个人版默认允许启动本地应用（QQ/微信等）；其他平台保持保守默认关闭
+if os.name == "nt":
+    INITIAL_CONFIG["allow_app_launch"] = True
 
 
 class LLMConfig(BaseModel):
@@ -129,6 +136,7 @@ class LLMConfig(BaseModel):
     request_timeout: int = 0
     sandbox_mode: str = "off"  # off / non-main / all
     auto_approve: bool = True  # 自动审批工具执行
+    allow_app_launch: bool = False  # 允许 shell 启动本地应用（QQ/微信等 exe）；Windows 个人版默认开启
     language: str = "auto"  # auto=跟随用户 / zh=中文 / en=英文
     restore_last_session: bool = True  # 恢复上次会话
     restore_last_model: bool = True  # 恢复上次模型

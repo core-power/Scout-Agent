@@ -895,6 +895,7 @@
                 <!-- ── Tab: Security ── -->
                 <div id="panel-security" class="settings-panel hidden space-y-5">
                     <label class="flex items-center gap-3 cursor-pointer"><input type="checkbox" id="cfg-auto-approve" checked class="w-4 h-4 rounded accent-scout-500"><div><span class="text-sm text-slate-300" data-i18n="自动审批工具执行">自动审批工具执行</span><p class="text-xs text-slate-600">关闭后危险操作需要人工确认</p></div></label>
+                    <label class="flex items-center gap-3 cursor-pointer"><input type="checkbox" id="cfg-allow-app-launch" checked class="w-4 h-4 rounded accent-scout-500"><div><span class="text-sm text-slate-300" data-i18n="允许启动本地应用">允许启动本地应用</span><p class="text-xs text-slate-600">放行 start / Start-Process 启动 QQ、微信等 exe 程序（仍拦截编码命令与危险参数）</p></div></label>
                     <div><label class="block text-sm font-medium text-slate-300 mb-2" data-i18n="沙箱模式">沙箱模式</label><select id="cfg-sandbox-mode" class="w-full px-3 py-2.5 rounded-lg bg-[#1a1a1a] border border-white/10 text-slate-200 text-sm focus:outline-none focus:border-scout-500/50"><option value="off">关闭（直接执行）</option><option value="non-main">非主会话沙箱</option><option value="all">全部沙箱（Docker 隔离）</option></select><p id="sandbox-docker-status" class="text-xs mt-1.5 text-slate-500"></p></div>
                     <div><label class="block text-sm font-medium text-slate-300 mb-2" data-i18n="危险命令检测">危险命令检测（13 种模式）</label><div class="bg-[#1a1a1a] border border-white/10 rounded-lg p-3 text-xs text-slate-400 font-mono space-y-1"><div>✅ rm -rf / → 拦截</div><div>✅ dd if= → 拦截</div><div>✅ mkfs → 拦截</div><div>✅ curl | sh → 拦截</div><div class="text-slate-600">... 共 13 种危险模式</div></div></div>
                     <div><label class="block text-sm font-medium text-slate-300 mb-2" data-i18n="DM 配对授权">DM 配对授权</label><label class="flex items-center gap-3 cursor-pointer"><input type="checkbox" id="cfg-pairing" class="w-4 h-4 rounded accent-scout-500"><div><span class="text-sm text-slate-300">启用配对码授权</span><p class="text-xs text-slate-600">未知用户需配对码审批后才能使用</p></div></label></div>
@@ -5744,6 +5745,10 @@ async function loadConfig() {
         const restoreModelCheckbox = document.getElementById('cfg-restore-model');
         if (restoreModelCheckbox) restoreModelCheckbox.checked = c.restore_last_model || false;
 
+        // 同步"允许启动本地应用"开关（Windows 个人版默认开启，配置缺省时按默认 true 处理）
+        const appLaunchCheckbox = document.getElementById('cfg-allow-app-launch');
+        if (appLaunchCheckbox) appLaunchCheckbox.checked = c.allow_app_launch !== false;
+
         // 同步登录认证开关
         const authEnabledInput = document.getElementById('cfg-auth-enabled');
         if (authEnabledInput) authEnabledInput.checked = c.auth_enabled === true;
@@ -5853,6 +5858,7 @@ async function saveConfig() {
         restore_last_model: document.getElementById('cfg-restore-model').checked,
         sandbox_mode: document.getElementById('cfg-sandbox-mode').value || 'off',
         auto_approve: document.getElementById('cfg-auto-approve').checked,
+        allow_app_launch: (document.getElementById('cfg-allow-app-launch') || {}).checked,
         language: (document.getElementById('cfg-language') || {}).value || 'auto',
         // 多搜索引擎源：search_engines 全量列表；search_engine 保留兼容（第一个 searxng 源的 URL）
         search_engines: searchEngines,

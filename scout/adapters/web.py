@@ -844,6 +844,8 @@ class WebAdapter:
                 config.sandbox_mode = req["sandbox_mode"]
             if "auto_approve" in req:
                 config.auto_approve = bool(req["auto_approve"])
+            if "allow_app_launch" in req:
+                config.allow_app_launch = bool(req["allow_app_launch"])
             if "language" in req:
                 lang = str(req["language"]).strip().lower()
                 if lang in ("auto", "zh", "en"):
