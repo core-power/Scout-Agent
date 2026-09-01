@@ -795,8 +795,28 @@ class SessionStore:
                     ),
                 )
 
-            # 全量重写消息：删除旧消息后按列表顺序插入（seq 连续重排）。
-            # 放在同一事务内执行，确保「删除+重插」原子提交，避免进程中断时消息被部分删除。
+            # 全量重写消息：删除旧消息前，先把「将被移除的旧消息」归档到 messages_archive。
+            # 原因：session.messages 是 agent 内存态，编辑截断/上下文治理/恢复不完整时
+            # 可能只包含部分消息；若不归档直接 DELETE，未被包含的历史会被永久删除且无法找回。
+            old_rows = await db.fetchall(
+                "SELECT * FROM messages WHERE session_id = $1 ORDER BY seq ASC",
+                (session.id,),
+            )
+            if old_rows:
+                new_sigs = set()
+                for m in session.messages:
+                    role = m.role.value if hasattr(m.role, "value") else str(m.role)
+                    new_sigs.add((role, m.content or ""))
+                removed = [
+                    r for r in old_rows
+                    if (r["role"], r["content"] or "") not in new_sigs
+                ]
+                if removed:
+                    await self._archive_raw_rows(
+                        db, session.id, removed,
+                        reason="save_sync", now=now,
+                    )
+
             rows = []
             for seq, m in enumerate(session.messages):
                 meta_json = json.dumps(m.metadata or {}, ensure_ascii=False)
@@ -982,6 +1002,35 @@ class SessionStore:
                     m.role.value if hasattr(m.role, "value") else str(m.role),
                     m.content or "", m.sender or "", m.source or "",
                     m.reasoning or "", meta_json, ts, idx, now, reason,
+                ),
+            )
+            archived += 1
+        return archived
+
+    async def _archive_raw_rows(
+        self, db: StorageBackend, session_id: str,
+        rows: list[dict], reason: str, now: str,
+    ) -> int:
+        """把已从 messages 表查出的旧行归档到 messages_archive（去重后写入）."""
+        archived = 0
+        for r in rows:
+            # 去重：同一会话 + role + content 已归档过则跳过，避免重复归档
+            dup = await db.fetchone(
+                "SELECT 1 FROM messages_archive WHERE session_id = $1 AND role = $2 "
+                "AND content = $3 LIMIT 1",
+                (session_id, r["role"], r["content"] or ""),
+            )
+            if dup:
+                continue
+            await db.execute(
+                "INSERT INTO messages_archive "
+                "(session_id, role, content, sender, source, reasoning, metadata, timestamp, seq, archived_at, archive_reason) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                (
+                    session_id,
+                    r["role"], r["content"] or "", r["sender"] or "", r["source"] or "",
+                    r["reasoning"] or "", r["metadata"] or "{}", r["timestamp"] or "",
+                    r["seq"] or 0, now, reason,
                 ),
             )
             archived += 1
