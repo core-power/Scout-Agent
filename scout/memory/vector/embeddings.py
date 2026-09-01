@@ -197,17 +197,24 @@ class APIEmbedding(EmbeddingProvider):
                 uncached_indices.append(i)
         
         if uncached_texts:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    f"{self.base_url}/embeddings",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={"input": uncached_texts, "model": self.model},
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        f"{self.base_url}/embeddings",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={"input": uncached_texts, "model": self.model},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+            except httpx.HTTPStatusError as e:
+                # ★ 2026-09-01：带上响应体，否则只剩 "400 Bad Request" 无法定位
+                # （常见原因：模型名不存在 / key 失效 / 输入超限）
+                raise RuntimeError(
+                    f"Embedding API {e.response.status_code}: {e.response.text[:300]}"
+                ) from e
             
             for j, idx in enumerate(uncached_indices):
                 embedding = np.array(data["data"][j]["embedding"], dtype=np.float32)

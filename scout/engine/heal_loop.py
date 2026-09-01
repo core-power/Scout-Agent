@@ -105,6 +105,13 @@ class SelfHealLoop:
                 start = content.find("{")
                 end = content.rfind("}") + 1
                 fixed_args = json.loads(content[start:end])
+                # ★ 2026-09-01 修复：LLM 偶发输出非对象 JSON（字符串/数组/嵌套引号），
+                # 若不校验类型，非 dict 参数会存入 session.metadata.tool_calls，
+                # 后续每次请求 json.dumps 双重编码 → DashScope 400
+                # "Can only get item pairs from a mapping"，整会话被永久毒化。
+                if not isinstance(fixed_args, dict):
+                    logger.warning(f"自修复生成失败: LLM 输出的 JSON 不是对象 (type={type(fixed_args).__name__})")
+                    return None
 
                 return ToolCall(
                     name=original_tool_call.name,

@@ -206,13 +206,16 @@ class WebAdapter:
             self._channel_manager = ChannelManager.from_config(saved_config)
 
         # 启动时根据已保存配置重建 Agent（加载智能路由等设置）
-        if agent is not None:
-            try:
-                config = self.config_mgr.load()
-                if config.api_key:
-                    self._rebuild_agent(config)
-            except Exception as e:
-                logger.warning(f"Failed to load config and rebuild agent: {e}")
+        # ★ 2026-09-01 修复：此前 `if agent is not None:` 导致绿色版 launcher
+        # （create_web_app() 不传 agent）启动后 self._agent 恒为 None ——
+        # 配置文件里明明有 API Key 也无法对话，用户每次重启/更新后都必须
+        # 到设置里点一次"保存"才能使用。现改为无条件加载配置，有 key 即重建。
+        try:
+            config = self.config_mgr.load()
+            if config.api_key:
+                self._rebuild_agent(config)
+        except Exception as e:
+            logger.warning(f"Failed to load config and rebuild agent: {e}")
 
         # ★ 断裂点修复 2: WebSocket 连接管理 + EventBus 订阅
         self._active_ws_connections: set = set()
