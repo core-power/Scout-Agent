@@ -406,6 +406,299 @@ EXEC_LAUNCH_BYPASS: dict[str, tuple[str, ...]] = {
 }
 
 
+# ★ 2026-09-01：已知 Windows 应用 → 常见安装路径模板。
+# 当 LLM 提交裸名 exe 被白名单拦截时,用本表解析真实绝对路径并给出正确启动姿势,
+# 避免"打开腾讯会议/微信/钉钉报错"体验。allow_app_launch=True(Windows 个人版默认)
+# 时 execute 层会自动重写为 `start "" "绝对路径"` 分离启动,保证 LLM 一次成功。
+# 模板变量: {PF} {PF32} {LOCALAPPDATA} {APPDATA} {USERPROFILE} {DRIVE}
+#   {DRIVE} 展开为所有文件系统盘根(C:\ D:\ E:\ ...),适配非标准安装路径。
+KNOWN_APP_PATHS: dict[str, tuple[str, tuple[str, ...]]] = {
+    # exe basename(小写) -> (应用显示名, (候选目录模板, ...))
+    "wemeetapp.exe": ("腾讯会议", (
+        r"{PF}\tencent\WeMeet", r"{PF32}\Tencent\WeMeet",
+        r"{DRIVE}\tencent_meeting\WeMeet", r"{DRIVE}\tengxunhuiyi\WeMeet",
+        r"{DRIVE}\Tencent\WeMeet", r"{APPDATA}\Tencent\WeMeet",
+    )),
+    "wemeet.exe": ("腾讯会议", (
+        r"{PF}\tencent\WeMeet", r"{PF32}\Tencent\WeMeet",
+        r"{DRIVE}\tencent_meeting\WeMeet", r"{DRIVE}\tengxunhuiyi\WeMeet",
+        r"{DRIVE}\Tencent\WeMeet", r"{APPDATA}\Tencent\WeMeet",
+    )),
+    "wechat.exe": ("微信", (
+        r"{PF}\Tencent\WeChat", r"{PF32}\Tencent\WeChat",
+        r"{DRIVE}\WeChat", r"{DRIVE}\Program Files\Tencent\WeChat",
+        r"{LOCALAPPDATA}\Programs\Tencent\WeChat", r"{APPDATA}\Tencent\WeChat",
+    )),
+    "weixin.exe": ("微信", (
+        r"{PF}\Tencent\Weixin", r"{PF32}\Tencent\Weixin",
+        r"{DRIVE}\Weixin", r"{LOCALAPPDATA}\Tencent\Weixin",
+    )),
+    "wxwork.exe": ("企业微信", (
+        r"{PF32}\Tencent\WXWork", r"{PF}\Tencent\WXWork",
+        r"{DRIVE}\WXWork", r"{APPDATA}\Tencent\WXWork",
+    )),
+    "dingtalk.exe": ("钉钉", (
+        r"{PF32}\DingDing", r"{PF}\DingDing",
+        r"{LOCALAPPDATA}\DingTalk", r"{LOCALAPPDATA}\Programs\DingTalk",
+        r"{DRIVE}\DingDing", r"{DRIVE}\DingTalk",
+    )),
+    "feishu.exe": ("飞书", (
+        r"{PF}\Feishu", r"{PF32}\Feishu",
+        r"{LOCALAPPDATA}\Feishu", r"{LOCALAPPDATA}\Programs\Feishu",
+        r"{DRIVE}\Feishu", r"{DRIVE}\Lark",
+    )),
+    "lark.exe": ("飞书(Lark)", (
+        r"{PF}\Lark", r"{LOCALAPPDATA}\Lark", r"{DRIVE}\Lark",
+    )),
+    "qq.exe": ("QQ", (
+        r"{PF32}\Tencent\QQ", r"{PF}\Tencent\QQ",
+        r"{DRIVE}\QQ", r"{DRIVE}\Program Files\Tencent\QQ",
+    )),
+    "tim.exe": ("TIM", (
+        r"{PF32}\Tencent\TIM", r"{PF}\Tencent\TIM",
+    )),
+    "chrome.exe": ("Google Chrome", (
+        r"{PF}\Google\Chrome\Application", r"{PF32}\Google\Chrome\Application",
+        r"{LOCALAPPDATA}\Google\Chrome\Application",
+    )),
+    "msedge.exe": ("Microsoft Edge", (
+        r"{PF32}\Microsoft\Edge\Application", r"{PF}\Microsoft\Edge\Application",
+    )),
+    "firefox.exe": ("Mozilla Firefox", (
+        r"{PF}\Mozilla Firefox", r"{PF32}\Mozilla Firefox",
+    )),
+    "code.exe": ("Visual Studio Code", (
+        r"{LOCALAPPDATA}\Programs\Microsoft VS Code", r"{PF}\Microsoft VS Code",
+    )),
+    "winword.exe": ("Microsoft Word", (
+        r"{PF}\Microsoft Office\root\Office16", r"{PF32}\Microsoft Office\root\Office16",
+        r"{PF}\Microsoft Office\Office16",
+    )),
+    "excel.exe": ("Microsoft Excel", (
+        r"{PF}\Microsoft Office\root\Office16", r"{PF32}\Microsoft Office\root\Office16",
+        r"{PF}\Microsoft Office\Office16",
+    )),
+    "powerpnt.exe": ("Microsoft PowerPoint", (
+        r"{PF}\Microsoft Office\root\Office16", r"{PF32}\Microsoft Office\root\Office16",
+        r"{PF}\Microsoft Office\Office16",
+    )),
+    "wps.exe": ("WPS Office", (
+        r"{PF}\Kingsoft\WPS Office", r"{PF32}\Kingsoft\WPS Office",
+        r"{DRIVE}\Kingsoft\WPS Office",
+    )),
+    "et.exe": ("WPS 表格", (
+        r"{PF}\Kingsoft\WPS Office", r"{PF32}\Kingsoft\WPS Office",
+        r"{DRIVE}\Kingsoft\WPS Office",
+    )),
+    "wpp.exe": ("WPS 演示", (
+        r"{PF}\Kingsoft\WPS Office", r"{PF32}\Kingsoft\WPS Office",
+        r"{DRIVE}\Kingsoft\WPS Office",
+    )),
+    "cloudmusic.exe": ("网易云音乐", (
+        r"{LOCALAPPDATA}\Netease\CloudMusic", r"{DRIVE}\Netease\CloudMusic",
+    )),
+    "qqmusic.exe": ("QQ音乐", (
+        r"{PF32}\Tencent\QQMusic", r"{PF}\Tencent\QQMusic",
+    )),
+    "potplayermini64.exe": ("PotPlayer", (
+        r"{DRIVE}\PotPlayer", r"{PF}\DAUM\PotPlayer",
+    )),
+    "potplayermini.exe": ("PotPlayer", (
+        r"{DRIVE}\PotPlayer", r"{PF}\DAUM\PotPlayer",
+    )),
+    "vlc.exe": ("VLC 播放器", (r"{PF}\VideoLAN\VLC", r"{PF32}\VideoLAN\VLC")),
+    "7zfm.exe": ("7-Zip 文件管理器", (r"{PF}\7-Zip", r"{PF32}\7-Zip")),
+    "winrar.exe": ("WinRAR", (r"{PF}\WinRAR", r"{PF32}\WinRAR")),
+    "steam.exe": ("Steam", (
+        r"{PF32}\Steam", r"{PF}\Steam", r"{DRIVE}\Steam",
+    )),
+    "baidunetdisk.exe": ("百度网盘", (
+        r"{PF}\Baidu\BaiduNetdisk", r"{LOCALAPPDATA}\Baidu\BaiduNetdisk",
+        r"{DRIVE}\BaiduNetdisk",
+    )),
+    "thunder.exe": ("迅雷", (
+        r"{PF}\Thunder Network\Thunder", r"{DRIVE}\Thunder Network\Thunder",
+    )),
+    "sunloginclient.exe": ("向日葵远程控制", (
+        r"{PF}\Oray\SunLogin", r"{PF32}\Oray\SunLogin",
+    )),
+    "todesk.exe": ("ToDesk", (
+        r"{PF}\ToDesk", r"{DRIVE}\ToDesk", r"{LOCALAPPDATA}\Programs\ToDesk",
+    )),
+    "typora.exe": ("Typora", (
+        r"{LOCALAPPDATA}\Programs\Typora", r"{PF}\Typora",
+    )),
+    "obsidian.exe": ("Obsidian", (
+        r"{LOCALAPPDATA}\Obsidian", r"{LOCALAPPDATA}\Programs\Obsidian",
+    )),
+    "wechatdevtools.exe": ("微信开发者工具", (
+        r"{LOCALAPPDATA}\微信开发者工具", r"{LOCALAPPDATA}\Programs\微信开发者工具",
+    )),
+    "notepad++.exe": ("Notepad++", (r"{PF}\Notepad++", r"{PF32}\Notepad++")),
+    "everything.exe": ("Everything", (r"{PF}\Everything", r"{PF32}\Everything")),
+    "git-bash.exe": ("Git Bash", (r"{PF}\Git", r"{PF32}\Git")),
+    "anki.exe": ("Anki", (r"{LOCALAPPDATA}\Programs\Anki",)),
+}
+
+# 应用目录模板变量展开值（环境变量缺失时回退系统默认路径）
+_APP_DIR_ENV = (
+    ("{PF32}", lambda: os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"),
+    ("{PF}", lambda: os.environ.get("ProgramFiles") or r"C:\Program Files"),
+    ("{LOCALAPPDATA}", lambda: os.environ.get("LOCALAPPDATA") or ""),
+    ("{APPDATA}", lambda: os.environ.get("APPDATA") or ""),
+    ("{USERPROFILE}", lambda: os.environ.get("USERPROFILE") or ""),
+)
+
+_KNOWN_APP_CACHE: dict[str, str | None] = {}
+
+
+def _app_drives() -> list[str]:
+    """所有文件系统盘根（去重），优先 C 盘外的数据盘."""
+    import string as _string
+
+    roots: list[str] = []
+    seen: set[str] = set()
+    for _letter in _string.ascii_uppercase:
+        root = f"{_letter}:\\"
+        if os.path.exists(root) and root not in seen:
+            seen.add(root)
+            roots.append(root)
+    if not roots:
+        roots = ["C:\\"]
+    return roots
+
+
+def _expand_app_dirs(templates: tuple[str, ...]) -> list[str]:
+    """展开路径模板 → 候选目录列表.
+
+    {DRIVE} 前缀模板展开为每个盘根；其余 {VAR} 就地替换为环境变量值；
+    目录必须真实存在才保留。
+    """
+    dirs: list[str] = []
+    for tpl in templates:
+        if tpl.startswith("{DRIVE}\\"):
+            rel = tpl[len("{DRIVE}\\"):]
+            for root in _app_drives():
+                cand = os.path.join(root, rel)
+                if os.path.isdir(cand):
+                    dirs.append(cand)
+            continue
+        expanded = tpl
+        for key, getter in _APP_DIR_ENV:
+            val = getter()
+            if val:
+                expanded = expanded.replace(key, val)
+        if expanded and os.path.isdir(expanded):
+            dirs.append(expanded)
+    seen: set[str] = set()
+    out: list[str] = []
+    for d in dirs:
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def _search_common_roots(exe_name: str) -> str | None:
+    """在常见安装根目录下做有限深度搜索（≤3 层、限制目录数），返回首个匹配的绝对路径.
+
+    作为 KNOWN_APP_PATHS 模板未命中的兜底（非标准安装、自定义盘符等场景）。
+    """
+    roots: list[str] = []
+    for _key, getter in _APP_DIR_ENV:
+        val = getter()
+        if val and os.path.isdir(val):
+            roots.append(val)
+    roots.append(os.path.expanduser("~"))
+    for drv in _app_drives():
+        roots.append(drv)
+
+    _name_l = exe_name.lower()
+    _max_dirs = 6000  # 每根最多遍历目录数，避免全盘扫描卡顿
+    for root in roots:
+        count = 0
+        for dirpath, dirnames, filenames in os.walk(root):
+            count += 1
+            if count > _max_dirs:
+                break
+            depth = dirpath[len(root):].count(os.sep)
+            if depth >= 3:
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith("$") and not d.lower().startswith("windows")]
+            for fn in filenames:
+                if fn.lower() == _name_l:
+                    return os.path.join(dirpath, fn)
+    return None
+
+
+def _resolve_known_app(exe_name: str) -> str | None:
+    """解析已知应用的绝对路径（Windows）。模板命中优先；未命中再兜底搜索.
+
+    结果缓存，避免重复全盘扫描。由白名单分支与 execute 层调用。
+    """
+    if not IS_WINDOWS or not exe_name:
+        return None
+    key = exe_name.strip().lower()
+    if not key or not key.endswith(".exe"):
+        return None
+    if key in _KNOWN_APP_CACHE:
+        return _KNOWN_APP_CACHE[key]
+
+    result: str | None = None
+    entry = KNOWN_APP_PATHS.get(key)
+    if entry:
+        _display, templates = entry
+        for d in _expand_app_dirs(templates):
+            cand = os.path.join(d, exe_name)
+            if os.path.isfile(cand):
+                result = cand
+                break
+    if result is None:
+        result = _search_common_roots(exe_name)
+    _KNOWN_APP_CACHE[key] = result
+    return result
+
+
+def _launch_app_windows(path: str) -> bool:
+    """用 Windows ShellExecuteW 启动本地应用（fire-and-forget）.
+
+    ★ 2026-09-01 实测结论: 无控制台/打包 exe 环境下, `cmd /c start` 启动 GUI
+    程序不可靠（cmd 内建 start 的 ShellExecute 语义在 DETACHED+DEVNULL 下会丢失），
+    而 ShellExecuteW 走系统 Shell 语义 + 应用所在目录作 lpDirectory, 稳定拉起
+    （腾讯会议/钉钉/飞书/QQ 均验证）。返回值 > 32 表示成功。
+    """
+    try:
+        import ctypes
+        res = ctypes.windll.shell32.ShellExecuteW(
+            None, "open", path, None, os.path.dirname(path) or ".", 1,
+        )
+        return int(res) > 32
+    except Exception:
+        return False
+
+
+def _app_launch_hint(exe_name: str) -> str:
+    """白名单拒绝时，若疑似本地应用则给出"正确启动姿势"提示（Windows）."""
+    if not IS_WINDOWS or not exe_name.lower().endswith(".exe"):
+        return ""
+    resolved = _resolve_known_app(exe_name)
+    if resolved:
+        return (
+            f"安全拦截: 命令 '{exe_name}' 不在白名单中。\n"
+            f"💡 检测到已知应用。正确启动方式（Windows）:\n"
+            f"  shell(command=\"start\", args=[\"\", \"{resolved}\"])   # 分离启动，推荐\n"
+            f"或  shell(command=\"powershell\", args=[\"-NoProfile\", \"-Command\", \"Start-Process '{resolved}'\"])"
+        )
+    return (
+        f"安全拦截: 命令 '{exe_name}' 不在白名单中。\n"
+        f"💡 启动本地应用的推荐方式（Windows）:\n"
+        f"  shell(command=\"powershell\", args=[\"-NoProfile\", \"-Command\", \"Start-Process 'C:\\\\完整\\\\路径\\\\app.exe'\"])"
+        f"\n裸名可能命中 Microsoft Store 占位程序而静默退出，请使用绝对路径。"
+    )
+
+
 def _validate_command(command: str, args: list[str] | None = None, allow_app_launch: bool = False) -> tuple[bool, str]:
     """三重安全校验：白名单 + 黑名单 + 注入检测.
 
@@ -440,6 +733,14 @@ def _validate_command(command: str, args: list[str] | None = None, allow_app_lau
     parts = command.strip().split()
     base_cmd = os.path.basename(parts[0])
     if base_cmd not in SAFE_COMMANDS:
+        # ★ 2026-09-01：已知 Windows 应用裸名(.exe) — allow_app_launch=True 时放行。
+        # execute 层会把裸名重写为 `start "" "绝对路径"` 分离启动，LLM 无需猜姿势。
+        if IS_WINDOWS and allow_app_launch and base_cmd.lower() in KNOWN_APP_PATHS:
+            if _resolve_known_app(base_cmd):
+                return True, ""
+        hint = _app_launch_hint(base_cmd)
+        if hint:
+            return False, hint
         return False, f"安全拦截: 命令 '{base_cmd}' 不在白名单中。允许: {', '.join(sorted(SAFE_COMMANDS)[:20])}..."
 
     # 2.5 解释器载荷深度检查（2026-08-31）：powershell/python/cmd 的 -Command/-c
@@ -502,6 +803,8 @@ class ShellTool(ToolDefinition):
         "Prefer args parameter for arguments. System directories (/etc, /usr, /bin) are blocked.\n"
         "Windows guidance: "
         "(1) Launch apps via PowerShell with full path: powershell -Command \"Start-Process 'C:\\path\\app.exe'\" "
+        "(known apps like Tencent Meeting/WeChat/DingTalk/Feishu/QQ/Chrome are auto-resolved: "
+        "just pass the bare exe name e.g. command='wemeetapp.exe'). "
         "(bare names like notepad/calc may hit the Microsoft Store stub and silently exit). "
         "(2) Open folders with: explorer 'D:\\path'. "
         "(3) Chinese output is auto-decoded (GBK/UTF-8). "
@@ -577,12 +880,18 @@ class ShellTool(ToolDefinition):
                 "Commands run via cmd.exe on Windows; only whitelisted utilities are allowed. "
                 "Dangerous operations (recursive delete, disk format, piping to shell) are blocked. "
                 "System dirs (C:\\Windows, C:\\Program Files) are blocked. "
-                "Prefer args parameter for arguments."
+                "Prefer args parameter for arguments. "
+                "Launching apps: known apps (wemeetapp.exe/wechat.exe/wxwork.exe/dingtalk.exe/"
+                "feishu.exe/qq.exe/chrome.exe/msedge.exe etc.) are auto-resolved — just pass the "
+                "bare exe name as command (e.g. command='wemeetapp.exe'); for others use "
+                "command='start' with args=['', 'C:\\path\\app.exe'] or powershell "
+                "-Command \"Start-Process 'C:\\path\\app.exe'\"."
             )
             cmd = props.get("command")
             if cmd:
                 cmd["description"] = (
-                    "The base command to execute (e.g. 'dir', 'type', 'findstr', 'where', 'python')."
+                    "The base command to execute (e.g. 'dir', 'type', 'findstr', 'where', 'python', "
+                    "or a known app exe name like 'wemeetapp.exe'/'wechat.exe' to launch it)."
                 )
             for key in ("interactive", "session_keys"):
                 p = props.get(key)
@@ -636,6 +945,25 @@ class ShellTool(ToolDefinition):
         from scout.config.manager import ConfigManager
 
         _allow_launch = bool(getattr(ConfigManager().load(), "allow_app_launch", False))
+        # ★ 2026-09-01：已知 Windows 应用裸名 → ShellExecuteW 直接启动（fire-and-forget）。
+        # 解决"打开腾讯会议/微信报错"：LLM 提交裸名被白名单拦，个人版（allow_app_launch=True）
+        # 直接帮你启动成功，无需 LLM 猜 powershell Start-Process / cmd start 姿势。
+        # 实测 cmd start 在无控制台/打包 exe 下启动 GUI 不可靠，ShellExecuteW 稳定。
+        if (
+            IS_WINDOWS
+            and _allow_launch
+            and not args
+            and command.strip()
+            and not command.startswith("__")
+            and command.strip().lower() in KNOWN_APP_PATHS
+        ):
+            _resolved = _resolve_known_app(command.strip())
+            if _resolved and _launch_app_windows(_resolved):
+                return Observation(
+                    tool_name=self.name,
+                    success=True,
+                    output=f"已启动 {os.path.basename(_resolved)}: {_resolved}",
+                )
         is_safe, error = _validate_command(command, args, allow_app_launch=_allow_launch)
         if not is_safe:
             if interactive and not command.strip() and session_keys:
