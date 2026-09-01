@@ -462,6 +462,58 @@ def _open_gui(url: str, port: int) -> None:
 # ─────────────────────────────────────────────────────────────
 # 入口
 # ─────────────────────────────────────────────────────────────
+# ★ 2026-09-01：单实例互斥体句柄 — 模块级持有，防止被 GC 释放导致互斥失效
+_single_instance_mutex = None
+
+
+def _acquire_single_instance() -> bool:
+    """GUI 模式单实例保护（Windows）.
+
+    WebView2 的 userDataFolder 不允许多进程同时使用 —— 已有实例运行时
+    再次双击 exe，新实例的 WebView2 会与旧实例争用缓存目录，导致新窗口
+    白屏/渲染异常（且旧实例也可能受影响）。
+
+    已有实例时：将已打开的窗口恢复并置前，返回 False（调用方退出）。
+    """
+    global _single_instance_mutex
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        handle = kernel32.CreateMutexW(None, False, "ScoutAgent_SingleInstance_Mutex_v1")
+        # ERROR_ALREADY_EXISTS = 183
+        if handle and ctypes.get_last_error() == 183:
+            _log("single-instance: 检测到已有实例，激活已有窗口")
+            try:
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                user32.FindWindowW.restype = wintypes.HWND
+                user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+                user32.IsIconic.restype = wintypes.BOOL
+                user32.IsIconic.argtypes = [wintypes.HWND]
+                user32.ShowWindow.restype = wintypes.BOOL
+                user32.ShowWindow.argtypes = [wintypes.HWND, wintypes.INT]
+                user32.SetForegroundWindow.restype = wintypes.BOOL
+                user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+                hwnd = user32.FindWindowW(None, "Scout Agent")
+                if hwnd:
+                    if user32.IsIconic(hwnd):
+                        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                    user32.SetForegroundWindow(hwnd)
+            except Exception as _e:  # noqa: BLE001
+                _log(f"single-instance: 激活旧窗口失败（忽略）: {_e}")
+            return False
+        _single_instance_mutex = handle
+        return True
+    except Exception as _e:  # noqa: BLE001 - 互斥不可用时保守放行
+        _log(f"single-instance: 互斥检测不可用（放行）: {_e}")
+        return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="Scout Desktop", description="Scout Agent 绿色版桌面程序")
     parser.add_argument("--no-gui", action="store_true", help="仅启动 Web 服务（测试/无 GUI 环境）")
@@ -486,6 +538,13 @@ def main(argv: list[str] | None = None) -> int:
     # ★ 2026-08-30：标记桌面绿色版（更新检查横幅仅在桌面版显示）
     os.environ.setdefault("SCOUT_DESKTOP", "1")
     load_env_files()
+
+    # ★ 2026-09-01：GUI 单实例保护（--no-gui 测试/服务模式不受限）。
+    #   WebView2 的 userDataFolder 不允许多进程同时使用，二次启动 exe 会导致
+    #   新窗口白屏/渲染异常（用户实测：已有实例时双击 exe，新窗口 UI 损坏）。
+    #   已有实例时：激活已打开的窗口，新进程直接退出。
+    if not args.no_gui and not _acquire_single_instance():
+        return 0
 
     host = args.host
     port = args.port or pick_port()
