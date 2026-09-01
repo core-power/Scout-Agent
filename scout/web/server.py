@@ -96,6 +96,17 @@ def create_web_app(agent=None) -> FastAPI:
             except Exception as e:
                 logging.getLogger(__name__).warning(f"文件监听器启动失败: {e}")
 
+            # ★ 2026-09-01 修复：星夜凝萃调度器在此（事件循环就绪后）补启动。
+            # init_starlight 在同步上下文调用时无事件循环，create_task 失败，
+            # 导致定时蒸馏协程从未运行（"no running event loop" / never awaited）。
+            try:
+                from scout.automation.starlight import get_starlight
+                _sl = get_starlight()
+                if _sl is not None:
+                    _sl.start_scheduler()
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"星夜凝萃调度器补启动失败: {e}")
+
             # 启动时立即清理一次
             from scout.core.log_config import cleanup_logs
             try:
