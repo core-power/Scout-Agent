@@ -16,6 +16,10 @@
 - 解释器载荷深度检查（2026-08-31）：powershell/python/cmd 的 -Command/-c 参数是任意
   代码执行面，参数中出现"启动外部程序"载荷（Start-Process / subprocess / .exe 路径等）
   一律拦截，防止 agent 用解释器绕过白名单启动任意 exe。
+- 跨平台命令平台化（2026-09-01）：白名单按系统过滤（Windows 剔除 POSIX 专用命令、
+  Linux/macOS 剔除 Windows 专用命令），常用跨平台命令透明翻译（ls→dir、cat→type、
+  grep→findstr、dir→ls、findstr→grep 等），参数不兼容时给出平台化提示——
+  避免"过白名单但目标 shell 里命令未找到"的频繁操作报错。
 """
 
 from __future__ import annotations
@@ -301,6 +305,236 @@ SAFE_COMMANDS = {
     # 终端
     "wt", "conhost",
 }
+
+# ── 平台化命令集（2026-09-01）──────────────────────────────
+# 混合白名单的缺陷：ls/cat/grep 在 Windows cmd 下"过白名单但报命令未找到"，
+# dir/findstr/tasklist 在 Linux/macOS 下同理 —— agent 反复重试 → 频繁操作报错。
+# 三层方案：
+#   1) 白名单按平台剔除另一平台专用命令（下面两个集合）；
+#   2) 参数兼容的跨平台命令透明翻译（_WIN_ALIASES / _UNIX_ALIASES）；
+#   3) 参数不兼容（如 ls -la、findstr /i）时给平台化提示（_platform_hint）。
+_POSIX_ONLY_CMDS = {
+    # 文件浏览
+    "ls", "cat", "head", "tail", "wc", "grep", "find", "locate", "which",
+    "whereis", "file", "stat", "du", "df",
+    # 文件操作
+    "touch", "cp", "mv", "rm", "ln", "chmod", "chown",
+    # 文本处理
+    "printf", "uniq", "cut", "awk", "sed", "tr", "diff", "comm", "paste",
+    "fold", "column",
+    # 系统信息
+    "uname", "uptime", "env", "printenv", "id", "groups", "ps", "top",
+    "free", "lscpu", "lsblk",
+    # 网络
+    "wget", "dig", "traceroute", "ss",
+    # 环境/服务管理
+    "bash", "sh", "source", "systemctl", "service", "supervisorctl",
+    "uvicorn", "gunicorn", "nohup", "kill", "pkill", "killall", "rsync",
+    "tmux", "screen", "vim", "nano", "less",
+    # 包管理
+    "apt", "apt-get", "yum", "brew",
+    # 压缩
+    "gzip", "gunzip", "zip",
+    # 其他
+    "xargs", "tee", "basename", "dirname", "realpath", "readlink",
+    "md5sum", "sha256sum", "sha1sum",
+    # shell 内建（cmd 无对应）
+    "clear", "man", "alias", "unalias", "export", "unset", "shopt", "jobs",
+    "fg", "bg", "wait", "dirs", "test", "true", "false", "history", "declare",
+    "read", "readonly", "return", "shift", "builtin", "command", "umask",
+    "ulimit",
+    # 文本/数据
+    "jq", "yq", "rg", "fd", "bat", "xxd", "hexdump", "od", "base64",
+    "strings", "iconv", "dos2unix", "unix2dos", "numfmt", "fmt", "rev",
+    "tac", "nl", "expand", "unexpand", "zcat", "bzcat", "xzcat",
+    # 压缩/归档
+    "xz", "unxz", "bzip2", "bunzip2", "zstd", "unzstd", "7za", "7zr", "lz4",
+    "lzma", "unlzma", "cpio", "zipinfo", "zless", "zmore",
+    # 系统诊断
+    "who", "w", "last", "lastlog", "logname", "tty", "stty", "lsof",
+    "fuser", "pgrep", "vmstat", "iostat", "mpstat", "pidstat", "htop",
+    "btop", "ncdu", "lsusb", "lspci", "lsmod", "modinfo", "getent", "dmesg",
+    "journalctl", "hostnamectl", "timedatectl", "localectl", "loginctl",
+    "sysctl", "sync",
+    # 网络
+    "ip", "ifconfig", "route", "arp", "host", "nc", "ncat", "socat",
+    "sftp", "ssh-keygen", "ssh-copy-id", "aria2c", "axel", "http", "httpie",
+    "ab", "wrk", "hey", "kubectl", "helm", "podman", "ctr", "nerdctl",
+    "gcloud", "aws", "az", "doctl", "terraform", "ansible",
+    "ansible-playbook", "vagrant",
+    # 开发/编译/调试
+    "clang", "clang++", "gdb", "lldb", "valgrind", "strace", "ltrace",
+    "objdump", "nm", "readelf", "size", "ldd", "strip", "ar", "ranlib",
+    "patchelf", "pkg-config", "ninja", "meson", "patch", "cmp", "gpg",
+    "sqlite3", "redis-cli", "psql", "mysql", "mongosh", "deno", "bun",
+    "tsc", "ts-node", "lua", "luajit", "R", "Rscript", "tclsh", "wish",
+    "mamba", "micromamba", "pipenv", "poetry", "uv", "uvx", "virtualenv",
+    "pyenv", "expect",
+    # 媒体/文档
+    "ffmpeg", "ffprobe", "convert", "magick", "mogrify", "pdftotext",
+    "pdfinfo", "pdftoppm", "pdftocairo", "gs", "exiftool", "mediainfo",
+    "yt-dlp", "youtube-dl", "cwebp", "dwebp", "sox", "mutool", "qpdf",
+    # 其他
+    "watch", "seq", "yes", "sleep", "nproc", "arch", "getconf", "logger",
+    "crontab",
+}
+
+_WIN_ONLY_CMDS = {
+    # cmd 内建（bash 无对应）
+    "chcp", "cls", "color", "title", "path", "prompt", "copy", "move",
+    "del", "erase", "ren", "rename", "md", "rd", "vol", "ver", "verify",
+    "assoc", "ftype", "start", "pause", "rem", "chdir", "setlocal",
+    "endlocal",
+    # Windows 外部命令
+    "where", "tasklist", "taskkill", "ipconfig", "systeminfo", "schtasks",
+    "reg", "wmic", "attrib", "findstr", "forfiles", "mklink", "setx",
+    "xcopy", "robocopy", "mode", "compact", "driverquery", "netsh",
+    "cscript", "wscript", "msinfo32", "winver", "cmd", "sfc", "takeown",
+    "subst", "cipher", "fsutil", "powercfg", "gpupdate", "w32tm", "tzutil",
+    "taskmgr", "chkdsk",
+    # Windows 程序/系统工具
+    "notepad", "calc", "mspaint", "charmap", "snippingtool", "magnify",
+    "osk", "winsat", "explorer", "control", "regedit", "msconfig",
+    "services.msc", "devmgmt.msc", "diskmgmt.msc", "compmgmt.msc",
+    "eventvwr.msc", "gpedit.msc", "secpol.msc", "certmgr.msc",
+    "lusrmgr.msc", "perfmon.msc", "taskschd.msc", "wf.msc", "fsmgmt.msc",
+    "tracert", "pathping", "getmac", "wmplayer", "mplayer2", "dxdiag",
+    "resmon", "msra", "msdt", "optionalfeatures", "wt", "conhost",
+}
+
+if IS_WINDOWS:
+    SAFE_COMMANDS = SAFE_COMMANDS - _POSIX_ONLY_CMDS
+else:
+    SAFE_COMMANDS = SAFE_COMMANDS - _WIN_ONLY_CMDS
+
+# 跨平台命令透明翻译表：值 (目标命令, 固定前置参数)。
+# 仅覆盖语义等价、参数基本兼容的常用命令；参数带 - / / 开关时不翻译（走 _platform_hint）。
+_WIN_ALIASES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "ls": ("dir", ()),
+    "cat": ("type", ()),
+    "pwd": ("cd", ()),
+    "which": ("where", ()),
+    "grep": ("findstr", ()),
+    "clear": ("cls", ()),
+    "cp": ("copy", ()),
+    "mv": ("move", ()),
+    "rm": ("del", ()),
+    "touch": ("type", ("nul", ">")),   # 创建空文件
+    "uname": ("ver", ()),
+    "diff": ("fc", ()),
+    "unzip": ("tar", ("-xf",)),        # Win10 自带 tar 支持 zip
+}
+
+_UNIX_ALIASES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "dir": ("ls", ()),
+    "where": ("which", ()),
+    "findstr": ("grep", ()),
+    "cls": ("clear", ()),
+    "copy": ("cp", ()),
+    "move": ("mv", ()),
+    "del": ("rm", ()),
+    "erase": ("rm", ()),
+    "ren": ("mv", ()),
+    "rename": ("mv", ()),
+    "md": ("mkdir", ()),
+    "ver": ("uname", ("-a",)),
+    "ipconfig": ("ip", ("addr",)),
+    "tasklist": ("ps", ("aux",)),
+    "taskkill": ("kill", ()),
+}
+
+_PLATFORM_HINT_EXAMPLES: dict[str, str] = {
+    # Windows 侧（POSIX 命令 → 用法示例）
+    "ls": "dir /a（含隐藏）、dir /s /b（递归）",
+    "cat": "type file.txt",
+    "grep": "findstr /i pattern file.txt",
+    "which": "where python",
+    "pwd": "cd（不带参数显示当前目录）",
+    "clear": "cls",
+    "cp": "copy src dst",
+    "mv": "move src dst",
+    "rm": "del file（删目录用 rmdir /s）",
+    "touch": "type nul > newfile.txt",
+    "diff": "fc file1 file2",
+    "uname": "ver",
+    "sleep": "powershell -Command \"Start-Sleep -Seconds 5\"",
+    "head": "powershell -Command \"Get-Content file.txt -TotalCount 5\"",
+    "tail": "powershell -Command \"Get-Content file.txt -Tail 5\"",
+    # Unix 侧（Windows 命令 → 用法示例）
+    "where": "which python",
+    "findstr": "grep -i pattern file",
+    "dir": "ls -la",
+    "cls": "clear",
+    "copy": "cp src dst",
+    "move": "mv src dst",
+    "del": "rm file",
+    "ren": "mv old new",
+    "md": "mkdir dir",
+    "ver": "uname -a",
+    "ipconfig": "ip addr 或 ipconfig 对应网卡信息用 ip link",
+    "tasklist": "ps aux",
+    "taskkill": "kill <pid>",
+}
+
+
+def _map_platform_command(command: str, args: list[str] | None) -> tuple[str, list[str] | None] | None:
+    """把另一平台风格的命令翻译为当前平台等价命令（透明，LLM 无感知）.
+
+    返回:
+      - (new_command, new_args): 翻译成功或无需翻译，直接使用；
+      - None: 命中跨平台命令但参数不兼容（带 - / / 开关），调用方应给平台化提示。
+    """
+    if not command or not command.strip():
+        return command, args
+    parts = command.strip().split(None, 1)
+    if len(parts) > 1:
+        # 整串命令（含空格/复合命令）：保留 shell 语义，不翻译
+        return command, args
+    base = os.path.basename(parts[0]).lower()
+    table = _WIN_ALIASES if IS_WINDOWS else _UNIX_ALIASES
+    entry = table.get(base)
+    if entry is None:
+        return command, args
+    new_base, extra = entry
+    if args:
+        for a in args:
+            if a.startswith("-") or a.startswith("/"):
+                return None
+    return new_base, list(extra) + list(args or [])
+
+
+def _platform_hint(base_cmd: str) -> str:
+    """跨平台命令被拦截时的平台化提示（另一平台命令 → 本平台等价命令 + 用法示例）."""
+    base = base_cmd.lower()
+    if IS_WINDOWS:
+        entry = _WIN_ALIASES.get(base)
+        if entry:
+            target, _ = entry
+            ex = _PLATFORM_HINT_EXAMPLES.get(base, f"请使用 {target} 对应功能")
+            return (
+                f"安全拦截: '{base_cmd}' 是 Linux/macOS 命令，当前 Windows 环境没有该命令。\n"
+                f"💡 请改用 Windows 命令 '{target}'：{ex}"
+            )
+        if base in _POSIX_ONLY_CMDS:
+            return (
+                f"安全拦截: '{base_cmd}' 是 Linux/macOS 命令，当前 Windows 环境没有该命令。\n"
+                f"💡 请改用 PowerShell 对应命令（如 Get-ChildItem / Get-Content / Select-String）。"
+            )
+        return ""
+    entry = _UNIX_ALIASES.get(base)
+    if entry:
+        target, _ = entry
+        ex = _PLATFORM_HINT_EXAMPLES.get(base, f"请使用 {target} 对应功能")
+        return (
+            f"安全拦截: '{base_cmd}' 是 Windows 命令，当前系统（Linux/macOS）没有该命令。\n"
+            f"💡 请改用 '{target}'：{ex}"
+        )
+    if base in _WIN_ONLY_CMDS:
+        return (
+            f"安全拦截: '{base_cmd}' 是 Windows 命令，当前系统（Linux/macOS）没有该命令。\n"
+            f"💡 请改用对应的 POSIX 命令。"
+        )
+    return ""
 
 # 绝对禁止的参数模式（扩展版）
 DANGEROUS_ARGS = [
@@ -741,6 +975,10 @@ def _validate_command(command: str, args: list[str] | None = None, allow_app_lau
         hint = _app_launch_hint(base_cmd)
         if hint:
             return False, hint
+        # ★ 2026-09-01：跨平台命令平台化提示（另一平台命令 → 本平台等价命令 + 用法）
+        phint = _platform_hint(base_cmd)
+        if phint:
+            return False, phint
         return False, f"安全拦截: 命令 '{base_cmd}' 不在白名单中。允许: {', '.join(sorted(SAFE_COMMANDS)[:20])}..."
 
     # 2.5 解释器载荷深度检查（2026-08-31）：powershell/python/cmd 的 -Command/-c
@@ -808,7 +1046,10 @@ class ShellTool(ToolDefinition):
         "(bare names like notepad/calc may hit the Microsoft Store stub and silently exit). "
         "(2) Open folders with: explorer 'D:\\path'. "
         "(3) Chinese output is auto-decoded (GBK/UTF-8). "
-        "(4) explorer/start/.msc exit code 1 still means success."
+        "(4) explorer/start/.msc exit code 1 still means success. "
+        "(5) Cross-platform commands auto-translate to the current OS (ls→dir, cat→type, "
+        "grep→findstr, which→where, pwd→cd on Windows; dir→ls, findstr→grep, tasklist→ps "
+        "aux on Linux/macOS), so common POSIX commands work on Windows without errors."
     )
     parameters = {
         "type": "object",
@@ -885,7 +1126,10 @@ class ShellTool(ToolDefinition):
                 "feishu.exe/qq.exe/chrome.exe/msedge.exe etc.) are auto-resolved — just pass the "
                 "bare exe name as command (e.g. command='wemeetapp.exe'); for others use "
                 "command='start' with args=['', 'C:\\path\\app.exe'] or powershell "
-                "-Command \"Start-Process 'C:\\path\\app.exe'\"."
+                "-Command \"Start-Process 'C:\\path\\app.exe'\". "
+                "Cross-platform commands are auto-translated to the current OS equivalents: "
+                "ls→dir, cat→type, grep→findstr, which→where, pwd→cd, cp→copy, mv→move, "
+                "rm→del, clear→cls, uname→ver (e.g. command='ls' works and runs 'dir')."
             )
             cmd = props.get("command")
             if cmd:
@@ -964,6 +1208,18 @@ class ShellTool(ToolDefinition):
                     success=True,
                     output=f"已启动 {os.path.basename(_resolved)}: {_resolved}",
                 )
+        # ★ 2026-09-01：跨平台命令透明翻译（不同系统用该系统命令工具）。
+        # 混合白名单时代 ls/cat/grep 在 Windows cmd 下"过白名单但命令未找到"，
+        # 现在参数兼容时自动翻译（ls→dir、cat→type、grep→findstr…），一次成功；
+        # 参数带开关（ls -la / findstr /i）时给平台化提示，不执行报错。
+        _mapped = _map_platform_command(command, args)
+        if _mapped is None:
+            return Observation(
+                tool_name=self.name,
+                success=False,
+                output=_platform_hint(os.path.basename(command.strip().split(None, 1)[0])),
+            )
+        command, args = _mapped
         is_safe, error = _validate_command(command, args, allow_app_launch=_allow_launch)
         if not is_safe:
             if interactive and not command.strip() and session_keys:
