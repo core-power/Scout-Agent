@@ -1780,26 +1780,10 @@ class WebAdapter:
                             if m.role.value == "tool":
                                 msg["metadata"] = m.metadata
                         msgs.append(msg)
-                    # 归档历史：编辑截断/上下文治理等被移除的消息，附加返回供前端找回
-                    # （★ 2026-09-01 修复：此前归档历史不返回，用户重开 exe 后以为"历史消息丢失"）
-                    archived = []
-                    try:
-                        for a in _sstore.get_archive(session_id, limit=2000):
-                            archived.append({
-                                "role": a.get("role", ""),
-                                "content": a.get("content", ""),
-                                "reason": a.get("archive_reason", ""),
-                                "seq": a.get("seq", 0),
-                                "timestamp": a.get("timestamp", ""),
-                                "archived_at": a.get("archived_at", ""),
-                            })
-                    except Exception as _ae:
-                        logger.warning("get_archive failed: %s", _ae)
                     return {
                         "id": session.id,
                         "status": session.status,
                         "messages": msgs,
-                        "archived": archived,
                         "suggestions": (session.extra or {}).get("suggestions", []),
                         "files": (session.extra or {}).get("files", []),
                     }
