@@ -194,7 +194,12 @@ class ToolRegistry:
             )
 
         try:
-            obs = await tool.execute(**cleaned_args, **kwargs)
+            # ★ 2026-09-01：合并显式参数与框架 kwargs —— LLM 经 schema 合法传入的
+            # 字段(如 session_key)优先；框架默认值(kwargs)只补缺,避免
+            # "got multiple values for keyword argument" 导致工具调用直接失败。
+            merged = dict(kwargs)
+            merged.update(cleaned_args)
+            obs = await tool.execute(**merged)
             obs.duration_ms = int((time.time() - start) * 1000)
             if not obs.error_code and not obs.success:
                 obs.error_code = ERROR_INTERNAL

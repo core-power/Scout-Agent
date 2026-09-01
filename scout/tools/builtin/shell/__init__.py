@@ -25,6 +25,7 @@ import logging
 import os
 import re
 import shlex
+import subprocess  # noqa: F401 - DETACHED_PROCESS 用于 start 命令分离启动
 from typing import Any
 
 from scout.core.annotations import ToolAnnotations
@@ -45,6 +46,11 @@ WIN_BUILTIN_CMDS = {
     "goto", "if", "md", "mkdir", "move", "path", "pause", "popd", "prompt",
     "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal",
     "shift", "start", "time", "title", "type", "ver", "verify", "vol",
+    # ★ 2026-09-01：.msc 管理单元（services.msc 等）无独立可执行文件，
+    # 必须经 cmd /c 调用（cmd 会按文件关联打开 mmc 宿主）
+    "services.msc", "devmgmt.msc", "diskmgmt.msc", "compmgmt.msc",
+    "eventvwr.msc", "gpedit.msc", "secpol.msc", "certmgr.msc",
+    "lusrmgr.msc", "perfmon.msc", "taskschd.msc", "wf.msc", "fsmgmt.msc",
 }
 
 
@@ -101,6 +107,32 @@ def _win_split_args(command: str) -> list[str]:
     if cur:
         tokens.append(''.join(cur))
     return tokens
+
+
+def _needs_detached(cmd_list: list[str]) -> bool:
+    """★ 2026-09-01 Windows：经 cmd.exe 执行 `start <程序>` 时需要 DETACHED。
+
+    无控制台父进程（console=False 打包的 exe）下，CREATE_NO_WINDOW 的
+    cmd.exe 执行内建 start 启动 GUI 程序，子进程会绑定到隐藏控制台并
+    立即退出（实测矩阵：cmd /c start 不存活，+DETACHED_PROCESS 存活）。
+    """
+    if not cmd_list:
+        return False
+    base = os.path.basename(cmd_list[0]).lower()
+    if base not in ("cmd.exe", "cmd"):
+        return False
+    # 形态1: [cmd.exe, /d, /s, /c, "start xxx ..."]  单串
+    # 形态2: [cmd.exe, /d, /s, /c, "start", "xxx"]   拆分
+    args = [a for a in cmd_list[1:] if a.lower() not in ("/d", "/s", "/c", "/k")]
+    if not args:
+        return False
+    first = args[0].strip().lower()
+    if first == "start" or first.startswith("start "):
+        return True
+    # 单串命令里 start 在最前
+    if " " in args[0] and args[0].strip().split(None, 1)[0].lower() == "start":
+        return True
+    return False
 
 
 def _build_proc_cmd(cmd_list: list[str]) -> list[str]:
@@ -252,6 +284,22 @@ SAFE_COMMANDS = {
     "cscript", "wscript", "msinfo32", "winver", "powershell", "pwsh",
     "cmd", "sfc", "takeown", "subst", "cipher", "fsutil", "powercfg",
     "gpupdate", "w32tm", "tzutil", "taskmgr", "chkdsk",
+    # ── Windows 常用程序/系统工具 (2026-09-01 新增: 让"操作电脑"流畅 ——
+    #    打开记事本/画图/计算器/资源管理器/控制面板等此前全被白名单拦截) ──
+    # 附件程序
+    "notepad", "calc", "mspaint", "write", "charmap", "snippingtool",
+    "magnify", "osk", "winsat",
+    # 资源管理器/控制面板/系统管理
+    "explorer", "control", "regedit", "msconfig",
+    "services.msc", "devmgmt.msc", "diskmgmt.msc", "compmgmt.msc",
+    "eventvwr.msc", "gpedit.msc", "secpol.msc", "certmgr.msc",
+    "lusrmgr.msc", "perfmon.msc", "taskschd.msc", "wf.msc", "fsmgmt.msc",
+    # 网络/媒体
+    "tracert", "pathping", "getmac", "netstat", "wmplayer", "mplayer2",
+    # 其他常用
+    "dxdiag", "resmon", "msra", "msdt", "optionalfeatures",
+    # 终端
+    "wt", "conhost",
 }
 
 # 绝对禁止的参数模式（扩展版）
@@ -451,7 +499,13 @@ class ShellTool(ToolDefinition):
         "Execute a shell command in a restricted environment. "
         "Only whitelisted system utilities are allowed. "
         "Dangerous operations (recursive delete, disk format, piping to shell) are blocked. "
-        "Prefer args parameter for arguments. System directories (/etc, /usr, /bin) are blocked."
+        "Prefer args parameter for arguments. System directories (/etc, /usr, /bin) are blocked.\n"
+        "Windows guidance: "
+        "(1) Launch apps via PowerShell with full path: powershell -Command \"Start-Process 'C:\\path\\app.exe'\" "
+        "(bare names like notepad/calc may hit the Microsoft Store stub and silently exit). "
+        "(2) Open folders with: explorer 'D:\\path'. "
+        "(3) Chinese output is auto-decoded (GBK/UTF-8). "
+        "(4) explorer/start/.msc exit code 1 still means success."
     )
     parameters = {
         "type": "object",
@@ -735,12 +789,35 @@ class ShellTool(ToolDefinition):
             # Windows 的 cmd 内建命令（dir/type 等无 .exe）同样经 cmd /c。
             # 注意：元字符不能 quote，否则 shell 会当字面量；只 quote 普通参数。
             _proc_cmd = _build_proc_cmd(cmd_list)
+            # ★ 2026-09-01：start 命令（启动本地程序）专用通道 ——
+            # ① 需 DETACHED_PROCESS 分离（无控制台父进程下绑定隐藏控制台会立即退出）；
+            # ② stdout 必须 DEVNULL：管道写端被启动的程序继承时,该程序会启动失败
+            #    （实测矩阵：DETACHED+PIPE → 程序死；DETACHED+DEVNULL → 程序活）。
+            #    start 是 fire-and-forget 语义,输出本就无意义。
+            if IS_WINDOWS and _needs_detached(_proc_cmd):
+                _p = await asyncio.create_subprocess_exec(
+                    *_proc_cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    cwd=work_dir,
+                    creationflags=subprocess.DETACHED_PROCESS,
+                )
+                try:
+                    await asyncio.wait_for(_p.wait(), timeout=timeout)
+                except TimeoutError:
+                    pass  # start 不应阻塞；超时也不杀（分离进程与 cmd 无关联）
+                return Observation(
+                    tool_name=self.name,
+                    success=True,  # start 语义即"已发起启动"
+                    output="",
+                )
+            _spawn_kwargs = no_window_kwargs()
             process = await asyncio.create_subprocess_exec(
                 *_proc_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=work_dir,
-                **no_window_kwargs(),
+                **_spawn_kwargs,
             )
 
             output_lines = []
@@ -770,9 +847,20 @@ class ShellTool(ToolDefinition):
             if len(full_output) > 50000:
                 full_output = full_output[:25000] + "\n... [输出截断] ...\n" + full_output[-25000:]
 
+            # ★ 2026-09-01：Windows GUI 启动器的非零退出码不代表失败 ——
+            #   explorer.exe 打开文件夹成功时固定返回 1（历史遗留行为），
+            #   start 命令、.msc 管理单元等也常返回非零。此前被误判为
+            #   失败，导致 agent 重复执行或向用户误报"打开失败"。
+            _rc = process.returncode
+            _ok = _rc == 0
+            if IS_WINDOWS and _rc == 1:
+                _base = os.path.basename(cmd_list[0].strip().lower()).strip('"')
+                if _base in ("explorer", "explorer.exe", "start") or _base.endswith(".msc"):
+                    _ok = True
+
             return Observation(
                 tool_name=self.name,
-                success=process.returncode == 0,
+                success=_ok,
                 output=full_output,
             )
 
@@ -897,12 +985,26 @@ class ShellTool(ToolDefinition):
             if not cmd_list:
                 return Observation(tool_name=self.name, success=False, output="命令为空")
             _proc_cmd = _build_proc_cmd(cmd_list)
+            if IS_WINDOWS and _needs_detached(_proc_cmd):
+                _p = await asyncio.create_subprocess_exec(
+                    *_proc_cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    cwd=work_dir,
+                    creationflags=subprocess.DETACHED_PROCESS,
+                )
+                try:
+                    await asyncio.wait_for(_p.wait(), timeout=timeout)
+                except TimeoutError:
+                    pass
+                return Observation(tool_name=self.name, success=True, output="")
+            _spawn_kwargs = no_window_kwargs()
             process = await asyncio.create_subprocess_exec(
                 *_proc_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=work_dir,
-                **no_window_kwargs(),
+                **_spawn_kwargs,
             )
             output_lines = []
             try:
