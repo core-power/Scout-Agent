@@ -20,7 +20,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from scout.security.secret import (
-    decrypt_secret as _decrypt_field,
+    decrypt_secret_ex as _decrypt_field_ex,
+    decrypt_with_legacy_key as _decrypt_with_legacy_key,
     encrypt_secret as _encrypt_field,
     is_encrypted as _is_encrypted,
 )
@@ -199,11 +200,20 @@ class ConfigManager:
         # 4. 解密敏感字段（api_key / provider_keys）。
         #    同时做平滑迁移：若字段是非空的明文，则自动加密并回写，
         #    保证配置文件里不再出现明文 key。
+        #    2026-09-01 修复"更新后 API Key 需重新保存"：
+        #    - 密文用主密钥解密失败时，自动用旧数据目录密钥恢复（healed），
+        #      并置 need_migrate 用当前密钥重加密落盘固化；
+        #    - 若 api_key 为空且旧数据目录存在完整配置（密文用旧密钥可解），
+        #      自动恢复全部 LLM 配置字段（provider/model/base_url/key 等），
+        #      用户更新版本后无需再到设置里重填。
         need_migrate = False
         for field in _SENSITIVE_FIELDS:
             if merged.get(field):
                 if _is_encrypted(merged[field]):
-                    merged[field] = _decrypt_field(merged[field])
+                    plain, healed = _decrypt_field_ex(merged[field])
+                    merged[field] = plain
+                    if healed:
+                        need_migrate = True
                 else:
                     need_migrate = True
         for field in _SENSITIVE_MAP_FIELDS:
@@ -211,7 +221,10 @@ class ConfigManager:
             decrypted = {}
             for key, value in raw.items():
                 if value and _is_encrypted(value):
-                    decrypted[key] = _decrypt_field(value)
+                    plain, healed = _decrypt_field_ex(value)
+                    decrypted[key] = plain
+                    if healed:
+                        need_migrate = True
                 else:
                     if value:
                         need_migrate = True
@@ -225,15 +238,95 @@ class ConfigManager:
                 if isinstance(e, dict) and e.get("api_key"):
                     e = dict(e)
                     if _is_encrypted(e["api_key"]):
-                        e["api_key"] = _decrypt_field(e["api_key"])
+                        plain, healed = _decrypt_field_ex(e["api_key"])
+                        e["api_key"] = plain
+                        if healed:
+                            need_migrate = True
                     else:
                         need_migrate = True
                 migrated_engines.append(e)
             merged["search_engines"] = migrated_engines
+
+        # 4.1 旧目录配置恢复：api_key 为空（新装/迁移不完整）时,
+        #     从历史数据目录读取旧 config.json,用旧目录 secret_key 解密
+        #     恢复完整 LLM 配置,随后经 need_migrate 用当前密钥重加密落盘。
+        #     一次性:无论成败都写 _legacy_restored 标记,避免每次 load 反复
+        #     扫描旧目录、以及覆盖用户故意清空 api_key 的场景。
+        #     SCOUT_DISABLE_LEGACY_RESTORE=1 可禁用(单测隔离用)。
+        if not merged.get("api_key") and not merged.get("_legacy_restored"):
+            restored = {} if os.getenv("SCOUT_DISABLE_LEGACY_RESTORE") else self._restore_legacy_config()
+            if restored:
+                for _k, _v in restored.items():
+                    if _v is None:
+                        continue
+                    # 仅填补空缺字段,不覆盖用户在新目录已保存的自定义值
+                    if not merged.get(_k):
+                        merged[_k] = _v
+            # 标记一次性恢复已完成(成功或失败),随本次回写落盘
+            merged["_legacy_restored"] = True
+            need_migrate = True
+
         if need_migrate or int(merged.get("config_version", 1)) < CONFIG_VERSION:
             self._write_encrypted(merged)
 
         return LLMConfig(**merged)
+
+    @staticmethod
+    def _restore_legacy_config() -> dict[str, Any]:
+        """从历史数据目录恢复旧配置（2026-09-01"更新后配置丢失"自愈）.
+
+        遍历 legacy_data_dirs() 候选目录,找到第一个含 config.json 且
+        api_key 非空的旧配置;其密文用该目录的 secret_key 解密。
+        恢复失败返回空 dict（保持现状,不影响正常启动）。
+        """
+        try:
+            from scout.config.paths import legacy_data_dirs
+        except Exception:  # noqa: BLE001
+            return {}
+        for legacy_dir in legacy_data_dirs():
+            legacy_cfg_path = legacy_dir / "config.json"
+            try:
+                if not legacy_cfg_path.is_file():
+                    continue
+                legacy = json.loads(legacy_cfg_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(legacy, dict):
+                continue
+            # 用旧目录密钥解密 api_key（不走主密钥）
+            raw_key = legacy.get("api_key") or ""
+            if not raw_key:
+                continue
+            plain_key = ""
+            if isinstance(raw_key, str) and _is_encrypted(raw_key):
+                plain_key = _decrypt_with_legacy_key(legacy_dir, raw_key)
+            else:
+                plain_key = raw_key  # 历史明文
+            if not plain_key:
+                continue
+            restored: dict[str, Any] = {"api_key": plain_key}
+            # 非敏感字段直接继承旧配置（仅限 LLM 相关核心字段）
+            for f in ("provider", "model", "base_url", "vision_model",
+                      "embedding_model", "image_model", "max_turns",
+                      "temperature", "deep_thinking"):
+                v = legacy.get(f)
+                if v not in (None, ""):
+                    restored[f] = v
+            # provider_keys / provider_base_urls 一并恢复（密文用旧密钥解）
+            lpk = legacy.get("provider_keys") or {}
+            if isinstance(lpk, dict):
+                restored["provider_keys"] = {
+                    p: (_decrypt_with_legacy_key(legacy_dir, v)
+                        if isinstance(v, str) and _is_encrypted(v) else (v or ""))
+                    for p, v in lpk.items() if v
+                }
+            lbu = legacy.get("provider_base_urls") or {}
+            if isinstance(lbu, dict):
+                restored["provider_base_urls"] = {
+                    p: v for p, v in lbu.items() if v
+                }
+            return restored
+        return {}
 
     def save(self, config: LLMConfig) -> None:
         """保存配置到 config.json（敏感字段加密存储）."""

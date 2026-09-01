@@ -70,20 +70,101 @@ def encrypt_secret(value: str) -> str:
         raise RuntimeError(f"敏感字段加密失败: {e}") from e
 
 
-def decrypt_secret(value: str) -> str:
-    """解密一个带前缀的密文；若传入的是明文则原样返回（兼容迁移）."""
-    if not value:
+def _fallback_secret_paths() -> list[Path]:
+    """候选旧数据目录的 secret_key 路径（密钥迁移自愈用）.
+
+    2026-09-01 修复"更新后 API Key 需重新保存": 旧版本数据目录
+    （<盘符>:\\.scout、exe 旁 data/、~/.scout）中的密文若与新密钥不配对,
+    可用旧目录的 secret_key 解密恢复。
+    """
+    try:
+        from scout.config.paths import legacy_data_dirs
+
+        dirs = legacy_data_dirs()
+    except Exception:  # noqa: BLE001 - 导入失败时退化为仅主密钥
+        return []
+    current = (SECRET_PATH if SECRET_PATH is not None else _default_secret_path()).resolve()
+    out: list[Path] = []
+    for d in dirs:
+        sk = d / "secret_key"
+        try:
+            if sk.resolve() == current:
+                continue
+        except OSError:
+            pass
+        out.append(sk)
+    return out
+
+
+def _try_decrypt_with_fallback(token: str) -> str | None:
+    """主密钥解密失败时,依次用旧数据目录的密钥尝试恢复.
+
+    成功返回明文;全部失败返回 None。
+    """
+    for sk in _fallback_secret_paths():
+        try:
+            if not sk.is_file():
+                continue
+            key = sk.read_bytes()
+            if len(key) < 32:
+                continue
+            return Fernet(key).decrypt(token.encode("ascii")).decode("utf-8")
+        except Exception:  # noqa: BLE001 - 逐个候选尝试,失败继续
+            continue
+    return None
+
+
+def decrypt_with_legacy_key(legacy_dir: Path, value: str) -> str:
+    """用指定旧数据目录的 secret_key 解密密文（旧配置恢复用）.
+
+    解密失败返回空串,不抛异常（调用方按"恢复失败"处理）。
+    """
+    if not isinstance(value, str) or not value.startswith(PREFIX):
+        return value if isinstance(value, str) else ""
+    token = value[len(PREFIX):]
+    sk = Path(legacy_dir) / "secret_key"
+    try:
+        if not sk.is_file():
+            return ""
+        key = sk.read_bytes()
+        if len(key) < 32:
+            return ""
+        return Fernet(key).decrypt(token.encode("ascii")).decode("utf-8")
+    except Exception:  # noqa: BLE001
         return ""
+
+
+def decrypt_secret_ex(value: str) -> tuple[str, bool]:
+    """解密敏感字段,返回 (明文, 是否经旧密钥自愈恢复).
+
+    healed=True 表示主密钥解密失败、但用旧数据目录密钥成功恢复。
+    调用方（config manager）应据此用当前密钥重新加密落盘固化,
+    避免每次启动都依赖旧密钥。
+    """
+    if not value:
+        return "", False
     if isinstance(value, str) and value.startswith(PREFIX):
         token = value[len(PREFIX):]
         try:
             fernet = Fernet(_get_key())
-            return fernet.decrypt(token.encode("ascii")).decode("utf-8")
+            return fernet.decrypt(token.encode("ascii")).decode("utf-8"), False
         except Exception as e:  # noqa: BLE001 - InvalidToken 及其子类均属解密失败
+            healed = _try_decrypt_with_fallback(token)
+            if healed is not None:
+                logger.warning(
+                    "[secret] 主密钥解密失败,已用旧数据目录密钥恢复（密钥自动迁移）"
+                )
+                return healed, True
             logger.error("[secret] 解密失败（可能是密钥变化或数据损坏）: %s", e)
-            return ""
+            return "", False
     # 非加密值（历史明文）原样返回
-    return value
+    return value, False
+
+
+def decrypt_secret(value: str) -> str:
+    """解密一个带前缀的密文；若传入的是明文则原样返回（兼容迁移）."""
+    plain, _healed = decrypt_secret_ex(value)
+    return plain
 
 
 def is_encrypted(value: str) -> bool:
