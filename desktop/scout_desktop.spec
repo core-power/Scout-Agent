@@ -108,9 +108,13 @@ hiddenimports = [
 ]
 
 # ── 打包配置 ─────────────────────────────────────────────
+# 2026-09-01 修复: 在 desktop/ 下执行 PyInstaller 时 pathex=["."] 只含 desktop,
+# Analysis 找不到项目根的 scout 包 → "missing module named scout" 静默跳过 →
+# 运行时报 No module named 'scout.tools'。改为显式加入项目根。
+_SRC_ROOT = os.path.dirname(os.path.abspath(SPECPATH))
 a = Analysis(
     ["launcher.py"],  # 相对 spec 所在目录(desktop/)解析
-    pathex=["."],
+    pathex=[_SRC_ROOT, "."],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
