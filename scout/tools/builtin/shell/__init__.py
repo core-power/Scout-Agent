@@ -61,6 +61,47 @@ def _win_quote(arg: str) -> str:
 
 _META_ONLY = re.compile(r'^[|><;&]+$')
 
+# ★ 2026-09-01 修复「打开本地软件报错」——完整 PowerShell 解释器名单:
+# powershell/pwsh 本身就是 shell,其 -Command 参数里的 | & ; 等元字符属于
+# PowerShell 语法,必须原样传参直接 exec。若包一层 cmd.exe /c,Python
+# subprocess 的参数重编码会造成双重引号解析,PowerShell 会把整条命令当成
+# 字符串字面量回显(表现为:命令"看似执行"但程序未启动、$_ 等变量被展开
+# 丢失、报"系统找不到文件/网络路径")。
+_WIN_PS_EXES = {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
+_WIN_PS_CMD_RE = re.compile(
+    r"""^(powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(-Command|-c|-command|--command)\s+(.+)$""",
+    re.I | re.S,
+)
+
+
+def _win_split_args(command: str) -> list[str]:
+    """Windows 引号感知的空白拆分（保留反斜杠）.
+
+    shlex.split 是 POSIX 词法,会把 D:\\path 的反斜杠当转义符吃掉
+    （D:\\Weixin\\Weixin.exe → D:WeixinWeixin.exe）,Windows 路径必须用本函数。
+    引号内空格不拆分,引号本身剥离。
+    """
+    tokens: list[str] = []
+    cur: list[str] = []
+    in_q: str | None = None
+    for ch in command:
+        if in_q:
+            if ch == in_q:
+                in_q = None
+            else:
+                cur.append(ch)
+        elif ch in ('"', "'"):
+            in_q = ch
+        elif ch.isspace():
+            if cur:
+                tokens.append(''.join(cur))
+                cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        tokens.append(''.join(cur))
+    return tokens
+
 
 def _build_proc_cmd(cmd_list: list[str]) -> list[str]:
     """跨平台子进程命令构造（Windows 适配核心）：
@@ -73,6 +114,30 @@ def _build_proc_cmd(cmd_list: list[str]) -> list[str]:
       混合内容 token（如 "a b&c"）加引号保护，避免 & 被误当命令分隔符。
     """
     _meta = re.compile(r'[|><;&]')
+    # ★ 2026-09-01 Windows 修复：PowerShell/pwsh 命令直接 exec,绕过 cmd.exe
+    # 双重引号编码（详见 _WIN_PS_EXES 注释）——否则命令会被 PowerShell 当成
+    # 字符串字面量回显而不执行,表现为"打开软件报错/程序没启动"。
+    if IS_WINDOWS and cmd_list:
+        first_raw = cmd_list[0].strip().lower()
+        if len(cmd_list) > 1:
+            # 多元素形态: cmd_list[0] 是纯命令名(可带路径),basename 提取
+            is_ps_head = os.path.basename(first_raw) in _WIN_PS_EXES
+        else:
+            # 单元素形态: cmd_list[0] 是整串命令,取首个空白分隔 token。
+            # 注意不能用 basename —— 整串含 Windows 路径时会被按 '\' 切割取到路径尾段
+            _toks = first_raw.split()
+            is_ps_head = bool(_toks) and _toks[0] in _WIN_PS_EXES
+        if is_ps_head:
+            if len(cmd_list) > 1:
+                # 多元素形态 [powershell, -Command, <代码>]: 元字符属于 PS 语法,原样透传
+                return cmd_list
+            m = _WIN_PS_CMD_RE.match(cmd_list[0].strip())
+            if m:
+                code = m.group(3).strip()
+                # 剥掉包裹代码的整体双引号（首尾配对时）
+                if len(code) >= 2 and code[0] == '"' and code[-1] == '"':
+                    code = code[1:-1]
+                return [m.group(1), "-Command", code]
     if len(cmd_list) == 1:
         single = cmd_list[0].strip()
         if not single:
@@ -791,7 +856,8 @@ class ShellTool(ToolDefinition):
 
         # 每条重新安全校验（command + args 拆开）
         for p in cleaned:
-            tokens = shlex.split(p)
+            # ★ 2026-09-01：Windows 下 shlex.split 吃路径反斜杠，改用引号感知拆分
+            tokens = _win_split_args(p) if IS_WINDOWS else shlex.split(p)
             if not tokens:
                 return None
             ok, _ = _validate_command(tokens[0], tokens[1:] if len(tokens) > 1 else None, allow_app_launch=allow_app_launch)
@@ -822,7 +888,12 @@ class ShellTool(ToolDefinition):
         if not os.path.isdir(work_dir):
             return Observation(tool_name=self.name, success=False, output=f"目录不存在: {cwd}")
         try:
-            cmd_list = shlex.split(command) if command else []
+            # ★ 2026-09-01：Windows 下 shlex.split 会吃掉路径反斜杠
+            # （D:\Weixin\Weixin.exe → D:WeixinWeixin.exe），改用引号感知拆分
+            if IS_WINDOWS:
+                cmd_list = _win_split_args(command) if command else []
+            else:
+                cmd_list = shlex.split(command) if command else []
             if not cmd_list:
                 return Observation(tool_name=self.name, success=False, output="命令为空")
             _proc_cmd = _build_proc_cmd(cmd_list)
