@@ -62,7 +62,7 @@ class Workspace:
     def append_memory(self, line: str) -> None:
         """追加记忆."""
         path = self.dir / "MEMORY.md"
-        with open(path, "a") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
     def _read_file(self, name: str) -> str:

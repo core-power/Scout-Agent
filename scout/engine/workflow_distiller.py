@@ -81,7 +81,7 @@ class WorkflowDistiller:
             return
         try:
             if _CONFIG_PATH.exists():
-                with open(_CONFIG_PATH) as f:
+                with open(_CONFIG_PATH, encoding="utf-8") as f:
                     self.config.update(json.load(f))
         except Exception as e:
             logger.warning(f"distiller.json 读取失败: {e}")
@@ -89,7 +89,7 @@ class WorkflowDistiller:
     def save_config(self) -> None:
         try:
             _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(_CONFIG_PATH, "w") as f:
+            with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"distiller.json 保存失败: {e}")

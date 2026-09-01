@@ -69,7 +69,7 @@ class AutomationPolicy:
 def _load_json(path: Path) -> dict | None:
     try:
         if path.exists():
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
                 return data if isinstance(data, dict) else None
     except Exception as e:
@@ -132,7 +132,7 @@ class AutomationPolicyManager:
         data.pop("source", None)
         try:
             _USER_POLICY_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(_USER_POLICY_PATH, "w") as f:
+            with open(_USER_POLICY_PATH, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             self._user = data
         except Exception as e:

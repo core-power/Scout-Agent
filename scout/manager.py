@@ -83,7 +83,7 @@ def _read_pid() -> Optional[int]:
     if not os.path.exists(pid_file):
         return None
     try:
-        with open(pid_file, "r") as f:
+        with open(pid_file, "r", encoding="utf-8") as f:
             pid = int(f.read().strip())
         if _is_pid_alive(pid):
             return pid
@@ -98,7 +98,7 @@ def _read_pid() -> Optional[int]:
 
 
 def _write_pid(pid: int):
-    with open(_get_pid_file(), "w") as f:
+    with open(_get_pid_file(), "w", encoding="utf-8") as f:
         f.write(str(pid))
 
 
@@ -308,7 +308,7 @@ def start(foreground, no_logs):
         else:
             popen_kwargs["start_new_session"] = True
 
-        with open(log_file, "a") as log:
+        with open(log_file, "a", encoding="utf-8") as log:
             proc = subprocess.Popen(
                 _web_entry(),
                 stdout=log,

@@ -74,15 +74,21 @@ class EventBus:
     def emit_sync(self, event: Event) -> Event:
         """同步发布事件（在非异步上下文中使用）"""
         import asyncio
-        
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
-        
+
         if loop and loop.is_running():
             # 在异步上下文中，创建任务
-            asyncio.create_task(self.emit(event))
+            # ★ 2026-09-01：事件循环对任务仅持弱引用，未保存引用的任务可能
+            # 在执行中途被 GC 静默丢弃 —— 存入后台任务集，完成后自动移除。
+            if not hasattr(self, "_bg_tasks"):
+                self._bg_tasks: set = set()
+            _t = asyncio.create_task(self.emit(event))
+            self._bg_tasks.add(_t)
+            _t.add_done_callback(self._bg_tasks.discard)
             return event
         else:
             # 在同步上下文中，运行事件循环

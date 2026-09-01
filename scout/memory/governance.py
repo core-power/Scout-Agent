@@ -57,7 +57,7 @@ class MemoriesConfig:
         data = dict(_DEFAULTS)
         try:
             if _CONFIG_PATH.exists():
-                with open(_CONFIG_PATH) as f:
+                with open(_CONFIG_PATH, encoding="utf-8") as f:
                     stored = json.load(f)
                 if isinstance(stored, dict):
                     for k in _DEFAULTS:
@@ -70,7 +70,7 @@ class MemoriesConfig:
     def save(self) -> None:
         try:
             _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(_CONFIG_PATH, "w") as f:
+            with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(asdict(self), f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"memories.json 保存失败: {e}")
