@@ -99,8 +99,11 @@ class StarlightDistiller:
         if self._scheduler_task and not self._scheduler_task.done():
             logger.info("调度器已在运行")
             return
-        
-        self._scheduler_task = asyncio.create_task(self._schedule_loop())
+
+        # ★ 2026-09-01：先取 running loop 再创建协程，避免"协程对象已创建但
+        # create_task 因无事件循环失败"导致的 never awaited 泄漏警告。
+        loop = asyncio.get_running_loop()  # 无事件循环时在此抛 RuntimeError
+        self._scheduler_task = loop.create_task(self._schedule_loop())
         logger.info(f"星夜凝萃调度器已启动，每天 {self.config['schedule_hour']}:00 执行")
 
     def stop_scheduler(self):
@@ -396,9 +399,15 @@ def init_starlight(agent: Agent) -> StarlightDistiller:
     """初始化星夜凝萃器."""
     global _distiller
     _distiller = StarlightDistiller(agent)
-    # 启动定时调度器
+    # 启动定时调度器。
+    # ★ 2026-09-01 修复：本函数在 WebAdapter._rebuild_agent（同步上下文）中被调用，
+    # 此时 uvicorn 事件循环尚未运行，asyncio.create_task 会抛
+    # "no running event loop" → 调度协程 never awaited，星夜凝萃从未运行过。
+    # 无事件循环时静默跳过，由 server.py 的 FastAPI lifespan（有 loop）补启动。
     try:
         _distiller.start_scheduler()
+    except RuntimeError as e:
+        logger.info(f"当前无事件循环，星夜凝萃调度器将由应用启动时补启: {e}")
     except Exception as e:
         logger.warning(f"启动定时调度器失败: {e}")
     return _distiller
