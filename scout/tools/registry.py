@@ -78,11 +78,14 @@ class ToolRegistry:
     # 显式 import 的工具（如 knowledge）注册。此清单保证打包版工具完整加载；
     # 源码环境下与 iter_modules 结果做并集去重，无副作用。
     _BUILTIN_FALLBACK = [
-        "browser", "code_exec", "delegate", "edit", "env_config",
+        "browser", "code_exec", "delegate", "env_config",
         "files", "image_gen", "knowledge", "mcp", "memory",
         "parallel", "scheduler", "send_file", "shell", "vision", "web",
         "scout_report",
     ]
+    # 注: "edit" 已于 2026-09-01 移除 —— edit 功能已合并进 files 工具
+    # (unified.py 的 action=edit),空目录残留导致每次启动报
+    # "工具模块 edit 加载失败: No module named 'scout.tools.builtin.edit'"。
 
     @classmethod
     def register(cls, tool: ToolDefinition) -> None:
