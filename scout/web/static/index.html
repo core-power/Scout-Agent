@@ -3410,45 +3410,7 @@ async function loadSession(sid, opts = {}) {
         } else {
             document.getElementById('chat-title').textContent = __t('对话');
         }
-        // ★ 2026-09-01 修复：渲染被截断/归档的历史消息（编辑重发、上下文治理等）
-        //   此前这些历史仅存于 messages_archive 表，前端不返回不显示，
-        //   用户重开 exe 后误以为"历史消息丢失"。现以折叠区方式展示，可展开找回。
-        if (Array.isArray(d.archived) && d.archived.length > 0) {
-            const archWrap = document.createElement('div');
-            archWrap.className = 'archived-history max-w-3xl mx-auto w-full px-4 mt-2';
-            archWrap.innerHTML = `
-                <button type="button" class="archived-toggle w-full text-left text-xs text-slate-500 hover:text-slate-300
-                    py-2 px-3 rounded-lg bg-slate-800/40 border border-slate-700/40 transition-colors">
-                    <span class="flex items-center gap-2">
-                        <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                        <span class="archived-count"></span>
-                    </span>
-                </button>
-                <div class="archived-body hidden mt-2 space-y-2 pl-1 border-l-2 border-slate-700/40"></div>`;
-            const _msgContainer = document.getElementById('messages');
-            if (_msgContainer) _msgContainer.appendChild(archWrap);
-            const _cnt = archWrap.querySelector('.archived-count');
-            const _body = archWrap.querySelector('.archived-body');
-            if (_cnt) _cnt.textContent = (typeof __t === 'function' ? __t('历史消息') : '历史消息') + ` (${d.archived.length})`;
-            // 渲染归档消息（user/assistant 纯文本，折叠查看）
-            for (const a of d.archived) {
-                if (!a.content || !a.content.trim()) continue;
-                if (a.role === 'system') continue;
-                const aRow = document.createElement('div');
-                const _label = a.role === 'user' ? '用户' : '助手';
-                aRow.className = 'archived-row text-xs leading-relaxed';
-                aRow.innerHTML = `<div class="text-slate-500 mb-0.5">[${_label}] ${escapeHtml((a.timestamp || '').replace('T',' ').slice(0,16))}</div>
-                    <div class="text-slate-400 whitespace-pre-wrap break-all">${escapeHtml(String(a.content).slice(0,1500))}</div>`;
-                _body.appendChild(aRow);
-            }
-            const _toggle = archWrap.querySelector('.archived-toggle');
-            _toggle.addEventListener('click', () => {
-                const hidden = _body.classList.toggle('hidden');
-                const icon = _toggle.querySelector('svg');
-                if (icon) icon.style.transform = hidden ? '' : 'rotate(45deg)';
-            });
-        }
-        // 历史消息加载完成后滚动到底部（消息多时可滑动浏览）
+                // 历史消息加载完成后滚动到底部（消息多时可滑动浏览）
         setTimeout(() => scrollToBottom(true), 100);
     } catch(e) { console.error("loadSession error:", e); }
 }
