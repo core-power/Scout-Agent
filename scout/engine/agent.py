@@ -1326,7 +1326,12 @@ class Agent:
                         except Exception:
                             pass
 
-                    asyncio.create_task(_distill_task())
+                    # ★ 2026-09-01：create_task 需持引用，否则任务可能被 GC 静默丢弃
+                    if not hasattr(self, "_bg_tasks"):
+                        self._bg_tasks: set = set()
+                    _t = asyncio.create_task(_distill_task())
+                    self._bg_tasks.add(_t)
+                    _t.add_done_callback(self._bg_tasks.discard)
 
                 # ── P1 周期性自省计数（后台，不阻塞回复）──
 
@@ -1341,7 +1346,12 @@ class Agent:
                         except Exception:
                             pass
 
-                    asyncio.create_task(_maybe_introspect())
+                    # ★ 2026-09-01：create_task 需持引用，否则任务可能被 GC 静默丢弃
+                    if not hasattr(self, "_bg_tasks"):
+                        self._bg_tasks: set = set()
+                    _t = asyncio.create_task(_maybe_introspect())
+                    self._bg_tasks.add(_t)
+                    _t.add_done_callback(self._bg_tasks.discard)
 
                 # ── 插件钩子：after_chat（可改写助手回复） ──
                 _resp_text = await self._run_plugin_after_chat(

@@ -185,12 +185,12 @@ class AuthManager:
 
     def _write_credentials(self, data: dict) -> None:
         """写凭证文件（600 权限，仅当前用户可读）. """
-        with open(self._resolve_credentials_path(), "w") as f:
+        with open(self._resolve_credentials_path(), "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.chmod(self._resolve_credentials_path(), 0o600)
 
     def _read_credentials(self) -> dict:
-        with open(self._resolve_credentials_path()) as f:
+        with open(self._resolve_credentials_path(), encoding="utf-8") as f:
             return json.load(f)
 
     def set_credentials(self, username: str, password: str) -> None:

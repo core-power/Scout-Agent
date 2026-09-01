@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,8 @@ from scout.security.secret import (
 
 # 项目根目录 — 动态计算，不再硬编码
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+logger = logging.getLogger(__name__)
 
 # 统一路径（2026-08-30）：SCOUT_CONFIG_DIR 或 <项目根>/.scout，随项目迁移；
 # exe 便携模式由 launcher 设置 SCOUT_CONFIG_DIR=exe旁data，不再写死 C 盘 $SCOUT_DATA_DIR
@@ -157,7 +160,7 @@ class ConfigManager:
 
     def _create_default_config(self):
         """创建默认配置文件."""
-        with open(CONFIG_PATH, "w") as f:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(INITIAL_CONFIG, f, indent=2, ensure_ascii=False)
 
     def load(self) -> LLMConfig:
@@ -175,10 +178,21 @@ class ConfigManager:
                 break
 
         # 2. 从 $SCOUT_DATA_DIR/config.json 读取（覆盖 .env）
+        #    ★ 2026-09-01：统一 UTF-8；兼容历史版本（无 encoding 时中文 Windows
+        #    以 GBK 写出）的旧配置文件 —— UTF-8 解码失败时回退 GBK 再读。
         if CONFIG_PATH.exists():
-            with open(CONFIG_PATH) as f:
-                saved = json.load(f)
-                config.update(saved)
+            saved = None
+            for _enc in ("utf-8", "gbk"):
+                try:
+                    with open(CONFIG_PATH, encoding=_enc) as f:
+                        saved = json.load(f)
+                    break
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+            if saved is None:
+                logger.warning("config.json 解析失败（utf-8/gbk 均失败），使用默认配置")
+                saved = {}
+            config.update(saved)
 
         # 3. 合并默认值（确保所有字段都有值）。
         #    过滤配置文件中的 None 值：JSON 里显式写的 null 不应覆盖默认字段，
@@ -473,12 +487,12 @@ class ConfigManager:
                 cleaned.append(e)
             out["search_engines"] = cleaned
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_PATH, "w") as f:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(out, f, indent=2, ensure_ascii=False)
 
     def _load_env_file(self, path: Path, config: dict) -> None:
         """从 .env 文件加载配置."""
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):

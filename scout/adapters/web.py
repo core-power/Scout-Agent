@@ -218,6 +218,9 @@ class WebAdapter:
             logger.warning(f"Failed to load config and rebuild agent: {e}")
 
         # ★ 断裂点修复 2: WebSocket 连接管理 + EventBus 订阅
+        # ★ 2026-09-01：后台任务集 — create_task 必须持引用,
+        # 否则事件循环仅持弱引用,任务可能在执行中被 GC 静默丢弃
+        self._bg_tasks: set = set()
         self._active_ws_connections: set = set()
         self._pending_confirmations: dict[str, asyncio.Future] = {}  # Human-in-the-Loop 确认请求
         self._setup_event_bus_subscription()
@@ -253,12 +256,12 @@ class WebAdapter:
 
     def _load_webhooks(self) -> list[dict]:
         if self._webhooks_path.exists():
-            with open(self._webhooks_path) as f:
+            with open(self._webhooks_path, encoding="utf-8") as f:
                 return json.load(f)
         return []
 
     def _save_all_webhooks(self, hooks: list[dict]) -> None:
-        with open(self._webhooks_path, "w") as f:
+        with open(self._webhooks_path, "w", encoding="utf-8") as f:
             json.dump(hooks, f, indent=2, ensure_ascii=False)
 
     def _get_webhooks(self) -> list[dict]:
@@ -749,8 +752,10 @@ class WebAdapter:
                 self.auth_mgr.set_credentials(username, password)
                 try:
                     rotate_secret()
-                except Exception:
-                    pass
+                except Exception as _re:
+                    # ★ 2026-09-01：JWT 密钥轮换失败不应静默 —— 此时历史 token
+                    # 仍然有效，属于安全降级，必须留痕供审计
+                    logger.warning(f"密码已修改但 JWT 密钥轮换失败（历史 token 仍有效）: {_re}")
             config.auth_enabled = enabled
             self.config_mgr.save(config)
             return {
@@ -1542,26 +1547,32 @@ class WebAdapter:
                 async def _run_cron_task(task):
                     runner = self._get_automation_runner()
                     if runner:
-                        asyncio.create_task(runner.run_task(
+                        _t = asyncio.create_task(runner.run_task(
                             task.task,
                             {"trigger_type": "cron", "trigger_id": task.name},
                         ))
+                        self._bg_tasks.add(_t)
+                        _t.add_done_callback(self._bg_tasks.discard)
                     elif self._agent:
                         import copy as _copy
                         from scout.core.callbacks import NullCallbacks
                         from scout.core.types import Session as _Session
                         agent_copy = _copy.copy(self._agent)
                         agent_copy.callbacks = NullCallbacks()
-                        asyncio.create_task(agent_copy.run_conversation(
+                        _t = asyncio.create_task(agent_copy.run_conversation(
                             task.task, _Session(id=str(uuid.uuid4()))
                         ))
+                        self._bg_tasks.add(_t)
+                        _t.add_done_callback(self._bg_tasks.discard)
 
                 mgr.set_agent_callback(_run_cron_task)
 
                 # 3. 启动调度循环（懒加载发生在请求处理中，必有事件循环）
                 try:
                     asyncio.get_running_loop()
-                    asyncio.create_task(mgr.start())
+                    _t = asyncio.create_task(mgr.start())
+                    self._bg_tasks.add(_t)
+                    _t.add_done_callback(self._bg_tasks.discard)
                 except RuntimeError:
                     logger.warning("无事件循环，cron 调度循环未启动")
 
@@ -2390,14 +2401,18 @@ class WebAdapter:
             # P0: 优先走 AutomationRunner（策略门控 + 运行留痕 + 结果验证）
             runner = self._get_automation_runner()
             if runner:
-                asyncio.create_task(runner.run_webhook_task(task, webhook.get("name", "")))
+                _t = asyncio.create_task(runner.run_webhook_task(task, webhook.get("name", "")))
+                self._bg_tasks.add(_t)
+                _t.add_done_callback(self._bg_tasks.discard)
                 return {"status": "accepted", "message": "任务已提交执行（无人值守模式）", "webhook": webhook["name"]}
             if self._agent:
                 import copy
                 session = Session(id=str(uuid.uuid4()))
                 agent_copy = copy.copy(self._agent)
                 agent_copy.callbacks = NullCallbacks()
-                asyncio.create_task(agent_copy.run_conversation(task, session))
+                _t = asyncio.create_task(agent_copy.run_conversation(task, session))
+                self._bg_tasks.add(_t)
+                _t.add_done_callback(self._bg_tasks.discard)
                 return {"status": "accepted", "message": "任务已提交执行", "webhook": webhook["name"]}
             return JSONResponse({"error": "Agent 未配置"}, status_code=500)
 
