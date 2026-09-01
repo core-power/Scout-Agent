@@ -10,6 +10,16 @@ ROOT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_legacy_restore(monkeypatch):
+    """禁用旧数据目录配置自愈（2026-09-01）.
+
+    避免单测在 api_key 为空时读取真实历史数据目录（如 D:\\.scout）,
+    导致测试间数据串扰与断言不稳定。
+    """
+    monkeypatch.setenv("SCOUT_DISABLE_LEGACY_RESTORE", "1")
+
+
 @pytest.fixture
 def temp_dir(tmp_path):
     """创建临时目录."""

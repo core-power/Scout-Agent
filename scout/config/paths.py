@@ -69,3 +69,56 @@ AUTOMATION_POLICY_PATH = CONFIG_DIR / "automation_policy.json"
 
 # 数据目录版本标识 — 记录数据格式版本与程序版本，供升级/迁移检测
 MANIFEST_PATH = DATA_DIR / "manifest.json"
+
+
+def legacy_data_dirs() -> list[Path]:
+    """历史版本可能使用过的数据/配置目录（按优先级排序）.
+
+    用途 (2026-09-01 修复"更新后 API Key/配置丢失"):
+    - 旧版本把数据写在 <盘符>:\\.scout、exe 旁 data/、~/.scout 等位置;
+      新版本改用 %APPDATA%\\Scout 后,若迁移不完整会导致旧密文与新密钥
+      不配对 → 解密失败 → 用户被迫重新填写 API Key。
+    - 本函数列出候选旧目录,供 secret/manager 在解密失败或配置为空时
+      自动从旧目录恢复密钥与配置（自愈），与 launcher._migrate_old_data
+      的候选清单保持一致。
+
+    注意: 打包(frozen)时 PROJECT_ROOT 指向 onedir 的 _internal,
+    程序根目录实际是其父目录。
+    """
+    import sys
+
+    dirs: list[Path] = []
+    try:
+        if getattr(sys, "frozen", False):
+            app_root = PROJECT_ROOT.parent  # 打包: onedir 根（含 exe）
+        else:
+            app_root = PROJECT_ROOT  # 源码: 项目根
+        try:
+            anchor = app_root.resolve().anchor
+        except OSError:
+            anchor = None
+        if anchor:
+            dirs.append(Path(anchor) / ".scout")  # 旧版默认: 程序所在盘符根
+        dirs.append(app_root / "data")  # 更早版本: exe 旁 data/
+        dirs.append(app_root / ".scout")
+    except Exception:  # noqa: BLE001
+        pass
+    dirs.append(Path.home() / ".scout")
+
+    # 去重并排除当前数据目录自身
+    out: list[Path] = []
+    seen: set[Path] = set()
+    try:
+        current = DATA_DIR.resolve()
+    except OSError:
+        current = DATA_DIR
+    for d in dirs:
+        try:
+            rp = d.resolve()
+        except OSError:
+            continue
+        if rp in seen or rp == current:
+            continue
+        seen.add(rp)
+        out.append(rp)
+    return out
