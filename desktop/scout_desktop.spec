@@ -20,6 +20,16 @@ from PyInstaller.utils.hooks import (
     collect_submodules,
 )
 
+# ── 项目根 ──────────────────────────────────────────────────
+# ★ 2026-09-02 修复: spec 顶层的 collect_submodules()/collect_data_files() 在
+# Analysis 的 pathex 生效之前执行，此时 sys.path 只有 venv + spec 目录，
+# 项目根不在其中 → collect_submodules("scout.tools.builtin") 返回空 →
+# 打包后所有内置工具模块缺失（运行时报 No module named 'scout.tools.builtin.*'）。
+# 必须在此处（hiddenimports 求值前）把项目根显式加入 sys.path。
+_SRC_ROOT = os.path.dirname(os.path.abspath(SPECPATH))
+if _SRC_ROOT not in sys.path:
+    sys.path.insert(0, _SRC_ROOT)
+
 # ── 数据文件 ──────────────────────────────────────────────
 # 注意: PyInstaller 的 datas 路径相对 spec 所在目录(desktop/)解析，
 #       故项目根文件需加 ../ 前缀（2026-08-29 修复）。
@@ -60,7 +70,6 @@ hiddenimports = [
     # 核心硬依赖（requirements 已含）
     "croniter",
     "dotenv",
-    "click",
     # uvicorn 动态加载的循环/协议实现
     "uvicorn.logging",
     "uvicorn.loops.auto",
@@ -96,7 +105,6 @@ hiddenimports = [
     "scout.bus",
     "scout.scheduler",
     "scout.security.secret",
-    "scout.doctor",
     # 内置工具模块（2026-08-30 修复）：PyInstaller 打包后 iter_modules 无法
     # 枚举 PYZ 归档，须显式收集全部 builtin 工具，discover() 才有代码可导入。
     *collect_submodules("scout.tools.builtin"),
@@ -108,10 +116,7 @@ hiddenimports = [
 ]
 
 # ── 打包配置 ─────────────────────────────────────────────
-# 2026-09-01 修复: 在 desktop/ 下执行 PyInstaller 时 pathex=["."] 只含 desktop,
-# Analysis 找不到项目根的 scout 包 → "missing module named scout" 静默跳过 →
-# 运行时报 No module named 'scout.tools'。改为显式加入项目根。
-_SRC_ROOT = os.path.dirname(os.path.abspath(SPECPATH))
+# 2026-09-01 修复: Analysis pathex 显式含项目根，避免 "missing module named scout"。
 a = Analysis(
     ["launcher.py"],  # 相对 spec 所在目录(desktop/)解析
     pathex=[_SRC_ROOT, "."],
@@ -128,6 +133,16 @@ a = Analysis(
         "torch",
         "transformers",  # 嵌入用 onnxruntime 直跑，无需 transformers
         "tkinter",       # 绿色版不依赖 tk 消息框
+        # CLI/零引用依赖（桌面 Web UI 用不到，2026-09-02 精简）：
+        # rich 仅被 cli.py / doctor.py / adapters/console.py 顶层引用（均不在
+        # 桌面运行链路内）；requests / prompt_toolkit 全仓库零引用。
+        # 注意: click 不能排除——uvicorn 顶层 import click（uvicorn 硬依赖）。
+        "rich",
+        "prompt_toolkit",
+        "requests",
+        # onnxruntime.tools 顶层 import requests（convert_tf_models_to_pytorch.py），
+        # 运行时用不到该子包；排除后 requests/urllib3/certifi/idna 链全部不再进包。
+        "onnxruntime.tools",
         # 注: playwright 不再排除（2026-08-30）——浏览器工具开箱即用：
         # Python 包本体进包（~20MB），chromium 二进制首次使用时自动安装到用户目录。
         # 官方 hook 会自动收集 playwright/driver 下的 node 驱动。
