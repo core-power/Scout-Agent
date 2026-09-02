@@ -25,6 +25,10 @@
   检测到错误对话框（标准 #32770 对话框，静态文本含"找不到/网络路径/错误"等关键词）
   立即失败并返回弹窗完整文本；超时无新进程无窗口也判失败。杜绝"ShellExecuteW 返回
   成功但应用弹'找不到网络路径'错误框"的假成功反馈。
+- 候选路径自动回退（2026-09-02）：健康检查失败（如某份安装损坏弹错误框）时，自动
+  关闭错误对话框并尝试 KNOWN_APP_PATHS 中的下一个候选安装路径（如另一份可用安装），
+  全部候选失败才返回失败。解决"机器上有损坏安装且排在前面，Scout 永远打到坏路径"
+  的问题（真实案例：D:\tencent_meeting\WeMeet 损坏 → 自动回退 D:\tengxunhuiyi\WeMeet）。
 """
 
 from __future__ import annotations
@@ -789,7 +793,7 @@ _APP_DIR_ENV = (
     ("{USERPROFILE}", lambda: os.environ.get("USERPROFILE") or ""),
 )
 
-_KNOWN_APP_CACHE: dict[str, str | None] = {}
+_KNOWN_APP_CANDIDATE_CACHE: dict[str, list[str]] = {}
 
 
 def _app_drives() -> list[str]:
@@ -873,32 +877,47 @@ def _search_common_roots(exe_name: str) -> str | None:
     return None
 
 
-def _resolve_known_app(exe_name: str) -> str | None:
-    """解析已知应用的绝对路径（Windows）。模板命中优先；未命中再兜底搜索.
+def _resolve_known_app_candidates(exe_name: str) -> list[str]:
+    """解析已知应用的全部候选绝对路径（Windows）。
 
-    结果缓存，避免重复全盘扫描。由白名单分支与 execute 层调用。
+    模板按优先级展开、逐个探测，返回【全部】命中路径（有序，首个为最高优先级）；
+    模板全部未命中时，再兜底全盘搜索常见目录。结果缓存避免重复全盘扫描。
+
+    ★ 2026-09-02：返回候选列表而非单个结果——启动后健康检查失败时可自动回退到
+    下一个候选（如某份安装损坏弹"找不到网络路径"，回退到另一份可用安装）。
     """
     if not IS_WINDOWS or not exe_name:
-        return None
+        return []
     key = exe_name.strip().lower()
     if not key or not key.endswith(".exe"):
-        return None
-    if key in _KNOWN_APP_CACHE:
-        return _KNOWN_APP_CACHE[key]
+        return []
+    if key in _KNOWN_APP_CANDIDATE_CACHE:
+        return list(_KNOWN_APP_CANDIDATE_CACHE[key])
 
-    result: str | None = None
+    result: list[str] = []
     entry = KNOWN_APP_PATHS.get(key)
     if entry:
         _display, templates = entry
         for d in _expand_app_dirs(templates):
             cand = os.path.join(d, exe_name)
             if os.path.isfile(cand):
-                result = cand
-                break
-    if result is None:
-        result = _search_common_roots(exe_name)
-    _KNOWN_APP_CACHE[key] = result
+                result.append(cand)
+    if not result:
+        found = _search_common_roots(exe_name)
+        if found:
+            result.append(found)
+    _KNOWN_APP_CANDIDATE_CACHE[key] = list(result)
     return result
+
+
+def _resolve_known_app(exe_name: str) -> str | None:
+    """解析已知应用的绝对路径（Windows），返回最高优先级候选（=candidates[0]）。
+
+    由白名单校验与 execute 层调用；启动时如需回退请使用
+    _resolve_known_app_candidates 获取完整候选列表。
+    """
+    cands = _resolve_known_app_candidates(exe_name)
+    return cands[0] if cands else None
 
 
 def _win_enum_windows() -> list[tuple[int, str, str]]:
@@ -985,6 +1004,21 @@ def _win_dialog_text(hwnd: int) -> str:
     return " | ".join(p for p in parts if p.strip())
 
 
+def _win_close_window(hwnd: int) -> None:
+    """向窗口发送 WM_CLOSE（0x0010），自动关闭（错误）对话框，避免残留.
+
+    ★ 2026-09-02：候选路径自动回退时，先关掉损坏安装弹出的错误框，
+    避免界面残留错误框、也避免其干扰后续候选的窗口/进程快照判断。
+    """
+    if not hwnd:
+        return
+    import ctypes
+    try:
+        ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # 错误对话框关键词（标题或静态文本命中即视为启动异常）
 _ERR_DIALOG_KEYWORDS = (
     "找不到", "网络路径", "错误", "失败", "无法", "不能", "拒绝", "未响应",
@@ -1043,13 +1077,16 @@ def _launch_app_windows(path: str, app_display: str = "", wait: float = 8.0) -> 
             for _, t, _ in new_wins:
                 if app_display in t:
                     return True, f"已检测到主窗口: {t!r}"
-        # 2) 错误对话框 → 立即失败并返回全文
+        # 2) 错误对话框 → 自动关闭并立即失败返回全文
+        #    （自动关闭：避免残留错误框，也便于调用方回退下一个候选安装）
         for h, t, c in new_wins:
             if c == "#32770":
                 body = _win_dialog_text(h)
                 if any(k.lower() in (t + " " + body).lower() for k in _ERR_DIALOG_KEYWORDS):
+                    _win_close_window(h)
                     return False, f"检测到错误对话框: 标题={t!r} 内容={body!r}"
             elif any(k.lower() in t.lower() for k in _ERR_DIALOG_KEYWORDS):
+                _win_close_window(h)
                 err_hint = err_hint or f"检测到错误窗口: {t!r}"
         # 3) 新进程出现（launcher 拉起子进程）
         if _win_enum_procs() - before_procs:
@@ -1279,6 +1316,10 @@ class ShellTool(ToolDefinition):
                 "After launching a known app, the tool verifies the app really started "
                 "(main window detected) and reports any error dialog text (e.g. 'network path "
                 "not found') back to you instead of falsely claiming success. "
+                "If a launch fails its health check (e.g. a broken install pops an error dialog), "
+                "the tool automatically closes the dialog and falls back to the next candidate "
+                "install path (e.g. another working install of the same app); only when all "
+                "candidates fail does it return failure. "
                 "Cross-platform commands are auto-translated to the current OS equivalents: "
                 "ls→dir, cat→type, grep→findstr, which→where, pwd→cd, cp→copy, mv→move, "
                 "rm→del, clear→cls, uname→ver (e.g. command='ls' works and runs 'dir')."
@@ -1353,22 +1394,30 @@ class ShellTool(ToolDefinition):
             and not command.startswith("__")
             and command.strip().lower() in KNOWN_APP_PATHS
         ):
-            _resolved = _resolve_known_app(command.strip())
-            if _resolved:
-                _display = KNOWN_APP_PATHS[command.strip().lower()][0]
-                # ★ 2026-09-02：启动后健康检查——确认应用真的起来了（主窗口出现），
-                # 若弹出"找不到网络路径"等错误框则如实反馈给 LLM，不再假报成功。
-                _ok, _detail = _launch_app_windows(_resolved, app_display=_display)
-                if _ok:
-                    return Observation(
-                        tool_name=self.name,
-                        success=True,
-                        output=f"已启动 {_display}: {_resolved}\n{_detail}",
-                    )
+            _display = KNOWN_APP_PATHS[command.strip().lower()][0]
+            _cands = _resolve_known_app_candidates(command.strip())
+            if _cands:
+                # ★ 2026-09-02：启动后健康检查 + 候选自动回退——逐候选 ShellExecuteW
+                # 启动并验证真实状态（主窗口出现/错误对话框/新进程）；某份安装损坏
+                # （如 D:\tencent_meeting\WeMeet 弹"找不到网络路径"）失败时自动关闭
+                # 错误框、尝试下一个候选（如 D:\tengxunhuiyi\WeMeet），全部失败才返回。
+                _errs: list[str] = []
+                for _cand in _cands:
+                    _ok, _detail = _launch_app_windows(_cand, app_display=_display)
+                    if _ok:
+                        return Observation(
+                            tool_name=self.name,
+                            success=True,
+                            output=f"已启动 {_display}: {_cand}\n{_detail}",
+                        )
+                    _errs.append(f"✗ {_cand}: {_detail}")
                 return Observation(
                     tool_name=self.name,
                     success=False,
-                    output=f"启动 {_display} 可能失败: {_resolved}\n{_detail}",
+                    output=(
+                        f"启动 {_display} 失败：已尝试 {len(_cands)} 个候选路径，"
+                        f"可能均为损坏/不完整安装:\n" + "\n".join(_errs)
+                    ),
                 )
         # ★ 2026-09-01：跨平台命令透明翻译（不同系统用该系统命令工具）。
         # 混合白名单时代 ls/cat/grep 在 Windows cmd 下"过白名单但命令未找到"，
