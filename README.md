@@ -8,7 +8,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0.1-orange.svg)](VERSION)
+[![Version](https://img.shields.io/badge/Version-1.0.0.0-orange.svg)](VERSION)
 
 *Persistent Memory · Tool Calling · Multi-Channel · Security-First*
 
@@ -74,7 +74,7 @@ Scout Agent is an intelligent personal assistant AI agent with persistent memory
 
 Don't want to set up Python? Use the **portable green build** — double-click and go:
 
-1. Download the **Windows portable build** from **GitHub Releases**: [v1.0.0.1](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.1) — direct link: [scout-agent-1.0.0.1-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.1/scout-agent-1.0.0.1-win-x64.zip) (check [all releases](https://github.com/core-power/Scout-Agent/releases) for newer versions).
+1. Download the **Windows portable build** from **GitHub Releases**: [v1.0.0.0](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.0) — direct link: [scout-agent-1.0.0.0-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.0/scout-agent-1.0.0.0-win-x64.zip) (check [all releases](https://github.com/core-power/Scout-Agent/releases) for newer versions).
 2. Unzip it, then copy the **whole folder** to any Windows 10/11 machine — no installation, no registry, no admin rights.
 3. Open the unzipped folder and double-click **`ScoutDesktop\ScoutAgent.exe`** — the chat window opens instantly.
 4. On first use, open **Settings** and paste your LLM API key (dashscope / DeepSeek / OpenAI / any OpenAI-compatible endpoint).
