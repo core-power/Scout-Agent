@@ -20,6 +20,11 @@
   Linux/macOS 剔除 Windows 专用命令），常用跨平台命令透明翻译（ls→dir、cat→type、
   grep→findstr、dir→ls、findstr→grep 等），参数不兼容时给出平台化提示——
   避免"过白名单但目标 shell 里命令未找到"的频繁操作报错。
+- 应用启动后健康检查（2026-09-02）：已知应用（wemeetapp/wechat/dingtalk 等）经
+  ShellExecuteW 启动后，轮询检测真实启动状态——检测到应用主窗口视为健康成功；
+  检测到错误对话框（标准 #32770 对话框，静态文本含"找不到/网络路径/错误"等关键词）
+  立即失败并返回弹窗完整文本；超时无新进程无窗口也判失败。杜绝"ShellExecuteW 返回
+  成功但应用弹'找不到网络路径'错误框"的假成功反馈。
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ import os
 import re
 import shlex
 import subprocess  # noqa: F401 - DETACHED_PROCESS 用于 start 命令分离启动
+import time
 from typing import Any
 
 from scout.core.annotations import ToolAnnotations
@@ -895,22 +901,165 @@ def _resolve_known_app(exe_name: str) -> str | None:
     return result
 
 
-def _launch_app_windows(path: str) -> bool:
-    """用 Windows ShellExecuteW 启动本地应用（fire-and-forget）.
+def _win_enum_windows() -> list[tuple[int, str, str]]:
+    """枚举可见顶层窗口 -> [(hwnd, title, class_name)]（Windows，ctypes，无第三方依赖）."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    out: list[tuple[int, str, str]] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _cb(hwnd, lparam):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            title = ""
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value
+            cls_buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, cls_buf, 256)
+            out.append((int(hwnd), title, cls_buf.value))
+        return True
+
+    user32.EnumWindows(_cb, 0)
+    return out
+
+
+def _win_enum_procs() -> set[str]:
+    """枚举当前所有进程 exe 名集合（Windows，ctypes，无第三方依赖）."""
+    import ctypes
+    from ctypes import wintypes
+    TH32CS_SNAPPROCESS = 0x00000002
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.POINTER(wintypes.ULONG)),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    h = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    names: set[str] = set()
+    if not h or h == ctypes.c_void_p(-1).value:
+        return names
+    try:
+        pe = PROCESSENTRY32W()
+        pe.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        if kernel32.Process32FirstW(h, ctypes.byref(pe)):
+            while True:
+                names.add(pe.szExeFile.lower())
+                if not kernel32.Process32NextW(h, ctypes.byref(pe)):
+                    break
+    finally:
+        kernel32.CloseHandle(h)
+    return names
+
+
+def _win_dialog_text(hwnd: int) -> str:
+    """读取标准对话框（#32770）内全部 Static 文本，拼成错误详情."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    parts: list[str] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _cb(child, lparam):
+        length = user32.GetWindowTextLengthW(child)
+        if length > 0:
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(child, buf, length + 1)
+            parts.append(buf.value)
+        return True
+
+    user32.EnumChildWindows(ctypes.c_void_p(hwnd), _cb, 0)
+    return " | ".join(p for p in parts if p.strip())
+
+
+# 错误对话框关键词（标题或静态文本命中即视为启动异常）
+_ERR_DIALOG_KEYWORDS = (
+    "找不到", "网络路径", "错误", "失败", "无法", "不能", "拒绝", "未响应",
+    "已停止", "异常", "error", "failed", "not found", "cannot", "unavailable",
+    "拒绝访问",
+)
+
+
+def _launch_app_windows(path: str, app_display: str = "", wait: float = 8.0) -> tuple[bool, str]:
+    """用 Windows ShellExecuteW 启动本地应用 + 启动后健康检查（★ 2026-09-02）.
 
     ★ 2026-09-01 实测结论: 无控制台/打包 exe 环境下, `cmd /c start` 启动 GUI
     程序不可靠（cmd 内建 start 的 ShellExecute 语义在 DETACHED+DEVNULL 下会丢失），
     而 ShellExecuteW 走系统 Shell 语义 + 应用所在目录作 lpDirectory, 稳定拉起
-    （腾讯会议/钉钉/飞书/QQ 均验证）。返回值 > 32 表示成功。
+    （腾讯会议/钉钉/飞书/QQ 均验证）。返回值 > 32 表示调用成功。
+
+    ★ 2026-09-02 启动后健康检查：ShellExecuteW 返回成功 ≠ 应用真的起来了
+    （wemeetapp 等 launcher 可能自己弹"找不到网络路径"错误框）。启动前记录
+    窗口/进程快照，启动后轮询 wait 秒：
+      1) 检测到应用主窗口（标题含 app_display）→ 健康成功；
+      2) 检测到错误对话框（#32770 + 文本含错误关键词）→ 立即失败并返回弹窗全文；
+      3) 超时但出现新进程 → 降级成功（进程已起，主窗口稍慢）；
+      4) 超时无新进程无窗口 → 失败。
+
+    Returns:
+        (ok, detail) — ok=True 应用已运行；detail 为人类可读诊断/错误文本。
     """
+    if not IS_WINDOWS:
+        return True, ""
+    import ctypes
+
+    before_titles = {t for _, t, _ in _win_enum_windows()}
+    before_procs = _win_enum_procs()
+    # 应用已在运行（主窗口已存在）：ShellExecuteW 只会前置激活，直接判健康
+    if app_display and any(app_display in t for t in before_titles):
+        return True, "应用已在运行，已前置激活"
+
     try:
-        import ctypes
         res = ctypes.windll.shell32.ShellExecuteW(
             None, "open", path, None, os.path.dirname(path) or ".", 1,
         )
-        return int(res) > 32
-    except Exception:
-        return False
+        if int(res) <= 32:
+            return False, f"ShellExecuteW 调用失败（返回码 {int(res)}，<32 为 SE_ERR_*）"
+    except Exception as e:  # noqa: BLE001
+        return False, f"ShellExecuteW 调用异常: {e}"
+
+    deadline = time.monotonic() + wait
+    err_hint = ""
+    got_new_proc = False
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        wins = _win_enum_windows()
+        new_wins = [(h, t, c) for h, t, c in wins if t and t not in before_titles]
+        # 1) 主窗口出现 → 健康
+        if app_display:
+            for _, t, _ in new_wins:
+                if app_display in t:
+                    return True, f"已检测到主窗口: {t!r}"
+        # 2) 错误对话框 → 立即失败并返回全文
+        for h, t, c in new_wins:
+            if c == "#32770":
+                body = _win_dialog_text(h)
+                if any(k.lower() in (t + " " + body).lower() for k in _ERR_DIALOG_KEYWORDS):
+                    return False, f"检测到错误对话框: 标题={t!r} 内容={body!r}"
+            elif any(k.lower() in t.lower() for k in _ERR_DIALOG_KEYWORDS):
+                err_hint = err_hint or f"检测到错误窗口: {t!r}"
+        # 3) 新进程出现（launcher 拉起子进程）
+        if _win_enum_procs() - before_procs:
+            got_new_proc = True
+
+    if err_hint:
+        return False, err_hint
+    if got_new_proc:
+        return True, "进程已启动（主窗口暂未检测到）"
+    return False, "启动后等待期内未检测到新进程或窗口，应用可能未正常启动"
 
 
 def _app_launch_hint(exe_name: str) -> str:
@@ -1127,6 +1276,9 @@ class ShellTool(ToolDefinition):
                 "bare exe name as command (e.g. command='wemeetapp.exe'); for others use "
                 "command='start' with args=['', 'C:\\path\\app.exe'] or powershell "
                 "-Command \"Start-Process 'C:\\path\\app.exe'\". "
+                "After launching a known app, the tool verifies the app really started "
+                "(main window detected) and reports any error dialog text (e.g. 'network path "
+                "not found') back to you instead of falsely claiming success. "
                 "Cross-platform commands are auto-translated to the current OS equivalents: "
                 "ls→dir, cat→type, grep→findstr, which→where, pwd→cd, cp→copy, mv→move, "
                 "rm→del, clear→cls, uname→ver (e.g. command='ls' works and runs 'dir')."
@@ -1202,11 +1354,21 @@ class ShellTool(ToolDefinition):
             and command.strip().lower() in KNOWN_APP_PATHS
         ):
             _resolved = _resolve_known_app(command.strip())
-            if _resolved and _launch_app_windows(_resolved):
+            if _resolved:
+                _display = KNOWN_APP_PATHS[command.strip().lower()][0]
+                # ★ 2026-09-02：启动后健康检查——确认应用真的起来了（主窗口出现），
+                # 若弹出"找不到网络路径"等错误框则如实反馈给 LLM，不再假报成功。
+                _ok, _detail = _launch_app_windows(_resolved, app_display=_display)
+                if _ok:
+                    return Observation(
+                        tool_name=self.name,
+                        success=True,
+                        output=f"已启动 {_display}: {_resolved}\n{_detail}",
+                    )
                 return Observation(
                     tool_name=self.name,
-                    success=True,
-                    output=f"已启动 {os.path.basename(_resolved)}: {_resolved}",
+                    success=False,
+                    output=f"启动 {_display} 可能失败: {_resolved}\n{_detail}",
                 )
         # ★ 2026-09-01：跨平台命令透明翻译（不同系统用该系统命令工具）。
         # 混合白名单时代 ls/cat/grep 在 Windows cmd 下"过白名单但命令未找到"，
