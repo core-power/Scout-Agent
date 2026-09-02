@@ -251,3 +251,32 @@ async def search_with_engine(engine: dict, query: str, page: int = 1, num_result
     if etype == "duckduckgo":
         return await _search_duckduckgo(url, api_key, query)
     return await _search_custom(url, api_key, query)
+
+
+# ── 启用源读取（web_search / SkillSearch 共用同一套配置） ──
+
+
+def load_enabled_engines() -> list[dict]:
+    """读取启用的搜索引擎源列表（兼容旧版单值 search_engine）.
+
+    每项 {name, type, url, api_key, enabled}；url 为空时由各引擎适配器
+    回退默认端点。未配置任何源时返回空列表 —— 调用方据此决定降级策略
+    （如 SkillSearch 退化为仅 GitHub API 源）。
+    """
+    try:
+        from scout.config.manager import ConfigManager
+        cfg = ConfigManager().load()
+    except Exception:
+        return []
+    engines = list(cfg.search_engines or [])
+    # 兼容：旧版单值 search_engine（SearXNG URL）→ 追加为 searxng 源
+    legacy = (cfg.search_engine or "").strip()
+    if legacy and not any(
+        (e.get("type") == "searxng" and (e.get("url") or "").strip() == legacy)
+        for e in engines
+    ):
+        engines.insert(0, {
+            "name": "SearXNG", "type": "searxng",
+            "url": legacy, "api_key": "", "enabled": True,
+        })
+    return [e for e in engines if e.get("enabled", True)]

@@ -1,8 +1,10 @@
 """SkillSearch — 全网技能/插件搜索（插件生成器前置能力）.
 
 在 AI 生成插件前，先搜索全网是否存在现成的 Skill / Plugin：
-- 来源：agentskills.io、GitHub awesome-agent-skills、claude-skills 等
-- 通过本地 SearXNG 搜索（零成本）
+- 来源1：GitHub API（按星数排序的高质量技能仓库，匿名免配置）
+- 来源2：配置的所有启用搜索引擎源（searxng/bing/google/tavily/duckduckgo/custom
+        任一种配置了即使用，经 engines.search_with_engine 统一适配）
+- 未配置任何搜索引擎源时，自动跳过来源2，仅用 GitHub API 源（免配置可用）
 - 结果按"是否像真实 SKILL 仓库"打分排序
 
 设计：
@@ -13,9 +15,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger("scout.engine.skill_search")
@@ -64,6 +67,9 @@ SEARCH_TEMPLATES = [
     "agentskills.io {query}",
 ]
 
+# 每次搜索最多发出的引擎查询数（引擎数 × 模板数可能爆炸，设预算上限）
+MAX_ENGINE_QUERIES = 8
+
 
 @dataclass
 class SkillCandidate:
@@ -90,24 +96,25 @@ class SkillSearch:
 
     def __init__(
         self,
-        searxng_url: str = "http://localhost:8080/search",
+        engines: list[dict] | None = None,
         max_results: int = 12,
         search_timeout: float = 8.0,
     ):
-        self.searxng_url = searxng_url
+        # 只保留启用项；None/空 → 无引擎源，search 时仅走 GitHub API
+        self.engines = [e for e in (engines or []) if e.get("enabled", True)]
         self.max_results = max_results
         self.search_timeout = search_timeout
 
     # ── 搜索主入口 ──
     async def search(self, query: str, top_k: int = 10) -> list[SkillCandidate]:
-        """搜索全网技能 — GitHub API（高星仓库）+ SearXNG（全网）双来源."""
+        """搜索全网技能 — GitHub API（高星仓库）+ 已配置搜索引擎源（全网）."""
         if not query or not query.strip():
             return []
         query = query.strip()
 
         all_results: list[dict] = []
 
-        # 来源1：GitHub API 搜索（按星数排序，质量最高）
+        # 来源1：GitHub API 搜索（按星数排序，质量最高，匿名免配置）
         try:
             gh_results = await self._search_github(query)
             all_results.extend(gh_results)
@@ -115,14 +122,29 @@ class SkillSearch:
         except Exception as e:
             logger.debug(f"SkillSearch GitHub API 失败: {e}")
 
-        # 来源2：SearXNG 多路搜索
-        for template in SEARCH_TEMPLATES:
-            q = template.format(query=query)
-            try:
-                results = await self._search_one(q)
-                all_results.extend(results)
-            except Exception as e:
-                logger.debug(f"SkillSearch 搜索失败 ({q}): {e}")
+        # 来源2：已配置的搜索引擎源多路搜索（一个源都没配 → 自动跳过）
+        if self.engines:
+            # 组 (引擎 × 模板) 查询，受预算上限约束；并发执行。
+            tasks: list[tuple[dict, str]] = []
+            budget = MAX_ENGINE_QUERIES
+            for eng in self.engines:
+                for template in SEARCH_TEMPLATES:
+                    if budget <= 0:
+                        break
+                    tasks.append((eng, template.format(query=query)))
+                    budget -= 1
+                if budget <= 0:
+                    break
+            if tasks:
+                results_per_task = await asyncio.gather(
+                    *(self._search_one(q, eng) for eng, q in tasks),
+                    return_exceptions=True,
+                )
+                for eng, (r) in zip([t[0] for t in tasks], results_per_task):
+                    if isinstance(r, Exception):
+                        logger.debug(f"SkillSearch 引擎 {eng.get('type')} 搜索失败: {r}")
+                        continue
+                    all_results.extend(r)
 
         # 去重（按 URL）
         seen: set[str] = set()
@@ -177,19 +199,12 @@ class SkillSearch:
             })
         return results
 
-    # ── 单路搜索 ──
-    async def _search_one(self, query: str) -> list[dict]:
-        """调 SearXNG 搜索单路."""
-        import aiohttp
+    # ── 单路搜索（经统一引擎适配器） ──
+    async def _search_one(self, query: str, engine: dict) -> list[dict]:
+        """用指定引擎源搜一路，返回统一结构 [{title,url,content,publishedDate}]."""
+        from scout.tools.builtin.web.engines import search_with_engine
 
-        params = {"q": query, "format": "json", "language": "zh-CN", "safesearch": "0"}
-        timeout = aiohttp.ClientTimeout(total=self.search_timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as sess:
-            async with sess.get(self.searxng_url, params=params) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
-        return data.get("results", []) or []
+        return await search_with_engine(engine, query, page=1, num_results=self.max_results)
 
     # ── 结果打分 ──
     def _score_result(self, r: dict, query: str) -> SkillCandidate:
@@ -257,7 +272,10 @@ class SkillSearch:
         return SkillCandidate(title=title, url=url, snippet=snippet[:300], source=source, score=score)
 
     def stats(self) -> dict:
-        return {"searxng": self.searxng_url, "max_results": self.max_results}
+        return {
+            "engines": [e.get("type") for e in self.engines],
+            "max_results": self.max_results,
+        }
 
 
 # 全局单例
@@ -265,32 +283,34 @@ _search: SkillSearch | None = None
 
 
 def get_search_engine_url() -> str:
-    """读取配置的 SearXNG 地址（优先多源列表中的 searxng 源，兼容旧版单值 search_engine）.
+    """[兼容] 读取配置的 SearXNG 地址（已不推荐：SkillSearch 现支持任意启用引擎源）."""
+    from scout.tools.builtin.web.engines import load_enabled_engines
 
-    技能搜索依赖 SearXNG 的 JSON API 格式，故仅从 searxng 类型的源中取。
-    """
-    try:
-        from scout.config.manager import ConfigManager
-        cfg = ConfigManager().load()
-    except Exception:
-        return ""
-    for e in (cfg.search_engines or []):
-        if (e.get("type") == "searxng" and e.get("enabled", True)
-                and (e.get("url") or "").strip()):
-            return e["url"].strip()
-    return (cfg.search_engine or "").strip()
+    for e in load_enabled_engines():
+        if e.get("type") == "searxng":
+            return (e.get("url") or "").strip()
+    return ""
 
 
 def is_search_configured() -> bool:
-    """搜索引擎是否已配置 — 未配置时技能全网搜索不可用."""
-    return bool(get_search_engine_url())
+    """是否配置了至少一个搜索引擎源（供旧调用方查询；技能搜索入口已不强制，
+    一个源都没配置时自动降级为 GitHub API 源，仍可返回结果）."""
+    from scout.tools.builtin.web.engines import load_enabled_engines
+
+    return bool(load_enabled_engines())
 
 
 def get_skill_search() -> SkillSearch:
-    """获取全局 SkillSearch 单例（使用配置的 SearXNG 地址，未配置时回退默认）."""
+    """获取全局 SkillSearch 单例.
+
+    使用配置的所有启用搜索引擎源；一个源都没配置时 engines 为空，
+    search() 自动降级为仅 GitHub API 源（免配置可用）。
+    """
     global _search
     if _search is None:
-        _search = SkillSearch(searxng_url=get_search_engine_url() or "http://localhost:8080/search")
+        from scout.tools.builtin.web.engines import load_enabled_engines
+
+        _search = SkillSearch(engines=load_enabled_engines())
     return _search
 
 
