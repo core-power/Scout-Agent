@@ -2686,12 +2686,10 @@ class WebAdapter:
             top_k = int(body.get("top_k") or 10)
             if not query:
                 return JSONResponse({"error": "query 不能为空"}, status_code=400)
-            from scout.engine.skill_search import get_skill_search, is_search_configured
-            if not is_search_configured():
-                return JSONResponse(
-                    {"error": "未配置搜索引擎（SearXNG）。请在 设置 → 工具 中填写 SearXNG 实例地址后重试。"},
-                    status_code=400,
-                )
+            # 不再强制要求配置搜索引擎：skill_search 使用所有已启用的引擎源
+            # （searxng/bing/google/tavily/duckduckgo/custom 任一），一个源都没配置时
+            # 自动降级为「仅 GitHub API 源」（匿名免配置，限频 10 次/分）。
+            from scout.engine.skill_search import get_skill_search
             try:
                 results = await get_skill_search().search(query, top_k=top_k)
                 return {"results": [c.to_dict() for c in results], "count": len(results)}

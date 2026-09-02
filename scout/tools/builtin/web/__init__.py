@@ -145,28 +145,9 @@ class WebSearchTool(ToolDefinition):
     # 未配置任何搜索引擎源时，web_search 不暴露给 LLM（条件禁用）
 
     def _enabled_engines(self) -> list[dict]:
-        """读取启用的搜索引擎源列表（兼容旧版单值 search_engine）.
-
-        每项 {name, type, url, api_key, enabled}；url 为空时由各引擎适配器
-        回退默认端点（searxng/bing/google/tavily/duckduckgo 有内置默认）。
-        """
-        try:
-            from scout.config.manager import ConfigManager
-            cfg = ConfigManager().load()
-        except Exception:
-            return []
-        engines = list(cfg.search_engines or [])
-        # 兼容：旧版单值 search_engine（SearXNG URL）→ 追加为 searxng 源
-        legacy = (cfg.search_engine or "").strip()
-        if legacy and not any(
-            (e.get("type") == "searxng" and (e.get("url") or "").strip() == legacy)
-            for e in engines
-        ):
-            engines.insert(0, {
-                "name": "SearXNG", "type": "searxng",
-                "url": legacy, "api_key": "", "enabled": True,
-            })
-        return [e for e in engines if e.get("enabled", True)]
+        """读取启用的搜索引擎源列表（复用 engines.load_enabled_engines 统一逻辑）."""
+        from scout.tools.builtin.web.engines import load_enabled_engines
+        return load_enabled_engines()
 
     def is_enabled(self) -> bool:
         """是否已配置搜索引擎 — 未配置时工具不出现在 LLM 工具列表."""
