@@ -141,6 +141,9 @@ class BrowserTool(ToolDefinition):
         read_only=False,
     )
 
+    # 2026-09-02: 进程内只尝试自动安装一次，避免每次请求都触发大体积下载
+    _install_attempted: bool = False
+
     def __init__(self):
         self._browser = None
         self._context = None
@@ -214,21 +217,45 @@ class BrowserTool(ToolDefinition):
 
         在打包后的绿色版中无 python 解释器，直接复用 playwright 自带 CLI
         （playwright.__main__），经 asyncio.to_thread 避免阻塞事件循环。
-        """
-        try:
-            import sys
-            from playwright.__main__ import main as _pw_main
 
-            _old_argv = sys.argv
-            sys.argv = ["playwright", "install", "chromium"]
-            try:
-                await asyncio.to_thread(_pw_main)
-            finally:
-                sys.argv = _old_argv
-            return True
-        except Exception as e:
-            logging.getLogger("scout.browser").warning("playwright install chromium 失败: %s", e)
+        2026-09-02 修复: playwright.__main__ 是 driver 转发器，执行结束后会
+        raise SystemExit(returncode)。SystemExit 不是 Exception 的子类，
+        原先的 except Exception 接不住 → SystemExit 击穿工具层/对话流 →
+        run_stream 中断、Web UI 连接断开。此处显式捕获 SystemExit，
+        并加进程内一次性标志，避免每次请求都触发 100MB 下载重试。
+        """
+        if BrowserTool._install_attempted:
             return False
+        BrowserTool._install_attempted = True
+        _result: dict = {"ok": False, "msg": ""}
+
+        def _run() -> None:
+            try:
+                import sys
+                from playwright.__main__ import main as _pw_main
+
+                _old_argv = sys.argv
+                sys.argv = ["playwright", "install", "chromium"]
+                try:
+                    _pw_main()
+                    _result["ok"] = True
+                finally:
+                    sys.argv = _old_argv
+            except SystemExit as e:
+                # 捕获 driver 转发器的 SystemExit（正常结束也会 raise）
+                _result["msg"] = "playwright CLI exit code=%s" % (e.code if e.code is not None else "?")
+            except Exception as e:  # noqa: BLE001
+                _result["msg"] = str(e)
+
+        try:
+            await asyncio.to_thread(_run)
+        except BaseException as e:  # 双保险：线程内残余异常也不允许逃逸
+            _result["msg"] = "%r" % (e,)
+        if not _result["ok"]:
+            logging.getLogger("scout.browser").warning(
+                "playwright install chromium 失败: %s", _result["msg"]
+            )
+        return _result["ok"]
 
     async def execute(
         self,
@@ -248,11 +275,13 @@ class BrowserTool(ToolDefinition):
         
         try:
             await self._ensure_browser()
-        except RuntimeError as e:
+        except (RuntimeError, SystemExit) as e:
+            # 2026-09-02: 兜底 SystemExit（driver 转发器退出码）——任何异常都
+            # 必须转成 Observation，绝不能击穿对话流导致 Web 连接断开。
             return Observation(
                 tool_name=self.name,
                 success=False,
-                output=str(e),
+                output=str(e) or "浏览器启动失败（缺少 chromium 且自动安装未完成）",
             )
 
         try:
