@@ -93,6 +93,16 @@ const I18N_DICT = {
     "关闭（直接执行）": { zh: "关闭（直接执行）", en: "Off (direct exec)" },
     "非主会话沙箱": { zh: "非主会话沙箱", en: "Non-main sessions" },
     "全部沙箱（Docker 隔离）": { zh: "全部沙箱（Docker 隔离）", en: "All (Docker isolated)" },
+    "开启沙箱模式": { zh: "开启沙箱模式", en: "Enable sandbox mode" },
+    "继续开启": { zh: "继续开启", en: "Enable" },
+    "沙箱提示-all": {
+        zh: "开启后：所有工具命令（含主会话）将在 Docker 容器内隔离执行——无网络，且内存/CPU/进程数受限。依赖联网的命令（如下载、外网接口）在沙箱内会失败；每次执行都会临时启动容器，响应略慢。",
+        en: "When enabled, ALL tool commands (including your main session) run inside Docker containers — no network, limited memory/CPU/processes. Commands that need the internet (downloads, external APIs) will fail inside the sandbox; each run spins up a container, so responses get slightly slower.",
+    },
+    "沙箱提示-nonmain": {
+        zh: "开启后：仅「委派子任务 / 深度任务」在 Docker 容器内隔离执行（无网络，资源受限）；你直接发起对话的命令仍在本地执行，不受沙箱保护。",
+        en: "When enabled, only delegated/deep tasks run inside Docker containers (no network, limited resources); commands you run directly in conversation still execute locally and are NOT sandboxed.",
+    },
 
     // ── 设置·渠道 ──
     "已配置的渠道": { zh: "已配置的渠道", en: "Configured Channels" },

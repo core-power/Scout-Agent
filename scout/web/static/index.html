@@ -5756,7 +5756,11 @@ async function loadConfig() {
 
         // 同步沙箱模式
         const sandboxSelect = document.getElementById('cfg-sandbox-mode');
-        if (sandboxSelect) sandboxSelect.value = c.sandbox_mode || 'off';
+        if (sandboxSelect) {
+            sandboxSelect.value = c.sandbox_mode || 'off';
+            // 记录进入设置时的原值，供"开启沙箱"确认弹窗取消后回退
+            sandboxSelect.dataset.prev = sandboxSelect.value;
+        }
         // 显示 Docker 可用性状态
         updateSandboxStatus(c.sandbox_mode || 'off');
         
@@ -5782,6 +5786,19 @@ function syncAuthForm() {
 }
 document.addEventListener('change', function(e) {
     if (e.target && e.target.id === 'cfg-auth-enabled') syncAuthForm();
+});
+// 选择沙箱模式（非 off）时弹确认提示：避免误以为已隔离（Docker 依赖/无网络等）
+document.addEventListener('change', function(e) {
+    if (e.target && e.target.id === 'cfg-sandbox-mode') {
+        const sel = e.target;
+        const next = sel.value;
+        if (next === 'off' || sel.options[sel.selectedIndex].disabled) return;
+        if (next === (sel.dataset.prev || 'off')) return;
+        showSandboxModeConfirm(next).then(ok => {
+            if (!ok) { sel.value = sel.dataset.prev || 'off'; }
+            else { sel.dataset.prev = next; }
+        });
+    }
 });
 
 async function saveAuthConfig() {
@@ -5931,7 +5948,7 @@ async function updateSandboxStatus(currentMode) {
                 Array.from(sel.options).forEach(opt => {
                     if (opt.value !== 'off') opt.disabled = true;
                 });
-                if (currentMode !== 'off') sel.value = 'off';
+                if (currentMode !== 'off') { sel.value = 'off'; sel.dataset.prev = 'off'; }
             }
         } else {
             el.textContent = __tpl(`✅ Docker 可用 | 活跃沙箱: ${active} 个`);
@@ -5944,6 +5961,36 @@ async function updateSandboxStatus(currentMode) {
         el.textContent = __t('无法获取沙箱状态');
         el.className = 'text-xs mt-1.5 text-slate-500';
     }
+}
+
+// 沙箱开启确认弹窗（选择非 off 时调用）：返回 Promise<boolean>，true=继续开启
+function showSandboxModeConfirm(mode) {
+    const title = __t('开启沙箱模式');
+    const msg = mode === 'all' ? __t('沙箱提示-all') : __t('沙箱提示-nonmain');
+    return new Promise(resolve => {
+        const modal = document.createElement('div');
+        modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-[120]';
+        modal.innerHTML = `
+            <div class="bg-[#1a1a1a] border border-white/10 rounded-lg p-6 max-w-md w-full mx-4">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                        </svg>
+                    </div>
+                    <h3 class="text-lg font-semibold text-white">${title}</h3>
+                </div>
+                <p class="text-slate-300 text-sm leading-relaxed mb-4">${msg}</p>
+                <div class="flex gap-3">
+                    <button id="sandbox-mode-cancel" class="flex-1 px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-white transition-colors">${__t('取消')}</button>
+                    <button id="sandbox-mode-ok" class="flex-1 px-4 py-2 rounded bg-amber-600 hover:bg-amber-500 text-white transition-colors">${__t('继续开启')}</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        const close = (v) => { modal.remove(); resolve(v); };
+        document.getElementById('sandbox-mode-cancel').onclick = () => close(false);
+        document.getElementById('sandbox-mode-ok').onclick = () => close(true);
+    });
 }
 
 
