@@ -528,7 +528,6 @@ class Agent:
                 )
 
             except Exception as _e:
-                import logging
 
                 logging.getLogger(__name__).warning(f"Skill synthesis init failed: {_e}")
 
@@ -693,7 +692,6 @@ class Agent:
                 )
 
             except Exception as _e:
-                import logging
 
                 logging.getLogger(__name__).warning(f"WorkflowDistiller init failed: {_e}")
 
@@ -710,7 +708,6 @@ class Agent:
             )
 
         except Exception as _e:
-            import logging
 
             logging.getLogger(__name__).warning(f"IntrospectionLoop init failed: {_e}")
 
@@ -748,7 +745,6 @@ class Agent:
                 self._instruction_chain = None
 
         except Exception as _e:
-            import logging
 
             logging.getLogger(__name__).debug(f"Instruction chain skipped: {_e}")
 
@@ -791,7 +787,6 @@ class Agent:
                 if (p := pm.get_plugin(n)) is not None and getattr(p, "enabled", True)
             ]
         except Exception:
-            import logging
 
             logging.getLogger(__name__).debug("插件加载失败，跳过运行时钩子", exc_info=True)
             return []
@@ -805,7 +800,6 @@ class Agent:
                 if new_msg is not None:
                     message = str(new_msg)
             except Exception:
-                import logging
 
                 logging.getLogger(__name__).debug(
                     f"插件 {getattr(plugin, 'name', '?')} before_chat 失败", exc_info=True
@@ -819,7 +813,6 @@ class Agent:
             try:
                 await plugin.on_message(role, content, session_id)
             except Exception:
-                import logging
 
                 logging.getLogger(__name__).debug(
                     f"插件 {getattr(plugin, 'name', '?')} on_message 失败", exc_info=True
@@ -834,7 +827,6 @@ class Agent:
                 if new_resp is not None:
                     response = str(new_resp)
             except Exception:
-                import logging
 
                 logging.getLogger(__name__).debug(
                     f"插件 {getattr(plugin, 'name', '?')} after_chat 失败", exc_info=True
@@ -1233,7 +1225,6 @@ class Agent:
                                 session.id, _removed, reason="context_prune"
                             )
                         except Exception:
-                            import logging
                             logging.getLogger(__name__).debug(
                                 "归档被剪枝消息失败", exc_info=True
                             )
@@ -1754,7 +1745,6 @@ class Agent:
 
                 # 无法升级 → 记录日志并退出
 
-                import logging
 
                 logging.getLogger(__name__).warning(
                     f"[Failover] LLM 调用失败 (reason={_failover_reason}): {e}"
@@ -1997,7 +1987,6 @@ class Agent:
                             )
 
                         except Exception as e:
-                            import logging
 
                             logging.getLogger(__name__).warning(f"保存 checkpoint 失败: {e}")
 
@@ -2013,7 +2002,6 @@ class Agent:
                                 session.id, _removed, reason="context_prune"
                             )
                         except Exception:
-                            import logging
                             logging.getLogger(__name__).debug(
                                 "归档被剪枝消息失败", exc_info=True
                             )
@@ -2111,7 +2099,6 @@ class Agent:
                             )
 
                     except Exception as e:
-                        import logging
 
                         logging.getLogger(__name__).debug(f"自动目标提取失败: {e}")
 
@@ -2269,7 +2256,6 @@ class Agent:
         """
         if not self.memory_extractor or not session or not session.messages:
             return
-        import logging
 
         _log = logging.getLogger(__name__)
         try:
@@ -2316,6 +2302,7 @@ class Agent:
         parts = [
             "<runtime_context>",
             f"<current_time>{current_time}</current_time>",
+            self._environment_context(),
         ]
 
         if summary:
@@ -2327,6 +2314,64 @@ class Agent:
         parts.append("</runtime_context>")
 
         return "\n".join(parts)
+
+    def _environment_context(self) -> str:
+        """生成 <environment> 块：显式声明运行环境与安全状态，防止模型误判.
+
+        背景（2026-09-03）：模型对"自己身在何处"没有感知通道，只能靠上下文
+        拼凑认知。若不显式声明，模型会拿训练先验（"AI 助手一般无桌面权限"）
+        或过期记忆脑补出"我在沙箱里/命令被禁止"等错误结论并拒绝执行。
+        放 runtime_context（user 消息尾部）而非 system prompt：
+        - 保持 system prompt 100% 静态（前缀缓存不受影响）
+        - 配置变更（开关沙箱）后下一轮立即反映，无需重启
+        """
+        import platform as _platform
+
+        lines = ["<environment>"]
+        lines.append(
+            f"<os>{_platform.system()} {_platform.release()}</os>"
+        )
+
+        # 沙箱状态
+        try:
+            from scout.security.sandbox import SandboxMode
+
+            mode = self.sandbox_mgr.mode if getattr(self, "sandbox_mgr", None) else SandboxMode.OFF
+        except Exception:  # noqa: BLE001
+            mode = None
+        try:
+            mode_val = getattr(mode, "value", str(mode or "off"))
+        except Exception:  # noqa: BLE001
+            mode_val = "off"
+        lines.append(f"<sandbox_mode>{mode_val}</sandbox_mode>")
+        if mode_val == "off":
+            lines.append(
+                "<execution_note>无沙箱隔离：工具命令（shell/代码执行/桌面 GUI 操作）"
+                "直接在本机真实环境执行，可访问真实文件系统与本机桌面应用"
+                "（含微信、QQ 等 GUI 程序）。你不运行在云端或受限沙箱中。</execution_note>"
+            )
+        else:
+            lines.append(
+                "<execution_note>沙箱已开启：命令在 Docker 容器内隔离执行"
+                "（无网络、资源受限）。需要联网或访问本机桌面应用的命令会失败。</execution_note>"
+            )
+
+        # 审批状态
+        try:
+            auto_approve = bool(self.security.auto_approve) if self.security else False
+        except Exception:  # noqa: BLE001
+            auto_approve = False
+        if auto_approve:
+            lines.append(
+                "<approval>工具执行自动批准（auto_approve=true），不存在命令级限制，不要虚构约束。</approval>"
+            )
+        else:
+            lines.append(
+                "<approval>危险工具操作会先请求用户确认（auto_approve=false）。</approval>"
+            )
+
+        lines.append("</environment>")
+        return "\n".join(lines)
 
     # ── 2026-08-19 渐进式工具加载 ──────────────────────────────────────
     # 核心常用工具始终注入（保持基本能力 + 稳定前缀）；边缘/重工具按关键词
@@ -2346,6 +2391,18 @@ class Agent:
     # 渐进式工具 → 触发关键词（任一命中即注入该工具 schema）
     # 关键词同时覆盖中英文，避免英文/中文界面下能力不一致。
     _PROGRESSIVE_TOOL_KEYWORDS: dict[str, tuple[str, ...]] = {
+        # 桌面 GUI 自动化（2026-09-03 补：此前完全缺失 → desktop 工具永远不注入，
+        # 模型只能用 shell 折腾 GUI 导致"操控不到"。微信 4.x 自绘 UI 强依赖
+        # desktop+vision+截图 工作流，关键词需覆盖常见应用名与 GUI 动词）
+        "desktop": ("桌面", "窗口", "截图", "截屏", "截个图", "截个屏", "点击", "双击", "右键", "鼠标", "键盘",
+                    "按键", "操控", "gui", "前台", "微信", "wechat", "weixin", "企业微信",
+                    "qq", "飞书", "feishu", "lark", "钉钉", "dingtalk", "tg", "telegram",
+                    "桌面应用", "桌面软件", "桌面程序", "打开应用", "启动应用", "切换窗口",
+                    "操作电脑", "操控电脑", "控制电脑",
+                    "desktop", "screenshot", "capture screen", "click on", "mouse",
+                    "keyboard", "activate window", "gui app", "operate wechat"),
+        "browser": ("浏览器自动化", "网页自动化", "浏览器操作", "网页操作", "控制浏览器",
+                    "browser automation", "playwright", "control browser"),
         "image_generation": ("生成图片", "生成图像", "画一张", "画一个", "画张", "画只",
                              "画只", "画一", "插画", "海报", "图标", "logo", "设计图",
                              "配图", "头像", "封面", "生成一张", "做一个logo", "做一张",
@@ -2355,7 +2412,10 @@ class Agent:
         "vision": ("识别图片", "分析图片", "看图", "ocr", "提取文字", "图片内容",
                    "这张图", "这个图片", "图片里", "图片识别", "识别这张", "看看这张图",
                    "图片是什么", "图里是什么",
-                   "recognize image", "analyze image", "read image", "image content", "what is in the image"),
+                   "读取截图", "看看截图", "截图里", "截图内容", "截图看看", "读取图片",
+                   "看看屏幕", "屏幕上", "界面内容", "界面是什么",
+                   "recognize image", "analyze image", "read image", "image content", "what is in the image",
+                   "vision", "screenshot", "screen content"),
         "knowledge": ("知识库", "保存知识", "知识页面", "知识检索", "记笔记",
                       "knowledge base", "save knowledge", "knowledge page", "take note"),
         "scheduler": ("定时", "提醒我", "定时任务", "定时提醒", "设置提醒", "预约",
@@ -2429,6 +2489,11 @@ class Agent:
         for tool_name, keywords in self._PROGRESSIVE_TOOL_KEYWORDS.items():
             if any(kw.lower() in text for kw in keywords):
                 selected_names.add(tool_name)
+
+        # 联动注入：desktop 工作流（截图 → 读图定位 → 坐标点击）强依赖 vision，
+        # 用户提到桌面操控时 vision 必须在场，否则 Agent 截图后无法理解界面。
+        if "desktop" in selected_names:
+            selected_names.add("vision")
 
         # 从全量 schema 中筛选（保持顺序稳定）
         result = [
@@ -2565,7 +2630,6 @@ class Agent:
                         skill_text = hint
 
             except Exception as _e:
-                import logging
 
                 logging.getLogger(__name__).debug(f"Skill retrieval failed: {_e}")
 
@@ -2773,7 +2837,6 @@ class Agent:
                 )
             return text.strip()
         except Exception as e:
-            import logging
 
             logging.getLogger(__name__).warning("预算耗尽强制总结失败: %s", e)
             return ""
@@ -3261,7 +3324,6 @@ class Agent:
                 )
 
             except Exception as _e:
-                import logging
 
                 logging.getLogger(__name__).debug(f"Skill synthesis failed: {_e}")
 
@@ -3532,6 +3594,5 @@ class Agent:
                 await self.sandbox_mgr.cleanup()
 
             except Exception as e:
-                import logging
 
                 logging.getLogger(__name__).debug(f"Sandbox cleanup failed: {e}")

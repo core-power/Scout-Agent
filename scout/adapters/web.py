@@ -369,7 +369,7 @@ class WebAdapter:
                 result["session_total_calls"] = result["calls"]
             return result
         except Exception as e:
-            import logging, traceback
+            import traceback
             logging.getLogger(__name__).warning(f"_collect_ws_usage 查询失败: {e!r}\n{traceback.format_exc()}")
             return {"tokens": 0, "calls": 0, "cache_hit_rate": 0.0, "avg_latency_ms": 0}
 
@@ -490,7 +490,6 @@ class WebAdapter:
             if embedding_provider is None:
                 embedding_provider = EMBEDDING_DISABLED  # 显式关闭，禁止 Agent 兜底回本地
         except Exception as _emb_err:
-            import logging
             logging.getLogger(__name__).warning(
                 f"Embedding provider 初始化失败，退化为纯文本检索: {_emb_err}"
             )
@@ -1448,7 +1447,6 @@ class WebAdapter:
                     pass
                 return True
             except Exception as e:
-                import logging
                 logging.getLogger(__name__).debug(f"GitHub tarball 下载失败 ({branch}): {e}")
                 continue
         return False
@@ -2026,7 +2024,6 @@ class WebAdapter:
                 result = await distiller.run(force=force)
                 return result
             except Exception as e:
-                import logging
                 logging.getLogger(__name__).exception("星夜凝萃异常")
                 return JSONResponse({"error": f"凝萃失败: {e}"}, status_code=500)
 
@@ -2046,7 +2043,6 @@ class WebAdapter:
                 new_hour = distiller.config.get("schedule_hour")
                 
                 if old_hour != new_hour and distiller._scheduler_task and not distiller._scheduler_task.done():
-                    import logging
                     logging.getLogger(__name__).info(f"星夜凝萃调度时间变更: {old_hour}:00 → {new_hour}:00，重启调度器")
                     distiller.stop_scheduler()
                     distiller.start_scheduler()
@@ -3966,7 +3962,6 @@ class YourPluginName(Plugin):
                                     session.id, deleted_msgs, reason="edit_truncate"
                                 )
                             except Exception as _arch_err:
-                                import logging
                                 logging.getLogger(__name__).warning(f"归档失败: {_arch_err}")
                             # 清理被截断消息的记忆
                             if self._agent.memory_store:

@@ -242,7 +242,6 @@ def create_web_app(agent=None) -> FastAPI:
         from scout.plugins.api import router as plugin_router
         app.include_router(plugin_router, prefix="/api", tags=["plugins"])
     except Exception as e:
-        import logging
         logging.getLogger(__name__).warning(f"插件 API 加载失败: {e}")
     
     # 挂载系统监控 API 路由
@@ -258,7 +257,6 @@ def create_web_app(agent=None) -> FastAPI:
         from scout.web.api.version import router as version_router
         app.include_router(version_router, tags=["version"])
     except Exception as e:
-        import logging
         logging.getLogger(__name__).warning(f"版本管理 API 加载失败: {e}")
     
     # 挂载模型监控 API 路由
@@ -266,7 +264,6 @@ def create_web_app(agent=None) -> FastAPI:
         from scout.web.api.usage import router as usage_router
         app.include_router(usage_router)
     except Exception as e:
-        import logging
         logging.getLogger(__name__).warning(f"模型监控 API 加载失败: {e}")
 
     # 挂载通知管理 API 路由（跨渠道推送偏好 / 历史 / 测试）
@@ -274,7 +271,6 @@ def create_web_app(agent=None) -> FastAPI:
         from scout.notify.api import router as notify_router
         app.include_router(notify_router, tags=["notify"])
     except Exception as e:
-        import logging
         logging.getLogger(__name__).warning(f"通知管理 API 加载失败: {e}")
 
     # 挂载文件监听管理 API 路由（主动感知）
@@ -282,7 +278,6 @@ def create_web_app(agent=None) -> FastAPI:
         from scout.automation.watcher_api import router as watcher_router
         app.include_router(watcher_router, tags=["watcher"])
     except Exception as e:
-        import logging
         logging.getLogger(__name__).warning(f"文件监听管理 API 加载失败: {e}")
 
     # 挂载文件系统浏览 API（文件树/读取/保存，2026-08-30）
@@ -290,7 +285,6 @@ def create_web_app(agent=None) -> FastAPI:
         from scout.web.api.fs import router as fs_router
         app.include_router(fs_router, tags=["fs"])
     except Exception as e:
-        import logging
         logging.getLogger(__name__).warning(f"文件系统 API 加载失败: {e}")
 
     # 静态文件目录
