@@ -108,6 +108,11 @@ hiddenimports = [
     # 内置工具模块（2026-08-30 修复）：PyInstaller 打包后 iter_modules 无法
     # 枚举 PYZ 归档，须显式收集全部 builtin 工具，discover() 才有代码可导入。
     *collect_submodules("scout.tools.builtin"),
+    # 桌面自动化 desktop 工具（2026-09-03）：pywinauto/PIL 在工具内为惰性导入
+    # （函数级 import），PyInstaller 静态分析抓不到 → 必须显式收集，否则打包版
+    # exe 缺库、registry 静默跳过 desktop 工具（模型看不到该工具）。
+    *collect_submodules("pywinauto"),
+    *collect_submodules("PIL"),
     # playwright CLI（首次运行自动安装 chromium 用，2026-08-30）
     "playwright.__main__",
     "playwright.async_api",

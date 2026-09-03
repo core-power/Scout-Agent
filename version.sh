@@ -109,6 +109,18 @@ check_update() {
     echo ""
 }
 
+# 同步 pyproject.toml 的 version 字段（消除 VERSION/pyproject 双份漂移）
+# 用法: sync_pyproject <新版本号>
+sync_pyproject() {
+    local ver="$1"
+    [[ -z "$ver" ]] && return 0
+    if [[ -f "pyproject.toml" ]] && grep -q '^version *= *"' pyproject.toml; then
+        # -i.bak 写法 GNU/BSD sed 通用；成功后删除备份
+        sed -i.bak -E "s/^version *= *\"[0-9.]+\"/version = \"${ver}\"/" pyproject.toml && rm -f pyproject.toml.bak
+        echo -e "${GREEN}✓ pyproject.toml 已同步${NC} version = \"${ver}\""
+    fi
+}
+
 # 升级版本号
 bump_version() {
     local type=$1
@@ -148,14 +160,15 @@ bump_version() {
     
     NEW_VERSION="${major}.${minor}.${patch}.${build}"
     echo "$NEW_VERSION" > VERSION
-    
+    sync_pyproject "$NEW_VERSION"
+
     echo -e "${GREEN}✓ 版本已升级${NC}"
     echo -e "  ${PURPLE}v${VERSION}${NC} → ${GREEN}v${NEW_VERSION}${NC}"
     echo ""
-    echo -e "${YELLOW}提示:${NC} 记得提交更改:"
-    echo "  git add VERSION"
+    echo -e "${YELLOW}提示:${NC} 一键发版: bash release.sh（bump+tag+构建+Release）；或手动:"
+    echo "  git add VERSION pyproject.toml"
     echo "  git commit -m 'Bump version to ${NEW_VERSION}'"
-    echo "  git tag v${NEW_VERSION}"
+    echo "  git tag v${NEW_VERSION} && git push origin main --tags"
 }
 
 # 设置版本号
@@ -175,7 +188,8 @@ set_version() {
     fi
     
     echo "$new_version" > VERSION
-    
+    sync_pyproject "$new_version"
+
     echo -e "${GREEN}✓ 版本已设置${NC}"
     echo -e "  ${PURPLE}v${VERSION}${NC} → ${GREEN}v${new_version}${NC}"
 }
