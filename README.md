@@ -50,9 +50,10 @@ Most AI assistants are **stateless helpers** — every conversation starts from 
 | 2 | 🧠 **Engineered long-term memory** | Key memories are auto-extracted, deduplicated, and reassembled across sessions using **importance × time-decay + history `<summary>` compression** — it genuinely remembers yesterday's context, not just today's chat window. |
 | 3 | 🚀 **Thinker/Executor dual-model** | A "slow thinker" breaks down hard problems while a fast executor does the work — deep reasoning when it matters, speed when it doesn't. |
 | 4 | 🌐 **Talk to it from anywhere** | 12+ channels: Feishu, WeChat (personal / Official Account / WeCom / customer service / group bot), Telegram, DingTalk, Discord, Slack, QQ… plus Web UI (installable as a PWA). Your assistant travels with your IM habits, not the other way around. |
-| 5 | 🤝 **Agent-to-Agent (A2A)** | Implements the Google A2A protocol — other agents can delegate tasks to Scout, and Scout to them. Ready for the multi-agent future instead of being an island. |
-| 6 | 🔒 **Security-first by design** | Docker sandbox execution, dangerous-command blacklist (`rm -rf /`, fork bombs…), shell-injection & XSS protection, optional JWT auth, encrypted key storage. Letting an agent run code is scary — Scout makes it boring. |
-| 7 | ⚡ **Zero-friction start** | Windows portable build: unzip → double-click → done (no Python, no install, no registry). Or `pip install` the repo and run. Data lives beside the program and follows you across machines. |
+| 5 | 🖱 **It actually has hands** | A built-in `desktop` tool performs real clicks, typing and screenshots to operate **any local app for you** — send a WeChat message, find someone on Feishu, drive a browser, fill an Excel sheet. Ships with 10 real-tested skill packs (`skills-library/`): say "message XX" and it really does. |
+| 6 | 🤝 **Agent-to-Agent (A2A)** | Implements the Google A2A protocol — other agents can delegate tasks to Scout, and Scout to them. Ready for the multi-agent future instead of being an island. |
+| 7 | 🔒 **Security-first by design** | Docker sandbox execution, dangerous-command blacklist (`rm -rf /`, fork bombs…), shell-injection & XSS protection, optional JWT auth, encrypted key storage. Letting an agent run code is scary — Scout makes it boring. |
+| 8 | ⚡ **Zero-friction start** | Windows portable build: unzip → double-click → done (no Python, no install, no registry). Or `pip install` the repo and run. Data lives beside the program and follows you across machines. |
 
 **Where it shines:** a personal copilot that runs your recurring chores (scheduled + event-driven automation), watches folders and webhooks, answers from your private knowledge base, and reports back through your team's IM — all while keeping your keys, memory and code private on your own hardware.
 
@@ -67,7 +68,7 @@ Most AI assistants are **stateless helpers** — every conversation starts from 
 | 🧬 **Self-Evolving Skills** | Self-healing loop: on failure the Agent reflects & fixes itself; successful repairs are auto-distilled into reusable Skills (`error-pattern → solution`, LLM-generalized) and stored in a semantic skill library for instant reuse | — |
 | 🤝 **A2A Interop** | Google A2A protocol (AgentCard / task send-receive) — delegate work to and from other agents over HTTP | — |
 | 🧠 **Persistent Memory** | Auto-saves conversation context and user preferences; pure-text retrieval by default, optional API-based vector search | §1 |
-| 🔧 **Tool Calling** | 20+ built-in tools: file editing, safe shell, code execution, web search, memory recall, scheduler, MCP, etc. | §4 |
+| 🔧 **Tool Calling** | 20+ built-in tools: file editing, safe shell, code execution, web search, memory recall, scheduler, MCP, and a `desktop` GUI-automation tool that operates local apps (WeChat/Feishu/browsers/Office/UWP — real clicks, typing, screenshots) with 10 tested skill packs in `skills-library/` | §4 |
 | 🌐 **Multi-Channel** | Connect to Feishu, WeChat, Telegram, Discord, Slack, DingTalk, QQ and more (12+ platforms) | §11 |
 | 🤖 **Multi-Agent** | ReAct single-agent loop or Multi-Agent delegation architecture | §7 |
 | 🚀 **Dual-Model** | Thinker/executor model architecture with deep thinking toggle | §2 |
@@ -125,7 +126,7 @@ Net effect: after days, machine switches or restarts, it still remembers where y
 
 - **Skills (reusable capability packs)** come from three sources: built-in, installed from the web, and **self-distilled** from healing runs (see #1);
 - **Plugin SPI** exposes five replaceable layers — `llm / storage / cache / session / memory` — each can be swapped for your own implementation;
-- **20+ built-in tools**: file editing, safe shell, code execution, web search, memory recall, scheduler, MCP, and more — granted on demand;
+- **20+ built-in tools**: file editing, safe shell, code execution, web search, memory recall, scheduler, MCP, **desktop GUI automation (real clicks/typing/screenshots on local apps — tested on WeChat/Feishu/browsers/Office/UWP; ships with the `skills-library/` skill packs)** and more, granted on demand;
 - **AI Plugin Builder**: describe what you need in natural language on the Plugins page and the AI generates a conformant plugin — no hand-written code.
 
 ### 🤝 5. Agent-to-Agent Interop (A2A, Google A2A protocol)
@@ -614,7 +615,7 @@ scout-agent/
 │   ├── skills/               # Skill library (install/discover/vector retrieval)
 │   ├── storage/              # Storage backends (SQLite/PostgreSQL/Redis)
 │   ├── tools/                # Tool implementations
-│   │   └── builtin/          # 20+ built-in tools (files/shell/code-exec/search/MCP/browser…)
+│   │   └── builtin/          # 20+ built-in tools (files/shell/code-exec/search/MCP/browser/desktop GUI automation…)
 │   ├── voice/                # Voice (ASR/TTS)
 │   ├── web/                  # Web UI (FastAPI server + static pages)
 │   ├── cli.py                # CLI entry
@@ -624,6 +625,7 @@ scout-agent/
 ├── tools/                    # Build & generator scripts (build_windows_portable.py etc.)
 ├── tests/                    # Tests (unit/integration)
 ├── plugins/                  # Example plugins
+├── skills-library/           # 10 real-tested skill packs (GUI automation/WeChat/Feishu/Office/UWP… — copy into the data dir to install)
 ├── examples/                 # Examples
 ├── docs/                     # Docs & UI screenshots
 ├── install.sh / install.ps1  # One-click install (Linux·macOS / Windows)
