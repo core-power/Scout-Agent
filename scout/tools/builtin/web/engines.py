@@ -13,11 +13,17 @@
 - tavily      Tavily 搜索 API（需要 Key）
 - duckduckgo  DuckDuckGo Instant Answer API（无需 Key，结果偏少）
 - custom      自定义 JSON API（GET url?q=，可选 key；响应兼容 searxng/google/bing 任一格式）
+
+代理说明：所有公网引擎请求自动携带系统代理（优先环境变量 HTTP(S)_PROXY，
+其次 Windows 注册表“系统代理” ProxyEnable/ProxyServer，兼容 Clash/V2RayN），
+本机/回环目标自动跳过代理 —— 被墙引擎（google/ddg 等）在挂代理后即可稳定出结果。
 """
 
 from __future__ import annotations
 
 import json
+import os
+import sys
 
 import httpx
 
@@ -43,6 +49,92 @@ ENGINE_TYPES = {
 _TIMEOUT = 20
 
 
+# ── 系统代理支持（Clash 等工具；公网请求自动携带，本机目标跳过） ──
+
+
+def _norm_proxy_server(server: str) -> str:
+    """规范化 Windows 注册表 ProxyServer 值.
+
+    可能是 '127.0.0.1:7890'，也可能是
+    'http=127.0.0.1:7890;https=127.0.0.1:7890;socks=127.0.0.1:7891' 等多协议格式。
+    """
+    server = (server or "").strip()
+    if not server:
+        return ""
+    if "=" in server:
+        parts = {}
+        for seg in server.split(";"):
+            seg = seg.strip()
+            if "=" in seg:
+                k, _, v = seg.partition("=")
+                parts[k.strip().lower()] = v.strip()
+        host = parts.get("https") or parts.get("http") or parts.get("socks")
+        if host:
+            server = host
+    if "://" not in server:
+        server = f"http://{server}"
+    return server
+
+
+def get_proxy_url() -> str:
+    """解析当前可用的 HTTP(S) 代理 URL，空串表示无代理.
+
+    优先级：环境变量（HTTPS_PROXY/HTTP_PROXY/ALL_PROXY）→ Windows 系统代理
+    （注册表 ProxyEnable/ProxyServer，Clash“系统代理”开关即写这里）。
+    本机/局域网目标请用 _is_local_target() 排除后决定是否走代理。
+    """
+    for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        v = (os.environ.get(key) or "").strip()
+        if v:
+            return v if "://" in v else f"http://{v}"
+    if sys.platform == "win32":
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+            ) as key:
+                enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
+                server, _ = winreg.QueryValueEx(key, "ProxyServer")
+            if enabled and (server or "").strip():
+                return _norm_proxy_server(str(server))
+        except Exception:
+            pass
+    return ""
+
+
+def _is_local_target(url: str) -> bool:
+    """目标是否本机回环地址（此类请求不走系统代理，避免内网流量被误送代理）. """
+    from urllib.parse import urlparse
+
+    url = (url or "").strip()
+    if not url:
+        return False
+    if "://" not in url:
+        url = f"http://{url}"
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return True
+    return host in ("localhost", "127.0.0.1", "::1", "0.0.0.0") or host.endswith(".local")
+
+
+def make_client(timeout: float | None = None, url: str = "", **kwargs) -> httpx.AsyncClient:
+    """创建 httpx 客户端：统一超时；公网目标自动携带系统代理（Clash/环境变量）.
+
+    - timeout 为 None 时用模块默认 _TIMEOUT；也可传 httpx.Timeout 对象（细分 connect）
+    - 本机/回环目标（localhost/127.0.0.1 等）自动跳过代理
+    """
+    proxy = "" if _is_local_target(url) else get_proxy_url()
+    if proxy:
+        kwargs["proxy"] = proxy
+    kwargs.setdefault("timeout", timeout if timeout is not None else _TIMEOUT)
+    return httpx.AsyncClient(**kwargs)
+
+
 def _norm_url(url: str, etype: str) -> str:
     """URL 为空时回退引擎默认端点."""
     url = (url or "").strip()
@@ -52,27 +144,33 @@ def _norm_url(url: str, etype: str) -> str:
 # ── 各引擎适配器 ──
 
 
-async def _search_searxng(url: str, api_key: str, query: str, page: int = 1) -> list[dict]:
+async def _search_searxng(
+    url: str, api_key: str, query: str, page: int = 1, timeout: float | None = None
+) -> list[dict]:
     """SearXNG JSON API：GET {url}?q=&format=json&categories=general&page=."""
     params = {"q": query, "format": "json", "categories": "general", "page": page}
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.get(_norm_url(url, "searxng"), params=params, headers=headers)
+    target = _norm_url(url, "searxng")
+    async with make_client(url=target, timeout=timeout) as client:
+        resp = await client.get(target, params=params, headers=headers)
         resp.raise_for_status()
         data = resp.json()
         return data.get("results", []) or []
 
 
-async def _search_bing(url: str, api_key: str, query: str, page: int = 1, count: int = 10) -> list[dict]:
+async def _search_bing(
+    url: str, api_key: str, query: str, page: int = 1, count: int = 10, timeout: float | None = None
+) -> list[dict]:
     """Bing Web Search API：Ocp-Apim-Subscription-Key header + offset 翻页."""
     if not api_key:
         raise ValueError("Bing 搜索需要 API Key")
     params = {"q": query, "count": count, "offset": (page - 1) * count}
     headers = {"Ocp-Apim-Subscription-Key": api_key}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.get(_norm_url(url, "bing"), params=params, headers=headers)
+    target = _norm_url(url, "bing")
+    async with make_client(url=target, timeout=timeout) as client:
+        resp = await client.get(target, params=params, headers=headers)
         resp.raise_for_status()
         data = resp.json()
     results = []
@@ -86,20 +184,23 @@ async def _search_bing(url: str, api_key: str, query: str, page: int = 1, count:
     return results
 
 
-async def _search_google(url: str, api_key: str, query: str, page: int = 1, num: int = 10) -> list[dict]:
+async def _search_google(
+    url: str, api_key: str, query: str, page: int = 1, num: int = 10, timeout: float | None = None
+) -> list[dict]:
     """Google Custom Search API：key + cx（cx 写在 url 的 query 参数里），start 翻页."""
     if not api_key:
         raise ValueError("Google 搜索需要 API Key")
     from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-    parsed = urlparse(_norm_url(url, "google"))
+    target = _norm_url(url, "google")
+    parsed = urlparse(target)
     qs = dict(parse_qsl(parsed.query))
     cx = qs.pop("cx", "")
     if not cx:
         raise ValueError("Google 搜索需要 cx（在 URL 中配置，如 https://www.googleapis.com/customsearch/v1?cx=你的ID）")
     params = {"key": api_key, "q": query, "num": min(num, 10), "start": (page - 1) * num + 1, "cx": cx}
     full_url = urlunparse(parsed._replace(query=urlencode(params)))
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    async with make_client(url=target, timeout=timeout) as client:
         resp = await client.get(full_url)
         resp.raise_for_status()
         data = resp.json()
@@ -114,13 +215,16 @@ async def _search_google(url: str, api_key: str, query: str, page: int = 1, num:
     return results
 
 
-async def _search_tavily(url: str, api_key: str, query: str, max_results: int = 10) -> list[dict]:
+async def _search_tavily(
+    url: str, api_key: str, query: str, max_results: int = 10, timeout: float | None = None
+) -> list[dict]:
     """Tavily API：POST JSON（Tavily 无翻页，一次取 max_results 条）."""
     if not api_key:
         raise ValueError("Tavily 搜索需要 API Key")
     body = {"api_key": api_key, "query": query, "max_results": max_results, "search_depth": "basic"}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(_norm_url(url, "tavily"), json=body)
+    target = _norm_url(url, "tavily")
+    async with make_client(url=target, timeout=timeout) as client:
+        resp = await client.post(target, json=body)
         resp.raise_for_status()
         data = resp.json()
     results = []
@@ -134,11 +238,14 @@ async def _search_tavily(url: str, api_key: str, query: str, max_results: int = 
     return results
 
 
-async def _search_duckduckgo(url: str, api_key: str, query: str) -> list[dict]:
+async def _search_duckduckgo(
+    url: str, api_key: str, query: str, timeout: float | None = None
+) -> list[dict]:
     """DuckDuckGo Instant Answer API：结果偏少，无 Key."""
     params = {"q": query, "format": "json", "no_html": 1, "skip_disambig": 1}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.get(_norm_url(url, "duckduckgo"), params=params)
+    target = _norm_url(url, "duckduckgo")
+    async with make_client(url=target, timeout=timeout) as client:
+        resp = await client.get(target, params=params)
         resp.raise_for_status()
         data = resp.json()
     results: list[dict] = []
@@ -166,7 +273,9 @@ async def _search_duckduckgo(url: str, api_key: str, query: str) -> list[dict]:
     return results
 
 
-async def _search_custom(url: str, api_key: str, query: str) -> list[dict]:
+async def _search_custom(
+    url: str, api_key: str, query: str, timeout: float | None = None
+) -> list[dict]:
     """自定义 JSON API：GET {url}?q={query}[&key={api_key}].
 
     响应兼容三种常见格式（按序识别）：
@@ -179,7 +288,7 @@ async def _search_custom(url: str, api_key: str, query: str) -> list[dict]:
     headers = {}
     if api_key:
         params["key"] = api_key
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    async with make_client(url=url or "", timeout=timeout) as client:
         resp = await client.get(url, params=params, headers=headers)
         resp.raise_for_status()
         text = resp.text
@@ -231,26 +340,33 @@ async def _search_custom(url: str, api_key: str, query: str) -> list[dict]:
 # ── 统一入口 ──
 
 
-async def search_with_engine(engine: dict, query: str, page: int = 1, num_results: int = 10) -> list[dict]:
+async def search_with_engine(
+    engine: dict,
+    query: str,
+    page: int = 1,
+    num_results: int = 10,
+    timeout: float | None = None,
+) -> list[dict]:
     """按 engine 配置 {type,url,api_key} 执行一次搜索，返回统一结果结构.
 
-    失败抛异常（HTTP/解析/缺 Key），由调用方 failover 切换其他源。
+    - timeout 可选：限制单次请求耗时（如 SkillSearch 传入较紧预算）
+    - 失败抛异常（HTTP/解析/缺 Key），由调用方 failover 切换其他源
     """
     etype = (engine.get("type") or "custom").lower()
     url = (engine.get("url") or "").strip()
     api_key = (engine.get("api_key") or "").strip()
 
     if etype == "searxng":
-        return await _search_searxng(url, api_key, query, page=page)
+        return await _search_searxng(url, api_key, query, page=page, timeout=timeout)
     if etype == "bing":
-        return await _search_bing(url, api_key, query, page=page, count=num_results)
+        return await _search_bing(url, api_key, query, page=page, count=num_results, timeout=timeout)
     if etype == "google":
-        return await _search_google(url, api_key, query, page=page, num=num_results)
+        return await _search_google(url, api_key, query, page=page, num=num_results, timeout=timeout)
     if etype == "tavily":
-        return await _search_tavily(url, api_key, query, max_results=num_results)
+        return await _search_tavily(url, api_key, query, max_results=num_results, timeout=timeout)
     if etype == "duckduckgo":
-        return await _search_duckduckgo(url, api_key, query)
-    return await _search_custom(url, api_key, query)
+        return await _search_duckduckgo(url, api_key, query, timeout=timeout)
+    return await _search_custom(url, api_key, query, timeout=timeout)
 
 
 # ── 启用源读取（web_search / SkillSearch 共用同一套配置） ──

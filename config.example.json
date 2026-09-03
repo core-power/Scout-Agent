@@ -28,5 +28,14 @@
   "stream_timeout": 180,
   "request_timeout": 90,
   "language": "auto",
-  "search_engine": ""
+  "search_engine": "",
+  "search_engines": [
+    {
+      "name": "示例 SearXNG（多引擎源：Web UI 设置→工具→搜索引擎源 可视化维护；type: searxng/bing/google/tavily/duckduckgo/custom）",
+      "type": "searxng",
+      "url": "http://127.0.0.1:8080/search",
+      "api_key": "",
+      "enabled": false
+    }
+  ]
 }
