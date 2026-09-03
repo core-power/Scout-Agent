@@ -273,13 +273,11 @@ class MemoryStore:
             if MemoriesConfig.load().security_scan:
                 scan = scan_memory_content(content, redact=True)
                 if scan.blocked:
-                    import logging
                     logging.getLogger(__name__).warning(
                         f"记忆写入被安全扫描拦截: {'; '.join(scan.issues)}"
                     )
                     return -1
                 if scan.issues:
-                    import logging
                     logging.getLogger(__name__).info(
                         f"记忆写入已脱敏/清洗: {'; '.join(scan.issues)}"
                     )
