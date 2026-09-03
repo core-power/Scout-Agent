@@ -1,4 +1,4 @@
-"""Shell 工具 — 安全增强的 Shell 命令执行.
+r"""Shell 工具 — 安全增强的 Shell 命令执行.
 
 安全策略 (2026-08-27 更新):
 - 命令白名单（basename）+ 危险参数黑名单双重校验
@@ -19,8 +19,7 @@
 - 跨平台命令平台化（2026-09-01）：白名单按系统过滤（Windows 剔除 POSIX 专用命令、
   Linux/macOS 剔除 Windows 专用命令），常用跨平台命令透明翻译（ls→dir、cat→type、
   grep→findstr、dir→ls、findstr→grep 等），参数不兼容时给出平台化提示——
-  避免"过白名单但目标 shell 里命令未找到"的频繁操作报错。
-- 应用启动后健康检查（2026-09-02）：已知应用（wemeetapp/wechat/dingtalk 等）经
+  避免"过白名单但目标 shell 里命令未找到"的频繁操作报错。- 应用启动后健康检查（2026-09-02）：已知应用（wemeetapp/wechat/dingtalk 等）经
   ShellExecuteW 启动后，轮询检测真实启动状态——检测到应用主窗口视为健康成功；
   检测到错误对话框（标准 #32770 对话框，静态文本含"找不到/网络路径/错误"等关键词）
   立即失败并返回弹窗完整文本；超时无新进程无窗口也判失败。杜绝"ShellExecuteW 返回
@@ -1225,11 +1224,13 @@ class ShellTool(ToolDefinition):
         "Only whitelisted system utilities are allowed. "
         "Dangerous operations (recursive delete, disk format, piping to shell) are blocked. "
         "Prefer args parameter for arguments. System directories (/etc, /usr, /bin) are blocked.\n"
+        "IMPORTANT: this tool is for COMMAND-LINE tasks only (files, processes, git, pip...). "
+        "For GUI apps (WeChat/Weixin, QQ, Feishu or any window: launching, clicking, typing, "
+        "reading screens) ALWAYS use the `desktop` tool instead — do NOT drive GUIs via "
+        "PowerShell/Add-Type/SendKeys here.\n"
         "Windows guidance: "
-        "(1) Launch apps via PowerShell with full path: powershell -Command \"Start-Process 'C:\\path\\app.exe'\" "
-        "(known apps like Tencent Meeting/WeChat/DingTalk/Feishu/QQ/Chrome are auto-resolved: "
-        "just pass the bare exe name e.g. command='wemeetapp.exe'). "
-        "(bare names like notepad/calc may hit the Microsoft Store stub and silently exit). "
+        "(1) Launch GUI apps with the desktop tool's launch action (target can be a bare name "
+        "like 'Weixin'/'notepad'); use shell only to launch CLI tools. "
         "(2) Open folders with: explorer 'D:\\path'. "
         "(3) Chinese output is auto-decoded (GBK/UTF-8). "
         "(4) explorer/start/.msc exit code 1 still means success. "
