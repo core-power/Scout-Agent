@@ -68,6 +68,7 @@ class ToolRegistry:
     # 可选工具: 仅在依赖可用时加载
     _OPTIONAL_TOOLS: dict[str, list[str]] = {
         "browser": ["playwright"],
+        "desktop": ["pywinauto"],  # 桌面 GUI 自动化（Windows）；Pillow 随 pywinauto 链路按需提示
         "vision": [],       # 需要 API key，但无额外 pip 依赖
         "image_gen": [],    # 需要 API key，但无额外 pip 依赖
     }
@@ -78,7 +79,7 @@ class ToolRegistry:
     # 显式 import 的工具（如 knowledge）注册。此清单保证打包版工具完整加载；
     # 源码环境下与 iter_modules 结果做并集去重，无副作用。
     _BUILTIN_FALLBACK = [
-        "browser", "code_exec", "delegate", "env_config",
+        "browser", "code_exec", "delegate", "desktop", "env_config",
         "files", "image_gen", "knowledge", "mcp", "memory",
         "parallel", "scheduler", "send_file", "shell", "vision", "web",
         "scout_report",

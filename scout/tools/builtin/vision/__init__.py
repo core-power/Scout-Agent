@@ -19,7 +19,7 @@ class VisionTool(ToolDefinition):
 
     name = "vision"
     pure_read = True
-    description = "分析图片内容。可以描述图片、提取文字(OCR)、识别物体、颜色等。支持本地图片路径和图片URL。"
+    description = "分析图片内容。可以描述图片、提取文字(OCR)、识别物体、颜色等。支持本地图片路径和图片URL。配合 desktop 工具时：把 desktop screenshot 返回的图片路径传入，并在 question 中要求返回目标元素的像素坐标（如\"搜索输入框的中心坐标是多少\"），得到的坐标可直接用于 desktop 的 click/click_control。"
     parameters = {
         "type": "object",
         "properties": {

@@ -43,6 +43,9 @@ full = [
     "asyncpg>=0.29.0",
     "redis>=5.0.0",
     "nats-py>=2.6.0",
+    # 桌面自动化工具（Windows GUI 操控）
+    "pywinauto>=0.6.8",
+    "Pillow>=10.0.0",
 ]
 # 平台适配器依赖（可选，按需安装对应渠道）
 platforms = [

@@ -39,3 +39,7 @@ cryptography>=41.0.0
 discord.py>=2.3.0
 # - QQ 适配器（aiocqhttp，可选；仅使用 webhook 模式时不需要）
 # - 个人微信适配器（wechaty / itchat，可选；未安装时该渠道不可用，不影响服务）
+
+# 桌面自动化工具 desktop（可选，Windows GUI 操控；缺包时该工具自动跳过）
+pywinauto>=0.6.8
+Pillow>=10.0.0
