@@ -51,7 +51,7 @@ if not exist "%PYTHON%" (
     exit /b 1
 )
 
-rem 数据随程序走：默认数据目录为 ScoutDesktop\data，可整体拷走
+rem 数据默认存于 %%APPDATA%%\Scout（升级覆盖程序不丢配置）；可用 SCOUT_DATA_DIR 覆盖
 "%PYTHON%" desktop\launcher.py
 if errorlevel 1 (
     echo.
@@ -72,7 +72,8 @@ README_TEMPLATE = """Scout Agent —— Windows 绿色版（免安装）
   1. 解压本压缩包到任意目录（路径建议不要含中文和空格）
   2. 双击「启动Scout.bat」
   3. 首次启动会自动打开程序窗口（WebView2 窗口）；稍等片刻即可对话
-  4. 关闭窗口即退出；数据保存在本文件夹的 data/ 目录下
+  4. 关闭窗口即退出；数据保存在 %APPDATA%\\Scout（Windows 用户数据目录，
+     升级覆盖程序文件夹不会丢失配置）
 
 三、常见问题
   Q: 双击后弹出黑色命令行窗口，但没有打开程序界面？
@@ -80,7 +81,7 @@ README_TEMPLATE = """Scout Agent —— Windows 绿色版（免安装）
      若长时间无窗口，请查看控制台输出，或用浏览器访问 http://127.0.0.1:8848/chat
   Q: 界面提示需要下载模型？
   A: 首次使用需下载内置模型（约 114MB，仅一次）。
-     下载完成后数据缓存在 data/ 目录，之后可离线使用。
+     下载完成后缓存在 %APPDATA%\Scout，之后可离线使用。
   Q: 杀毒软件报毒 / 拦截？
   A: 绿色版软件无签名，个别杀软可能误报。请添加信任或排除目录。
      本项目完全开源，可自行审查源码。
@@ -88,7 +89,8 @@ README_TEMPLATE = """Scout Agent —— Windows 绿色版（免安装）
   A: 检查 8848 端口是否被占用（程序会自动 +1 探测端口，日志会显示实际地址）。
 
 四、数据目录
-  data/           程序数据（会话、配置、模型缓存）—— 随文件夹携带
+  %APPDATA%\Scout  程序数据（会话、配置、模型缓存）—— 升级覆盖程序不丢失，
+                   换机时随程序文件夹一并拷贝；亦可用 SCOUT_DATA_DIR 指定其他位置
   config/.env     可选配置（把 .env.example 改名为 .env 后按需编辑）
   logs/           运行日志（若存在）
 
