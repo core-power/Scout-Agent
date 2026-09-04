@@ -124,9 +124,11 @@ class APIEmbedding(EmbeddingProvider):
         model: str = "text-embedding-3-small",
         dim: int = 1536,
     ):
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
-        self.model = model
+        # 2026-09-04：Key/URL 去空白 —— 本类用 httpx 直拼 Bearer {key}，
+        # 首尾空白同样导致 401，与 OpenAIProvider 的根治层保持一致
+        self.api_key = (api_key or "").strip()
+        self.base_url = (base_url or "").strip().rstrip("/")
+        self.model = (model or "").strip()
         self._dim = dim
         self._cache: dict[str, np.ndarray] = {}
 
