@@ -25,7 +25,6 @@
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
 - [Command Line](#cli)
-- [Web UI](#web-ui)
 - [Security](#security)
 - [Development](#development)
 - [Testing](#testing)
@@ -57,45 +56,43 @@ Most AI assistants are **stateless helpers** — every conversation starts from 
 
 **Where it shines:** a personal copilot that runs your recurring chores (scheduled + event-driven automation), watches folders and webhooks, answers from your private knowledge base, and reports back through your team's IM — all while keeping your keys, memory and code private on your own hardware.
 
-> 👉 Want the full catalog? See the [Features](#features) table below (with real UI screenshots), or jump straight to [Quick Start](#quick-start).
+> 👉 Want the full catalog? See the [Features](#features) table below, or jump straight to [Quick Start](#quick-start).
 
 ---
 
 ## <a name="features"></a>✨ Features
 
-| Feature | Description | Screenshot |
-|---------|-------------|------------|
-| 🧬 **Self-Evolving Skills** | Self-healing loop: on failure the Agent reflects & fixes itself; successful repairs are auto-distilled into reusable Skills (`error-pattern → solution`, LLM-generalized) and stored in a semantic skill library for instant reuse | — |
-| 🤝 **A2A Interop** | Google A2A protocol (AgentCard / task send-receive) — delegate work to and from other agents over HTTP | — |
-| 🧠 **Persistent Memory** | Auto-saves conversation context and user preferences; pure-text retrieval by default, optional API-based vector search | §1 |
-| 🔧 **Tool Calling** | 20+ built-in tools: file editing, safe shell, code execution, web search, memory recall, scheduler, MCP, and a `desktop` GUI-automation tool that operates local apps (WeChat/Feishu/browsers/Office/UWP — real clicks, typing, screenshots) with 10 tested skill packs in `skills-library/` | §4 |
-| 🌐 **Multi-Channel** | Connect to Feishu, WeChat, Telegram, Discord, Slack, DingTalk, QQ and more (12+ platforms) | §11 |
-| 🤖 **Multi-Agent** | ReAct single-agent loop or Multi-Agent delegation architecture | §7 |
-| 🚀 **Dual-Model** | Thinker/executor model architecture with deep thinking toggle | §2 |
-| 🔒 **Security-First** | Sandbox execution, dangerous command blocking, XSS protection, optional authentication | §5/§6 |
-| 📊 **Usage Monitoring** | Token consumption and model call statistics | §8 |
-| 🎙 **Voice** | ASR + TTS voice interaction support | — |
-| 🧩 **Plugin System** | EventBus-based plugin extension + SPI for replacing core components (LLM/storage) | §13 |
-| 📚 **Knowledge Base** | Multi-format document parsing with graph visualization | §10 |
-| 🔄 **Test Feedback Loop** | Auto-runs pytest on code failures, feeds structured failure stacks back for self-correction | — |
-| 🗂 **Pluggable Agent Loop** | ReAct (default) or DAG plan-execute loop, switchable per conversation | §3 |
-| 📜 **Tool Contracts** | Annotation-derived schemas, runtime arg validation, unified error codes | §4 |
-| 🐚 **Persistent Shell** | Long-lived bash sessions preserving cwd/env/background jobs across calls | §4 |
-| 🖥 **PTY Terminal** | Pseudo-terminal interaction: vim/top etc., key injection + explicit interrupt + window resize | — |
-| 📊 **eval Benchmark** | `python -m scout.eval`: isolated evaluation + unbiased Pass@1/3/5 estimates (DSBench-aligned) | — |
-| 🧠 **Memory Engineering** | Cross-session key-memory extraction (LLM structured/heuristic fallback + dedup), cross-session context assembly (memory × importance × time decay + history `<summary>` injection) | §1 |
-| 🧩 **Plugin SPI (all types)** | llm/storage/cache/session/memory five core components can be declaratively replaced | §13 |
-| 📱 **PWA Desktop** | Web UI installable as a standalone app (manifest + Service Worker + icons), offline instant launch | — |
-| 💰 **Cost Visibility** | LLM cost estimation (cache-hit discount pricing), `scout doctor` summarizes hit rate and savings | §8 |
-| 🪟 **Windows Portable** | `desktop/build.bat` one-click packaging, no install/no registry (WinForms + WebView2 + PyInstaller); user data lives in `%APPDATA%\Scout` — survives app-folder overwrites on upgrade | — |
-
-> 📸 Screenshot numbers (§N) refer to the corresponding sections in [Web UI](#web-ui) below. "—" means a runtime/dev-only feature without a dedicated UI screenshot.
+| Feature | Description |
+|---------|-------------|
+| 🧬 **Self-Evolving Skills** | Self-healing loop: on failure the Agent reflects & fixes itself; successful repairs are auto-distilled into reusable Skills (`error-pattern → solution`, LLM-generalized) and stored in a semantic skill library for instant reuse |
+| 🤝 **A2A Interop** | Google A2A protocol (AgentCard / task send-receive) — delegate work to and from other agents over HTTP |
+| 🧠 **Persistent Memory** | Auto-saves conversation context and user preferences; pure-text retrieval by default, optional API-based vector search |
+| 🔧 **Tool Calling** | 20+ built-in tools: file editing, safe shell, code execution, web search, memory recall, scheduler, MCP, and a `desktop` GUI-automation tool that operates local apps (WeChat/Feishu/browsers/Office/UWP — real clicks, typing, screenshots) with 10 tested skill packs in `skills-library/` |
+| 🌐 **Multi-Channel** | Connect to Feishu, WeChat, Telegram, Discord, Slack, DingTalk, QQ and more (12+ platforms) |
+| 🤖 **Multi-Agent** | ReAct single-agent loop or Multi-Agent delegation architecture |
+| 🚀 **Dual-Model** | Thinker/executor model architecture with deep thinking toggle |
+| 🔒 **Security-First** | Sandbox execution, dangerous command blocking, XSS protection, optional authentication |
+| 📊 **Usage Monitoring** | Token consumption and model call statistics |
+| 🎙 **Voice** | ASR + TTS voice interaction support |
+| 🧩 **Plugin System** | EventBus-based plugin extension + SPI for replacing core components (LLM/storage) |
+| 📚 **Knowledge Base** | Multi-format document parsing with graph visualization |
+| 🔄 **Test Feedback Loop** | Auto-runs pytest on code failures, feeds structured failure stacks back for self-correction |
+| 🗂 **Pluggable Agent Loop** | ReAct (default) or DAG plan-execute loop, switchable per conversation |
+| 📜 **Tool Contracts** | Annotation-derived schemas, runtime arg validation, unified error codes |
+| 🐚 **Persistent Shell** | Long-lived bash sessions preserving cwd/env/background jobs across calls |
+| 🖥 **PTY Terminal** | Pseudo-terminal interaction: vim/top etc., key injection + explicit interrupt + window resize |
+| 📊 **eval Benchmark** | `python -m scout.eval`: isolated evaluation + unbiased Pass@1/3/5 estimates (DSBench-aligned) |
+| 🧠 **Memory Engineering** | Cross-session key-memory extraction (LLM structured/heuristic fallback + dedup), cross-session context assembly (memory × importance × time decay + history `<summary>` injection) |
+| 🧩 **Plugin SPI (all types)** | llm/storage/cache/session/memory five core components can be declaratively replaced |
+| 📱 **PWA Desktop** | Web UI installable as a standalone app (manifest + Service Worker + icons), offline instant launch |
+| 💰 **Cost Visibility** | LLM cost estimation (cache-hit discount pricing), `scout doctor` summarizes hit rate and savings |
+| 🪟 **Windows Portable** | `desktop/build.bat` one-click packaging, no install/no registry (WinForms + WebView2 + PyInstaller); user data lives in `%APPDATA%\Scout` — survives app-folder overwrites on upgrade |
 
 ---
 
 ## <a name="signature-deep-dive"></a>🔬 Signature Features, Deep-Dive
 
-The 5 mechanisms below are what make Scout different from a plain chatbot — the real answer to "why does it get better over time?". UI-level features (Automation, Observability, Events, Notifications, Watcher, Webhooks…) are covered in the [Web UI](#web-ui) section.
+The 5 mechanisms below are what make Scout different from a plain chatbot — the real answer to "why does it get better over time?".
 
 ### 🧬 1. Self-Evolving Skill Loop
 
@@ -423,149 +420,6 @@ scout version        # show version
 | `bash run_tests.sh` | Run all tests |
 
 ---
-
-## <a name="web-ui"></a>🖥 Web UI
-
-Scout Agent provides a modern web interface with:
-
-- 💬 Chat interface with streaming responses
-- 🧠 Memory / Knowledge management panels
-- ⏰ Scheduler / Cron tasks
-- ⚙️ Settings: model, agent behavior, security policy, channels
-- 🌐 **Bilingual UI** — switch between Chinese and English interfaces
-- 📊 Usage & observability dashboards
-
-### Screenshots
-
-> The following screenshots are from a running Scout Agent Web UI.
-
-#### 1. Main Chat
-
-Session history and quick entries on the left; welcome page with function pills (file ops, memory save, web search, code execution, memory recall, web fetch) in the middle; message input at the bottom.
-
-![Main Chat](docs/images/chat-main-en.png)
-
-#### 2. Settings — Model
-
-Centrally manage per-provider API keys and Base URLs; selecting a provider shows only its fields. Text / vision / image model blocks reuse credentials automatically.
-
-![Settings Model](docs/images/settings-model-en.png)
-
-#### 2.1 Embedding Model
-
-Besides the main chat model, vision understanding, image generation and Embedding models can also use an independent provider; Embedding can follow the main provider or use dedicated credentials. For self-hosted embedding (intranet/private deployment), see [docs/embedding-server.md](docs/embedding-server.md).
-
-![Settings Model Embedding](docs/images/settings-model-embedding-en.png)
-
-#### 3. Settings — Agent
-
-Configure reply language, run mode (ReAct single-agent loop or Multi-Agent delegation), system prompt, deep thinking and other parameters.
-
-![Settings Agent](docs/images/settings-agent-en.png)
-
-#### 4. Settings — Tools
-
-Configure search engine sources (multi-source concurrent + auto failover), file/code/sandbox tool switches and parameters; applied instantly after saving.
-
-![Settings Tools](docs/images/settings-tools-en.png)
-
-#### 5. Settings — Security
-
-Visual configuration of dangerous command detection (`rm -rf /`, `dd if=`, `mkfs`, `curl | sh` and 13 more patterns), auto-approve toggle, Docker sandbox isolation — keeps the Agent in a restricted environment.
-
-![Settings Security](docs/images/settings-security-en.png)
-
-### Runtime Features
-
-#### 6. ReAct Reflection + Security Block
-
-In ReAct mode, after any action failure or security policy block, the Agent performs **self-reflection** (e.g. "reflection@step 2/3" in the screenshot) and adjusts strategy dynamically instead of mechanically retrying. In the screenshot a Docker query was blocked by the system security layer due to whitelist/dangerous-parameter rules.
-
-![Runtime Security Block](docs/images/runtime-security-block-en.png)
-
-#### 7. Multi-Agent Mode
-
-After switching to Multi-Agent mode, the main Agent splits complex tasks into subtasks and delegates them in parallel to different roles (planning, search, coding, ...). The screenshot shows the delegation process and reflection output.
-
-![Runtime Multi Agent](docs/images/runtime-multi-agent-en.png)
-
-#### 8. Model Monitoring
-
-Daily / weekly / monthly / yearly statistics of model calls, token consumption, cache hit rate, average latency, daily trends and per-model breakdown.
-
-![Monitor Usage](docs/images/monitor-usage-en.png)
-
-#### 9. System Monitoring
-
-Real-time CPU, memory, disk, network, Agent runtime status and historical curves.
-
-![Monitor System](docs/images/monitor-system-en.png)
-
-#### 10. Knowledge Base
-
-Upload documents, auto-parse and index; semantic search, knowledge graph visualization, chunk preview and document management.
-
-![Knowledge Base](docs/images/knowledge-base-en.png)
-
-#### 11. Settings — Channels
-
-Feishu, WeChat, WeChat Official Account, WeCom, WeCom Group Bot, WeChat Customer Service, Personal WeChat, Telegram, DingTalk, Discord, Slack, QQ — 12+ platforms; chat with Scout from any of them.
-
-![Settings Channels](docs/images/settings-channels-en.png)
-
-#### 12. Settings — Auth
-
-Optional JWT login password protection for the Web UI and APIs.
-
-![Settings Auth](docs/images/settings-auth-en.png)
-
-#### 13. Plugins
-
-View installed plugins and Skills, unload and reload; Skills discovered online can be installed and auto-triggered in conversations.
-
-![Plugins](docs/images/plugins-en.png)
-
-#### 14. Plugin Builder
-
-Describe the plugin you want and the AI generates complete plugin code; you can also search existing Skills/plugins on the web first.
-
-![Plugin Builder](docs/images/plugin-builder-en.png)
-
-#### 15. Automation
-
-Event triggers, run history, unattended policy and cron tasks — let Scout react to EventBus events or run tasks on a schedule.
-
-![Automation](docs/images/automation-en.png)
-
-#### 16. Observability
-
-Aggregate recent session timelines, success rates and token consumption per trace to quickly locate anomalies.
-
-![Observe](docs/images/observe-en.png)
-
-#### 17. Notifications
-
-Configure push rules, type toggles and IM channel targets; centrally manage all notification history.
-
-![Notify](docs/images/notify-en.png)
-
-#### 18. Events
-
-Browse the EventBus event stream (types, sources, payload summaries); plugins and automation both hook into this bus.
-
-![Events](docs/images/events-en.png)
-
-#### 19. Watcher
-
-Watch directories for file changes (added/modified/deleted) and push events to the Agent; configurable paths and filter rules.
-
-![Watcher](docs/images/watcher-en.png)
-
-#### 20. Webhooks
-
-Register HTTP webhooks to receive external pushes and inject events into Scout sessions or trigger automations; signature verification and routing supported.
-
-![Webhooks](docs/images/webhooks-en.png)
 
 ---
 
