@@ -250,3 +250,49 @@ class TestSaveConfigStrip:
         assert r.status_code == 200
         cfg = client.get("/api/config").json()
         assert cfg["base_url"] == "https://relay.example.com/v1"
+
+    @pytest.mark.unit
+    def test_empty_base_url_falls_back_to_creds_zone(self, client):
+        """显式提交空 base_url（UI 空输入框）→ 回落凭据区该 provider URL，绝不落空.
+
+        2026-09-04：治愈「UI 保存清空顶层端点 → 聊天链路回落 SDK 官方默认 → ReadTimeout」.
+        """
+        client.put("/api/config/keys/openai", json={
+            "api_key": "sk-x", "base_url": "https://eas.example.com/v1", "activate": False,
+        })
+        r = client.post("/api/config", json={
+            "provider": "openai", "base_url": "", "api_key": "sk-x",
+        })
+        assert r.status_code == 200
+        cfg = client.get("/api/config").json()
+        assert cfg["base_url"] == "https://eas.example.com/v1"
+
+    @pytest.mark.unit
+    def test_empty_base_url_no_creds_keeps_old_value(self, client):
+        """凭据区也没有时，保留旧值而非清空."""
+        client.post("/api/config", json={
+            "provider": "openai", "base_url": "https://old.example.com/v1", "api_key": "sk-x",
+        })
+        r = client.post("/api/config", json={
+            "provider": "openai", "base_url": "", "api_key": "sk-x",
+        })
+        assert r.status_code == 200
+        cfg = client.get("/api/config").json()
+        assert cfg["base_url"] == "https://old.example.com/v1"
+
+
+class TestRebuildAgentFallback:
+    """_rebuild_agent（正式聊天链路）顶层空值时回落凭据区，防已落盘空端点."""
+
+    @pytest.mark.unit
+    def test_rebuild_falls_back_to_creds_zone(self, client, capture):
+        """主配置顶层 base_url 为空（历史遗留）→ 重建时用凭据区 URL."""
+        client.put("/api/config/keys/openai", json={
+            "api_key": "sk-x", "base_url": "https://eas.example.com/v1", "activate": False,
+        })
+        _write_main_config(provider="openai", api_key="sk-x", base_url="")
+        # POST /api/config 会触发 _rebuild_agent(config)，capture 捕获实际连接参数
+        r = client.post("/api/config", json={"model": "qwen3"})
+        assert r.status_code == 200
+        assert capture["provider"] == "openai"
+        assert capture["base_url"] == "https://eas.example.com/v1"
