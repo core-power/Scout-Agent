@@ -16,3 +16,5 @@ numpy>=1.24.0
 cryptography>=41.0.0
 aiohttp>=3.9.0
 psutil>=5.9.0
+# vision 工具本地 OCR 兜底（未配置视觉模型时提取图中文字）
+rapidocr-onnxruntime>=1.2.0

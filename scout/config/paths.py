@@ -22,21 +22,29 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _default_root() -> Path:
-    """默认数据根目录（2026-08-31 起）:
-    - Windows: %APPDATA%\\Scout（始终可写、不随程序更新丢失）;
-      无 APPDATA 时回退 <盘符>\\.scout 兼容旧版。
+    """默认数据根目录（2026-09-04 按用户要求改回盘符根 .scout）:
+    - Windows: <项目/exe 所在盘符>\\.scout（如 D:\\.scout）——用户指定的工作目录；
+      盘符根不可写时回退 %APPDATA%\\Scout（始终可写）。
     - 其他平台: 项目根目录下的 .scout（避免写入 / 根目录）
     """
     if os.name == "nt":
+        anchor = PROJECT_ROOT.anchor  # 如 "D:\\"
+        if anchor:
+            try:
+                d = Path(anchor) / ".scout"
+                d.mkdir(parents=True, exist_ok=True)
+                probe = d / ".write_probe"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink()
+                return d
+            except Exception:  # noqa: BLE001 — 盘符根不可写（无权限/只读盘）
+                pass
         try:
             base = os.getenv("APPDATA") or str(Path.home())
             if base:
                 return Path(base) / "Scout"
         except Exception:  # noqa: BLE001
             pass
-        anchor = PROJECT_ROOT.anchor  # 如 "D:\\"
-        if anchor:
-            return Path(anchor) / ".scout"
     return PROJECT_ROOT / ".scout"
 
 
@@ -69,6 +77,12 @@ AUTOMATION_POLICY_PATH = CONFIG_DIR / "automation_policy.json"
 
 # 数据目录版本标识 — 记录数据格式版本与程序版本，供升级/迁移检测
 MANIFEST_PATH = DATA_DIR / "manifest.json"
+
+# Agent 产物目录（2026-09-04）：Agent 生成的文件/中间产物统一收纳于此，
+# 系统提示词引导 LLM 默认写这里（用户明确指定路径时除外）。
+# 桌面版 = %APPDATA%\Scout\outputs；源码版 = <项目根>/.scout/outputs。
+# 不放项目源码 scout/ 包内：打包后为 _internal 只读且更新即清空（见文件头设计原则）。
+OUTPUTS_DIR = DATA_DIR / "outputs"
 
 
 def legacy_data_dirs() -> list[Path]:

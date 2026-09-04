@@ -1,4 +1,4 @@
-"""桌面自动化工具 — 操控本机 GUI 应用（窗口/控件/键鼠/截图）.
+"""桌面自动化工具 — 操控本机 GUI 应用（窗口/控件/键鼠/截图/剪贴板/拖拽）.
 
 定位（2026-09-03）：补齐 Agent 能力版图的 L2 层——shell 管命令行、browser 管
 网页、PTY 管终端，本工具管**真实桌面 GUI**（微信/QQ/任意 Win32/UWP 窗口）。
@@ -10,13 +10,18 @@
   **中文输入可用**（pyautogui.typewrite 仅 ASCII，故弃用）
 - 鼠标坐标：pywinauto.mouse（click/double/right/scroll，真实事件）
 - 截图：PIL.ImageGrab 全屏 / wrapper.capture_as_image() 单窗口
+- 剪贴板（2026-09-04 新增）：ctypes 直写 CF_UNICODETEXT/CF_HDROP——
+  聊天应用"发文件"官方支持通道 = 文件入剪贴板 + Ctrl+V，比拖拽/点自绘
+  上传按钮都稳；clip_read 让 Agent 能感知用户刚复制的内容
+- 拖拽（2026-09-04 新增）：mouse press → 分步 move → release，步进产生
+  真实 WM_MOUSEMOVE（目标应用靠 move 事件做 Hit-Test，瞬移会被丢弃）
 
 安全边界：
 - launch 仅 os.startfile（无命令行拼接，杜绝注入）
 - close_window 走 WM_CLOSE 温和关闭（不强杀进程）
 - 写操作（click/type/press_key/close）会作用于真实桌面——全局审批由
   policy.needs_approval / auto_approve 语义兜底；工具级 read 操作（list/
-  find/read_controls/screenshot）无副作用。
+  find/read_controls/screenshot/clip_read）无副作用。
 """
 
 from __future__ import annotations
@@ -48,12 +53,12 @@ logger = logging.getLogger(__name__)
 _WRITE_ACTIONS = {
     "activate", "launch", "close_window", "click", "double_click",
     "right_click", "click_control", "type_control", "type_text",
-    "press_key", "scroll", "drag", "click_type",
+    "press_key", "scroll", "drag", "click_type", "copy_file",
 }
 
 _READ_ACTIONS = {
     "list_windows", "find_window", "active_window", "read_controls",
-    "screenshot", "wait",
+    "screenshot", "wait", "clip_read",
 }
 
 _ALL_ACTIONS = sorted(_READ_ACTIONS | _WRITE_ACTIONS)
@@ -226,19 +231,137 @@ def _paste_text(text: str) -> bool:
         return False
 
 
+def _copy_files_to_clipboard(paths: list[str]) -> bool:
+    """文件列表写入剪贴板（CF_HDROP）——聊天应用"发文件"的官方支持通道.
+
+    背景（2026-09-04）：微信/QQ/飞书发文件只剩两条难路——上传按钮是自绘控件
+    （UIA 不可达），SendInput 合成拖拽过 Hit-Test 不稳。把文件放进剪贴板再
+    Ctrl+V 是三大 IM 全部官方支持的路径，实测最稳。
+    实现：DROPFILES 结构（fWide=1 宽字符）+ 双 \\0 结尾路径表 → CF_HDROP。
+    """
+    import ctypes
+
+    u32 = ctypes.windll.user32
+    k32 = ctypes.windll.kernel32
+    k32.GlobalAlloc.restype = ctypes.c_void_p
+    k32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    k32.GlobalLock.restype = ctypes.c_void_p
+    k32.GlobalLock.argtypes = [ctypes.c_void_p]
+    k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    u32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    k32.GlobalFree.argtypes = [ctypes.c_void_p]
+
+    class _DROPFILES(ctypes.Structure):
+        _fields_ = [("pFiles", ctypes.c_uint32), ("pt", ctypes.c_int32 * 2),
+                    ("fNC", ctypes.c_uint32), ("fWide", ctypes.c_uint32)]
+
+    files: list[str] = []
+    for p in paths or []:
+        try:
+            ap = str(Path(p).expanduser().resolve())
+        except OSError:  # 非法路径字符
+            return False
+        if not Path(ap).exists():
+            return False
+        files.append(ap)
+    if not files:
+        return False
+
+    raw = ("\0".join(files) + "\0\0").encode("utf-16-le")
+    size = ctypes.sizeof(_DROPFILES) + len(raw)
+    if not u32.OpenClipboard(0):
+        return False
+    try:
+        u32.EmptyClipboard()
+        h = k32.GlobalAlloc(0x0002, size)  # GMEM_MOVEABLE
+        if not h:
+            return False
+        p = k32.GlobalLock(ctypes.c_void_p(h))
+        if not p:
+            k32.GlobalFree(ctypes.c_void_p(h))
+            return False
+        try:
+            df = _DROPFILES()
+            df.pFiles = ctypes.sizeof(_DROPFILES)
+            df.fWide = 1
+            ctypes.memmove(p, ctypes.byref(df), ctypes.sizeof(_DROPFILES))
+            ctypes.memmove(ctypes.c_void_p(p + ctypes.sizeof(_DROPFILES)), raw, len(raw))
+        finally:
+            k32.GlobalUnlock(ctypes.c_void_p(h))
+        if not u32.SetClipboardData(15, ctypes.c_void_p(h)):  # CF_HDROP=15
+            k32.GlobalFree(ctypes.c_void_p(h))
+            return False
+        return True
+    finally:
+        u32.CloseClipboard()
+
+
+def _read_clipboard() -> tuple[str, list[str]]:
+    """读取剪贴板：返回 (文本, 文件路径列表)，二者至多一个非空.
+
+    文件优先（CF_HDROP 更结构化）：用户在资源管理器 Ctrl+C 文件后，
+    Agent 可直接拿到路径列表用于"发文件/打包/分析"等任务。
+    """
+    import ctypes
+
+    u32 = ctypes.windll.user32
+    k32 = ctypes.windll.kernel32
+    k32.GlobalLock.restype = ctypes.c_void_p
+    k32.GlobalLock.argtypes = [ctypes.c_void_p]
+    k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    # 64 位进程必须显式声明指针宽返回值（默认 int 会截断句柄 → DragQueryFileW 拿坏句柄返回 0）
+    u32.GetClipboardData.restype = ctypes.c_void_p
+    u32.GetClipboardData.argtypes = [ctypes.c_uint]
+    shell32 = ctypes.windll.shell32
+    shell32.DragQueryFileW.restype = ctypes.c_uint
+    shell32.DragQueryFileW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint]
+
+    if not u32.OpenClipboard(0):
+        return "", []
+    try:
+        if u32.IsClipboardFormatAvailable(15):  # CF_HDROP
+            h = u32.GetClipboardData(15)
+            if h:
+                n = shell32.DragQueryFileW(ctypes.c_void_p(h), 0xFFFFFFFF, None, 0)
+                files = []
+                for i in range(int(n)):
+                    ln = shell32.DragQueryFileW(ctypes.c_void_p(h), i, None, 0)
+                    buf = ctypes.create_unicode_buffer(int(ln) + 1)
+                    shell32.DragQueryFileW(ctypes.c_void_p(h), i, buf, int(ln) + 1)
+                    files.append(buf.value)
+                if files:
+                    return "", files
+        if u32.IsClipboardFormatAvailable(13):  # CF_UNICODETEXT
+            h = u32.GetClipboardData(13)
+            if h:
+                p = k32.GlobalLock(ctypes.c_void_p(h))
+                if p:
+                    try:
+                        return ctypes.wstring_at(p), []
+                    finally:
+                        k32.GlobalUnlock(ctypes.c_void_p(h))
+        return "", []
+    finally:
+        u32.CloseClipboard()
+
+
 def _force_foreground(hwnd: int, settle_ms: int = 600) -> bool:
-    """Win32 API 强制窗口前台（带轮询防抢）.
+    """Win32 API 强制窗口前台（带轮询防抢；已在前台时零成本短路）.
 
     背景（2026-09-03 实测）：
     1) pywinauto set_focus 对 Electron/Chromium 多进程窗口（飞书/微信）报告成功但
        GetForegroundWindow 不是它——其他进程窗口抢走了前台
     2) 单次 SetForegroundWindow 后焦点会被其他窗口抢走——必须轮询守住
-    本函数：组合 API 强抢 + 轮询验证前台归属，settle_ms 是稳定化等待时间。
+    3) 性能（2026-09-04 实测）：已在前台时全流程仍耗 404ms——每次 rel 点击
+       白付。先查前台归属，命中直接返回（~0ms）。
     """
     try:
         import ctypes
 
         u32 = ctypes.windll.user32
+        # ★ 前台短路：目标已在前台 → 无需任何强抢动作
+        if u32.GetForegroundWindow() == hwnd:
+            return True
         u32.AllowSetForegroundWindow(-1)
         u32.ShowWindow(hwnd, 9)  # SW_RESTORE（最小化时恢复）
         # 多次强抢：BringWindowToTop + SetForegroundWindow + SwitchToThisWindow
@@ -333,6 +456,47 @@ def _win_pid(w) -> int:
             return 0
 
 
+def _img_to_png_bytes(img) -> bytes:
+    """PIL Image → PNG 字节（供空屏守卫测编码体积）."""
+    import io
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _focus_summary() -> str:
+    """当前焦点控件摘要（类名+文本）——点击后回读供 agent 校验落点.
+
+    准确率增强（2026-09-04）：坐标点击是否命中预期控件，靠截图验证要一轮
+    vision（5-60s）；回读焦点控件类名/文本 ~1ms，agent 立即可判断（如点击
+    搜索框后焦点应在 Edit 类控件上，仍 Pane 则说明点偏了）。
+    """
+    try:
+        import ctypes
+
+        u32 = ctypes.windll.user32
+
+        class _GTI(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("flags", ctypes.c_uint),
+                        ("hwndActive", ctypes.c_void_p), ("hwndFocus", ctypes.c_void_p),
+                        ("hwndCapture", ctypes.c_void_p), ("hwndMenu", ctypes.c_void_p),
+                        ("hwndMoveSize", ctypes.c_void_p), ("hwndCaret", ctypes.c_void_p),
+                        ("rc", ctypes.c_int * 4)]
+
+        gti = _GTI()
+        gti.cbSize = ctypes.sizeof(_GTI)
+        if not u32.GetGUIThreadInfo(0, ctypes.byref(gti)) or not gti.hwndFocus:
+            return ""
+        cls = ctypes.create_unicode_buffer(128)
+        u32.GetClassNameW(ctypes.c_void_p(gti.hwndFocus), cls, 128)
+        txt = ctypes.create_unicode_buffer(128)
+        u32.GetWindowTextW(ctypes.c_void_p(gti.hwndFocus), txt, 128)
+        return f"focus={cls.value or '?'}" + (f"\"{txt.value[:40]}\"" if txt.value else "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _enum_top_windows_by_process(process: str) -> list:
     """EnumWindows 深度枚举（含隐藏/托盘化窗口）按进程名匹配顶层窗口.
 
@@ -380,6 +544,46 @@ def _enum_top_windows_by_process(process: str) -> list:
         return []
 
 
+# 窗口 wrapper 短 TTL 缓存（2026-09-04 性能实测：find_wrapper 155~833ms/次，
+# 同窗口连续操作（点击→输入→回车）每次重枚举是纯浪费）。
+# key=(process.lower(), title, index) → (wrapper, hwnd, expires_at)。
+# IsWindow 实时校验 hwnd 有效性——窗口销毁/重建立即失效，TTL 只影响"新窗口出现"
+# 的感知延迟（2s 内可接受）。
+_WIN_CACHE: dict[tuple, tuple] = {}
+_WIN_CACHE_TTL = 2.0
+
+
+def _cached_wrapper(process: str, title: str, title_re: bool, index: int):
+    """命中缓存且 hwnd 仍有效则返回 wrapper，否则 None."""
+    if title_re or (not process and not title):
+        return None
+    key = ((process or "").lower(), title, index)
+    ent = _WIN_CACHE.get(key)
+    if not ent:
+        return None
+    w, hwnd, exp = ent
+    if time.time() > exp:
+        _WIN_CACHE.pop(key, None)
+        return None
+    try:
+        import ctypes
+
+        if not ctypes.windll.user32.IsWindow(ctypes.c_void_p(hwnd)):
+            _WIN_CACHE.pop(key, None)
+            return None
+    except Exception:  # noqa: BLE001
+        _WIN_CACHE.pop(key, None)
+        return None
+    return w
+
+
+def _cache_wrapper(w, process: str, title: str, index: int) -> None:
+    try:
+        _WIN_CACHE[((process or "").lower(), title, index)] = (w, w.handle, time.time() + _WIN_CACHE_TTL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _find_wrapper(
     title: str = "", title_re: bool = False, index: int = 0,
     timeout: float = 0.0, process: str = "",
@@ -390,7 +594,11 @@ def _find_wrapper(
     - title_re=True:  标题正则匹配
     - process: 进程名子串匹配（不区分大小写），如 "Weixin"/"WeChat"/"Feishu"。
       微信等应用标题随聊天对象变化，按进程找最稳；title 为空时仅按 process 过滤。
+    - 2026-09-04 性能：先查 2s TTL 缓存（IsWindow 校验），命中省 155~833ms。
     """
+    cached = _cached_wrapper(process, title, title_re, index)
+    if cached is not None:
+        return cached
     deadline = time.time() + max(0.0, timeout)
     while True:
         try:
@@ -429,7 +637,9 @@ def _find_wrapper(
                 except Exception:  # noqa: BLE001
                     visible.append(x)
             if visible:
-                return visible[min(index, len(visible) - 1)]
+                result = visible[min(index, len(visible) - 1)]
+                _cache_wrapper(result, process, title, index)
+                return result
             if matches:
                 # 全部隐藏 = 最小化到托盘（微信/QQ 常见）→ 恢复第一个再返回
                 try:
@@ -439,6 +649,7 @@ def _find_wrapper(
                     ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
                     ctypes.windll.user32.SetForegroundWindow(hwnd)
                     time.sleep(0.3)
+                    _cache_wrapper(matches[0], process, title, index)
                     return matches[0]
                 except Exception:  # noqa: BLE001
                     return matches[0]
@@ -459,7 +670,17 @@ def _win_summary(w) -> str:
         pname = _proc_name(pid) or "?"
     except Exception:  # noqa: BLE001
         pass
-    return f"[{w.handle}] pid={pid} exe={pname} \"{(w.window_text() or '')[:60]}\""
+    # 窗口状态标记（2026-09-04）：最小化窗口的 rect 是 (-32000,-32000)，
+    # 对其做 rel 坐标点击会点到屏幕外——agent 看到 [min] 应先 activate 再操作
+    state = ""
+    try:
+        if w.is_minimized():
+            state = " [min]"
+        elif w.is_maximized():
+            state = " [max]"
+    except Exception:  # noqa: BLE001
+        pass
+    return f"[{w.handle}] pid={pid} exe={pname}{state} \"{(w.window_text() or '')[:60]}\""
 
 
 def _ctrl_line(c) -> str:
@@ -502,44 +723,39 @@ class DesktopTool(ToolDefinition):
 
     name = "desktop"
     description = (
-        "Control desktop GUI applications on the local Windows machine — THE tool for any GUI task "
-        "(WeChat/Weixin, QQ, Feishu, browser windows, any app window: launch, click, type, read "
-        "screens, send keys). Never drive GUIs through the shell tool. Actions: list_windows, "
-        "find_window, active_window, read_controls, screenshot, wait, activate, launch, "
-        "close_window, click_control, type_control, type_text, press_key, click, double_click, "
-        "right_click, scroll, click_type.\n"
-        "SPEED RULES (important): (a) prefer the composite action click_type (click x,y + type "
-        "text + optional keys like {ENTER}) over separate click/type/press_key calls — each saved "
-        "round-trip saves seconds; (b) pass verify_screenshot=true on write actions to get the "
-        "post-action screenshot in the same result instead of calling screenshot separately; "
-        "(c) screenshots are downscaled to 0.5 by default for faster vision reads — multiply "
-        "coordinates returned by vision by 2 to get physical pixels; (d) do NOT call vision after "
-        "every step — only at decision points (finding a control's position); for simple "
-        "verification trust the tool result.\n"
-        "FINDING WINDOWS: prefer process= over title= (WeChat 4.x: process='Weixin'; older: "
-        "'WeChat'; title equals the current chat name and changes constantly).\n"
-        "SEE THE UI: screenshot (feed the returned file path to the vision tool and ask for pixel "
-        "coordinates of what you need) and/or read_controls (returns control names + physical "
-        "rects). NOTE: some apps (WeChat 4.x) expose NO controls via UIA — for them ALWAYS use "
-        "the screenshot+vision+coordinates route.\n"
-        "ACTING: try click_control/type_control by name first; for custom-drawn UIs (WeChat 4.x) "
-        "use coordinate clicks (click x,y) + type_text / press_key. Coordinates in screenshots, "
-        "control rects and mouse clicks share ONE physical-pixel DPI-aware system — a coordinate "
-        "seen in a screenshot clicks exactly there.\n"
-        "WECHAT 4.x RECIPE (tested, fixed layout — use rel coordinates, NOT vision coordinates): "
-        "WeChat's window layout is FIXED, so relative coordinates are reliable: search box ≈ "
-        "rel_x=0.15 rel_y=0.08 (top-left of right pane) — NOTE: the visual search box on WeChat "
-        "4.x may not show a focus caret after click (Qt custom-rendered), but keys do register "
-        "when you click directly on it; message input box ≈ rel_x=0.5 rel_y=0.93 (right pane "
-        "bottom); send button ≈ rel_x=0.46 rel_y=0.94. "
-        "Steps: launch 'Weixin' (auto-activates) → click_type process=Weixin rel_x=0.085 rel_y=0.055 "
-        "text=<contact name> (click search box and type) → wait ~1s → screenshot + vision to READ "
-        "the result list and pick the FIRST contact entry (its row is just under the search box, "
-        "≈ rel_y=0.12..0.20) → click that entry (rel coords) → click_type process=Weixin rel_x=0.60 "
-        "rel_y=0.925 text=<message> (click input box and type) → press_key {ENTER} to send → "
-        "screenshot to verify the sent bubble. IMPORTANT: do NOT use vision-returned pixel "
-        "coordinates for clicking — chat models are unreliable at pixel grounding; use rel "
-        "coordinates computed from the fixed layout, and use vision ONLY to read text/state."
+        "Control desktop GUI apps on Windows — THE tool for any GUI task (WeChat/QQ/Feishu/any "
+        "window: launch, click, type, read screens, send keys). Never drive GUIs via shell.\n"
+        "ROUTE: GUI app/window → this tool; CLI tasks → shell; reminders/AI timers → scheduler; "
+        "absent-user/boot tasks → shell schtasks (current-user tasks need no admin; NEVER /RU "
+        "SYSTEM for GUI).\n"
+        "FLOW: list_windows/find_window → activate → read_controls (UIA names+rects) or "
+        "screenshot→vision for coordinates → click_control/type_control by name. Custom-drawn UIs "
+        "(WeChat 4.x exposes NO UIA controls): rel_x/rel_y or x/y clicks + type_text/press_key.\n"
+        "SPEED: (a) click_type = click+type+keys in ONE call — prefer over separate calls; "
+        "(b) verify_screenshot=true attaches post-action screenshot, saving a call; "
+        "(c) screenshots default 0.5 downscale — multiply vision coords by 2; "
+        "(d) vision only at decision points, otherwise trust tool results. "
+        "Repeated ops on the same window auto-hit a 2s handle cache (no need to re-find).\n"
+        "CLICK ACCURACY: click/click_type results include focus=<ClassName> of the control "
+        "that received the click — sanity-check it (search box click → focus should be an "
+        "Edit/Input class; still a Pane means you MISSED → adjust coords and retry, don't "
+        "type blindly). Vision-read coords may be off by a few px; prefer rel_x/rel_y on "
+        "fixed-layout apps.\n"
+        "WINDOWS: prefer process= over title= (WeChat: 'Weixin'; title = current chat name, "
+        "changes constantly). [min] windows have off-screen rects — activate first. One DPI-aware "
+        "physical-pixel system: screenshot coords = control rects = mouse coords.\n"
+        "FIELD NOTES: UAC prompts can NOT be automated — if launch/click hangs, tell the user to "
+        "approve. IME: wait 0.3s between CJK typing and {ENTER}, or paste=true bypasses IME. "
+        "Send files in chat apps: copy_file → click input → ^v → {ENTER} (NEVER drag). "
+        "clip_read when user references just-copied content. Open/Save dialogs: type_control the "
+        "full absolute path + {ENTER} — don't click Browse. drag: duration >=0.6s (Hit-Test needs "
+        "real move events; instant moves discarded).\n"
+        "WECHAT 4.x (fixed layout → use rel coords, NEVER vision pixel coords — chat models are "
+        "unreliable at pixel grounding): search box ≈(0.085,0.055), no caret shown after click but "
+        "keys register; first result row ≈rel_y 0.12–0.20 (vision reads text only); input box "
+        "≈(0.60,0.925); send ≈(0.46,0.94). Send message: launch Weixin → click_type rel(0.085,0.055) "
+        "text=<contact> → wait 1s → screenshot+vision pick first entry → click it → click_type "
+        "rel(0.60,0.925) text=<msg> → {ENTER} → screenshot verify."
     )
     parameters = {
         "type": "object",
@@ -551,35 +767,32 @@ class DesktopTool(ToolDefinition):
             },
             "verify_screenshot": {
                 "type": "boolean",
-                "description": "For write actions: auto-attach a window screenshot to the result "
-                "(saves a separate screenshot call). Default false.",
+                "description": "Write actions: attach post-action screenshot to the result. Default false.",
             },
             "scale": {
                 "type": "number",
-                "description": "screenshot downscale factor, default 0.5 (vision reads faster; "
-                "multiply returned coordinates by 1/scale to get physical pixels). Use 1.0 for 1:1.",
+                "description": "screenshot downscale, default 0.5 (multiply vision coords by 1/scale). 1.0 = 1:1.",
             },
             "title": {
                 "type": "string",
-                "description": "Target window title (exact match, or regex when title_re=true).",
+                "description": "Window title (exact match, or regex when title_re=true).",
             },
             "process": {
                 "type": "string",
-                "description": "Match windows by process name substring, e.g. 'Weixin'/'WeChat'/'Feishu'. "
-                "Recommended for apps whose titles change (WeChat title = current chat name); "
-                "can be used alone or combined with title.",
+                "description": "Process name substring, e.g. 'Weixin'/'Feishu' — preferred over title "
+                "(works alone or with title).",
             },
             "title_re": {
                 "type": "boolean",
-                "description": "Treat title as regex (default false = exact match).",
+                "description": "Treat title as regex. Default false.",
             },
             "index": {
                 "type": "integer",
-                "description": "Which matching window when several match (default 0 = first).",
+                "description": "Which matching window when several match (default 0).",
             },
             "control": {
                 "type": "string",
-                "description": "Control name/text to locate inside the window (for click_control/type_control).",
+                "description": "Control name/text to locate (click_control/type_control).",
             },
             "control_type": {
                 "type": "string",
@@ -601,17 +814,33 @@ class DesktopTool(ToolDefinition):
                 "type": "string",
                 "description": "Key sequence for press_key, pywinauto syntax: {ENTER} {ESC} ^a ^c ^v {TAB}.",
             },
-            "x": {"type": "integer", "description": "X screen coordinate (click/scroll)."},
-            "y": {"type": "integer", "description": "Y screen coordinate (click/scroll)."},
+            "x": {"type": "integer", "description": "X screen coordinate (click/scroll/drag start)."},
+            "y": {"type": "integer", "description": "Y screen coordinate (click/scroll/drag start)."},
+            "x2": {
+                "type": "integer",
+                "description": "drag: end X (screen absolute).",
+            },
+            "y2": {
+                "type": "integer",
+                "description": "drag: end Y (screen absolute).",
+            },
+            "duration": {
+                "type": "number",
+                "description": "drag: seconds for the move phase (default 0.6; keep >=0.6 so Hit-Test registers).",
+            },
+            "file": {
+                "type": "string",
+                "description": "copy_file: file absolute path(s) onto clipboard (';' separated). "
+                "Then paste into chat input with ^v.",
+            },
             "rel_x": {
                 "type": "number",
-                "description": "Click position as a fraction (0~1) of the target window WIDTH "
-                "(e.g. 0.085 = 8.5% from left). Use with rel_y; PREFERRED over vision-returned "
-                "absolute coordinates for fixed-layout apps.",
+                "description": "Click at fraction (0~1) of window WIDTH (0.085 = 8.5% from left). "
+                "Preferred over vision pixel coords for fixed-layout apps.",
             },
             "rel_y": {
                 "type": "number",
-                "description": "Click position as a fraction (0~1) of the target window HEIGHT.",
+                "description": "Click at fraction (0~1) of window HEIGHT.",
             },
             "scroll": {
                 "type": "string",
@@ -816,6 +1045,22 @@ class DesktopTool(ToolDefinition):
                         "全屏截图失败：本机屏幕 DC 被系统拦截（DLP/安全软件）。"
                         "请改用窗口截图：screenshot + process=<应用名> + window_only=true。",
                     )
+        # 空屏守卫（2026-09-04）：窗口未渲染完成时 PrintWindow 会返回近乎纯色的
+        # 小图（实测 3131 字节整）——vision 读它只能得到空描述，误导 agent 决策。
+        # 检测：PNG 编码体积异常小 + 图像色彩单一 → 重抓一次（多数情况第二次已渲染完）。
+        try:
+            import io
+
+            png_size = len(_img_to_png_bytes(img))
+            w_px, h_px = img.size
+            colors = len(img.convert("RGB").getcolors(maxcolors=256) or []) if (w_px * h_px) else 0
+            if png_size < 8000 and colors <= 8 and w_px * h_px > 50000:
+                time.sleep(1.2)
+                retry = _printwindow_capture(w.handle) if (window_only or title or (kw.get("process") or "").strip()) else None
+                if retry is not None:
+                    img = retry
+        except Exception:  # noqa: BLE001 — 守卫失败不影响正常截图流程
+            pass
         # 降采样（默认 0.5：vision API 对 1888x1150 级大图单次推理实测 5~60s，
         # 减半后体积/推理时间约降 60-70%，按钮级定位精度不受影响）
         try:
@@ -1115,6 +1360,9 @@ class DesktopTool(ToolDefinition):
         mouse.click(button="left", coords=(px, py))
         time.sleep(max(0.05, float(click_delay or 0.3)))
         parts = [f"({px},{py})"]
+        fs = _focus_summary()
+        if fs:
+            parts.append(fs)
         if text:
             if str(kw.get("paste", "")).lower() in ("1", "true", "yes"):
                 if _paste_text(text):
@@ -1138,7 +1386,9 @@ class DesktopTool(ToolDefinition):
         from pywinauto import mouse
 
         mouse.click(button="left", coords=point)
-        return self._ok(f"已左键点击 ({point[0]},{point[1]})")
+        time.sleep(0.08)
+        fs = _focus_summary()
+        return self._ok(f"已左键点击 ({point[0]},{point[1]})" + (f"；{fs}" if fs else ""))
 
     async def _do_double_click(self, x: int = -1, y: int = -1, **kw) -> Observation:
         point = self._resolve_click_point({"x": x, "y": y, **kw})
@@ -1168,6 +1418,75 @@ class DesktopTool(ToolDefinition):
         delta = abs(int(amount)) if amount else 3
         mouse.scroll(coords=coords, wheel_dist=delta if scroll != "up" else -delta)
         return self._ok(f"已滚动 {scroll} {delta} 格" + (f" @({x},{y})" if coords else "（鼠标当前位置）"))
+
+    async def _do_drag(
+        self, x: int = -1, y: int = -1, x2: int = -1, y2: int = -1,
+        duration: float = 0.6, steps: int = 24, **kw,
+    ) -> Observation:
+        """真实拖拽：按下 → 分步移动 → 释放.
+
+        背景（2026-09-04）：目标应用（滑块/画布/拖文件入窗）靠 WM_MOUSEMOVE
+        事件流做 Hit-Test——瞬移（一次 move 到终点）会被判定为非拖拽而丢弃。
+        分步 move + 每步 sleep 产生真实事件流；duration 建议 >=0.6s。
+        起点支持 rel_x/rel_y（相对窗口比例），终点用屏幕绝对坐标 x2/y2。
+        """
+        start = self._resolve_click_point({"x": x, "y": y, **kw})
+        if start is None:
+            return self._err(ERROR_INVALID_ARGS, "缺少起点坐标（x/y 或 rel_x/rel_y）")
+        if int(x2) < 0 or int(y2) < 0:
+            return self._err(ERROR_INVALID_ARGS, "缺少终点坐标 x2/y2（屏幕绝对坐标）")
+        from pywinauto import mouse
+
+        n = max(4, int(steps))
+        dur = max(0.1, float(duration or 0.6))
+        mouse.press(button="left", coords=start)
+        time.sleep(0.15)  # 让目标注册按下状态
+        for i in range(1, n + 1):
+            xi = start[0] + (int(x2) - start[0]) * i // n
+            yi = start[1] + (int(y2) - start[1]) * i // n
+            mouse.move(coords=(xi, yi))
+            time.sleep(dur / n)
+        time.sleep(0.1)
+        mouse.release(button="left", coords=(int(x2), int(y2)))
+        return self._ok(
+            f"已拖拽 ({start[0]},{start[1]}) → ({int(x2)},{int(y2)})（{n} 步 / {dur:.1f}s）"
+        )
+
+    async def _do_copy_file(self, file: str = "", **kw) -> Observation:
+        """文件放入剪贴板（CF_HDROP）——聊天应用发文件的第一步.
+
+        配套动作：click 聊天输入框 → press_key ^v → press_key {ENTER}。
+        多文件用 ';' 分隔。详见 _copy_files_to_clipboard 注释。
+        """
+        if not (file or "").strip():
+            return self._err(ERROR_INVALID_ARGS, "缺少 file 参数（要放入剪贴板的文件绝对路径，多个用 ';' 分隔）")
+        files = [s.strip() for s in re.split(r"[;\n]", file) if s.strip()]
+        if _copy_files_to_clipboard(files):
+            return self._ok(
+                f"已放入剪贴板 {len(files)} 个文件: " + "; ".join(files)
+                + "\n下一步: click 聊天输入框 → press_key '^v' → press_key '{ENTER}' 即可发送"
+            )
+        missing = [p for p in files if not Path(p).exists()]
+        return self._err(
+            ERROR_INVALID_ARGS,
+            "文件复制到剪贴板失败（剪贴板被占用或路径不存在: " + "; ".join(missing or files) + "）",
+        )
+
+    async def _do_clip_read(self, **kw) -> Observation:
+        """读取剪贴板（文本/文件列表）——感知用户刚复制的内容."""
+        text, files = _read_clipboard()
+        if files:
+            return self._ok(
+                "剪贴板内容: 文件\n" + "\n".join(files),
+                {"type": "files", "files": files},
+            )
+        if text:
+            preview = text[:500] + ("…" if len(text) > 500 else "")
+            return self._ok(
+                f"剪贴板内容: 文本（{len(text)} 字符）\n{preview}",
+                {"type": "text", "text_len": len(text)},
+            )
+        return self._ok("剪贴板为空或内容类型不支持（仅支持文本/文件）")
 
     # ── 内部 ──────────────────────────────────────────────
 

@@ -65,6 +65,11 @@ if _webview_lib:
 datas += collect_data_files("onnxruntime")
 binaries = collect_dynamic_libs("onnxruntime")
 
+# RapidOCR 本地引擎（vision 工具 OCR 兜底，2026-09-04）：
+# 模型 onnx（det/rec/cls 约 15MB）+ config.yaml 必须随包分发，否则打包版 exe
+# OCR 初始化时找不到模型文件直接报错。依赖已在 requirements 记录，此处仅收数据。
+datas += collect_data_files("rapidocr_onnxruntime")
+
 # ── 隐式导入（动态 import / 反射加载的模块） ─────────────
 hiddenimports = [
     # 核心硬依赖（requirements 已含）
@@ -118,6 +123,10 @@ hiddenimports = [
     "playwright.async_api",
     "playwright.sync_api",
     "playwright._impl._driver",
+    # vision 工具本地 OCR（2026-09-04）：RapidOCR 在工具内为函数级惰性导入，
+    # PyInstaller 静态分析抓不到 → 必须显式收集，否则打包版 exe 缺库，
+    # OCR 路径报 ModuleNotFoundError（VL 路径仍可用）。
+    *collect_submodules("rapidocr_onnxruntime"),
 ]
 
 # ── 打包配置 ─────────────────────────────────────────────

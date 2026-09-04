@@ -43,23 +43,34 @@ def app_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """数据目录（2026-08-31 修复"更新丢配置"）:
-    - Windows 主目录: %APPDATA%\\Scout —— 始终可写、程序更新/覆盖不会清空,
-      升级后 API Key/配置自动保留（旧数据目录会一次性迁移）。
+    """数据目录（2026-09-04 按用户要求改回盘符根 .scout 为工作目录）:
+    - Windows 主目录: <exe 所在盘符>\\.scout（如 D:\\.scout）——历史工作目录，
+      用户要求沿用；盘符根不可写时回退 %APPDATA%\\Scout（始终可写）。
     - 回退: exe 旁 data/，再回退用户目录 ~/.scout
     """
     if os.name == "nt":
+        candidates = []
+        try:
+            anchor = Path(sys.executable if _is_frozen() else __file__).resolve().anchor
+            if anchor:
+                candidates.append(Path(anchor) / ".scout")
+        except OSError:
+            pass
         try:
             base = os.getenv("APPDATA") or str(Path.home())
             if base:
-                d = Path(base) / "Scout"
+                candidates.append(Path(base) / "Scout")
+        except OSError:
+            pass
+        for d in candidates:
+            try:
                 d.mkdir(parents=True, exist_ok=True)
                 probe = d / ".write_probe"
                 probe.write_text("ok", encoding="utf-8")
                 probe.unlink()
                 return d
-        except OSError:
-            pass
+            except OSError:
+                continue
     d = app_dir() / "data"
     try:
         d.mkdir(parents=True, exist_ok=True)
@@ -69,6 +80,53 @@ def data_dir() -> Path:
         return d
     except OSError:
         return Path.home() / ".scout"
+
+
+def _migrate_appdata_back(ddir: Path) -> None:
+    """一次性反向迁移（2026-09-04）：%APPDATA%\\Scout → 盘符根 .scout.
+
+    背景：8/31 曾把数据目录迁到 APPDATA，用户要求工作目录回到 D:\\.scout。
+    APPDATA 是较新的活跃数据（config/记忆/会话），必须合并回 .scout 而非
+    沿用旧文件。幂等：成功后写 marker + APPDATA 目录改名备份。
+    """
+    if os.name != "nt":
+        return
+    try:
+        base = os.getenv("APPDATA") or ""
+        if not base:
+            return
+        src = Path(base) / "Scout"
+        if not src.is_dir() or not (src / "config.json").exists():
+            return
+        if ddir.resolve() == src.resolve():
+            return
+        if (ddir / ".migrated_from_appdata").exists():
+            return
+        import shutil
+
+        ddir.mkdir(parents=True, exist_ok=True)
+        for item in src.iterdir():
+            if item.name in ("launcher.log", ".write_probe", "webview2"):
+                continue  # 日志/探测/浏览器缓存不搬
+            target = ddir / item.name
+            try:
+                if item.is_dir():
+                    shutil.copytree(item, target, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, target)
+            except Exception:  # noqa: BLE001 — 单项失败不阻断整体
+                print(f"[migrate-back] skip {item.name}: {type(item).__name__} error")
+        (ddir / ".migrated_from_appdata").write_text(
+            datetime.now().isoformat(), encoding="utf-8"
+        )
+        # 备份改名（同盘原子；失败不影响，marker 已保证幂等）
+        try:
+            src.rename(src.parent / f"Scout__migrated_{datetime.now():%Y%m%d_%H%M%S}")
+        except OSError:
+            pass
+        print(f"[migrate-back] {src} -> {ddir}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate-back] failed: {e}")
 
 
 def _migrate_old_data(new_dir: Path) -> None:
@@ -415,7 +473,56 @@ def _open_gui(url: str, port: int) -> None:
                 def _on_ready(self, sender, args) -> None:
                     _log(f"webview ready IsSuccess={args.IsSuccess} InitException={getattr(args, 'InitializationException', None)}")
                     if args.IsSuccess:
-                        self.wv.CoreWebView2.Navigate(url)
+                        cv2 = self.wv.CoreWebView2
+                        # ★ 2026-09-04：WebView2 下载支持 —— 未配置默认下载文件夹/下载条时，
+                        #   页面 <a download> / Content-Disposition: attachment 的下载会被静默丢弃
+                        #   （表现为点下载"没反应"），后端 /api/files/download 实测 200 正常。
+                        try:
+                            _dl = Path(os.environ.get("USERPROFILE", "")) / "Downloads"
+                            if not _dl.is_dir():
+                                _dl = data_dir() / "downloads"
+                                _dl.mkdir(parents=True, exist_ok=True)
+                            cv2.Profile.DefaultDownloadFolderPath = str(_dl)
+                            cv2.Settings.IsDefaultDownloadDialogEnabled = True
+                            _log(f"webview download folder: {_dl}")
+                        except Exception as _e:  # noqa: BLE001 - 下载配置失败不影响主流程
+                            _log(f"webview download config failed (ignore): {_e}")
+
+                        # ★ 2026-09-04：下载事件诊断 —— 每个下载打 URL/目标/状态/中断原因到
+                        #   launcher.log，用于定位"弹窗提示下载不了"的失败环节（DownloadStarting
+                        #   是否触发 -> StateChanged 最终状态 -> InterruptReason 具体原因）。
+                        def _on_download_starting(_s, _e) -> None:
+                            try:
+                                op = _e.DownloadOperation
+                                _log(f"DOWNLOAD start uri={getattr(op, 'Uri', '?')} "
+                                     f"suggested={getattr(op, 'SuggestedFileName', '?')} "
+                                     f"target={getattr(_e, 'ResultFilePath', '?')} "
+                                     f"cancel={getattr(_e, 'Cancel', False)}")
+
+                                def _on_dl_state(_s2, _e2) -> None:
+                                    try:
+                                        st = str(getattr(op, "State", ""))
+                                        _log(f"DOWNLOAD state={st}")
+                                        if st == "Interrupted":
+                                            _log(f"DOWNLOAD interrupted reason={getattr(op, 'InterruptReason', '?')}")
+                                        elif st == "Completed":
+                                            _log(f"DOWNLOAD completed -> {getattr(op, 'ResultFilePath', '?')}")
+                                    except Exception as _x:  # noqa: BLE001
+                                        _log(f"DOWNLOAD state cb err: {_x}")
+
+                                try:
+                                    op.StateChanged += _on_dl_state
+                                except Exception:
+                                    op.add_StateChanged(_on_dl_state)
+                            except Exception as _x:  # noqa: BLE001
+                                _log(f"DOWNLOAD starting cb err: {_x}")
+
+                        try:
+                            cv2.DownloadStarting += _on_download_starting
+                        except Exception:
+                            cv2.add_DownloadStarting(_on_download_starting)
+                        _log("webview download events wired")
+                        cv2.Navigate(url)
 
                 def _on_shown(self, sender, e) -> None:
                     _log("MainForm Shown")
@@ -529,6 +636,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── 环境准备（必须在导入 scout 之前） ──
     ddir = data_dir()
+    # ★ 2026-09-04：反向迁移（APPDATA\Scout → 盘符根 .scout），必须在导入 scout 前
+    _migrate_appdata_back(ddir)
     # ★ 2026-08-31：一次性迁移旧数据目录（盘符根 .scout / exe 旁 data / ~/.scout）
     #   必须在导入 scout 之前执行，保证 config.json/secret_key 落到新目录。
     _migrate_old_data(ddir)
