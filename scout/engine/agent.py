@@ -296,6 +296,19 @@ class Agent:
 
         self.system_prompt = get_platform_prompt() + self.system_prompt
 
+        # ── 产物目录约定（2026-09-04）：Agent 生成的文件统一收纳 ──
+        # 注入在平台提示之后、所有模式共享；路径进程内固定，不破坏前缀缓存。
+        from scout.config.paths import OUTPUTS_DIR as _OUTPUTS_DIR
+
+        self.system_prompt += (
+            "\n## File Outputs Convention\n"
+            f"Default output directory for ALL files you generate (reports, exports, "
+            f"converted/processed files, intermediate artifacts): {_OUTPUTS_DIR}\n"
+            "Create it if missing (mkdir -p). Write there unless the user explicitly names "
+            "another location; NEVER default to Desktop/Downloads/system dirs. When sending "
+            "the file to the user afterwards, reference this absolute path.\n"
+        )
+
         # ── 回复语言控制（zh/en/auto）──
 
         # 覆盖默认的"跟随用户"规则，实现强制中英文切换

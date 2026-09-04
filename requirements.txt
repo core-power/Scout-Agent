@@ -43,3 +43,5 @@ discord.py>=2.3.0
 # 桌面自动化工具 desktop（可选，Windows GUI 操控；缺包时该工具自动跳过）
 pywinauto>=0.6.8
 Pillow>=10.0.0
+# vision 工具本地 OCR 兜底（未配置视觉模型时提取图中文字；缺包时 OCR 路径报错、VL 路径不受影响）
+rapidocr-onnxruntime>=1.2.0

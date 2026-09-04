@@ -1152,6 +1152,21 @@ marked.setOptions({highlight:(c,l)=>{try{return l&&hljs.getLanguage(l)?hljs.high
             .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    // JS 字符串字面量转义（用于 onclick="fn('...')" 属性内联 JS 上下文）.
+    // ★ 根因（2026-09-04）：Windows 路径 C:\Users\... 经 escapeHtml 后反斜杠原样进入
+    //   onclick 属性；浏览器把属性值编译为 JS 时 '\U'/'\a'/'\D' 属无效转义序列，
+    //   反斜杠被 JS 引擎直接丢弃 → downloadFile 收到 C:UsersadminDesktop...（无分隔符）
+    //   → 后端 404 → WebView2 ServerBadContent。escapeHtml 不够，必须先把 \ 变 \\。
+    function escapeJsAttr(str) {
+        return String(str == null ? '' : str)
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "\\'")
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/&(?!(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);)/g, '&amp;');
+    }
+
 // ── 渠道管理 ──
 
 // 渠道配置模板
@@ -2534,7 +2549,9 @@ class AgentBubble {
         const fileName = fileData.file_name || fileData.file_path.split('/').pop();
         const fileSize = fileData.file_size ? formatFileSize(fileData.file_size) : '';
         const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i.test(fileName);
-        const dlUrl = `/api/files/download?path=${encodeURIComponent(fileData.file_path)}`;
+        // ★ 同 downloadFile：把 `\` 换成 `/`，避开 WebView2 GURL 丢弃反斜杠的坑
+        const safeFilePath = String(fileData.file_path || '').replace(/\\/g, '/');
+        const dlUrl = `/api/files/download?path=${encodeURIComponent(safeFilePath)}`;
         
         let fileCard;
         if (isImg) {
@@ -2543,7 +2560,7 @@ class AgentBubble {
             fileCard.className = 'file-attachment mt-3 p-2.5 rounded-xl bg-scout-500/10 border border-scout-500/20 w-fit max-w-full';
             fileCard.innerHTML = `
                 <div class="flex items-center gap-3">
-                    <div class="relative flex-shrink-0 cursor-zoom-in group" data-path="${escapeHtml(fileData.file_path)}" onclick="openImagePreview(this.dataset.path, '${escapeHtml(fileName)}')" title="${__t('点击查看大图')}">
+                    <div class="relative flex-shrink-0 cursor-zoom-in group" data-path="${escapeHtml(fileData.file_path)}" onclick="openImagePreview(this.dataset.path, '${escapeJsAttr(fileName)}')" title="${__t('点击查看大图')}">
                         <img src="${dlUrl}" alt="${escapeHtml(fileName)}" loading="lazy"
                              class="w-20 h-20 rounded-lg object-cover border border-white/10 transition-transform group-hover:scale-105"
                              onerror="this.outerHTML='<div class=&quot;w-20 h-20 rounded-lg bg-scout-500/20 flex items-center justify-center text-3xl&quot;>🖼️</div>'">
@@ -2553,7 +2570,7 @@ class AgentBubble {
                         <div class="text-sm text-slate-200 font-medium truncate">${escapeHtml(fileName)}</div>
                         <div class="text-xs text-slate-500 mt-0.5">${escapeHtml(fileSize)}</div>
                     </div>
-                    <button onclick="downloadFile('${escapeHtml(fileData.file_path)}')" class="px-2.5 py-1.5 rounded-lg bg-scout-500/25 hover:bg-scout-500/40 text-scout-300 text-xs transition-colors flex items-center gap-1.5 flex-shrink-0">
+                    <button onclick="downloadFile('${escapeJsAttr(fileData.file_path)}')" class="px-2.5 py-1.5 rounded-lg bg-scout-500/25 hover:bg-scout-500/40 text-scout-300 text-xs transition-colors flex items-center gap-1.5 flex-shrink-0">
                         <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
                         下载
                     </button>
@@ -2566,7 +2583,7 @@ class AgentBubble {
                 <div class="flex items-center gap-2">
                     <span class="text-scout-400">📎</span>
                     <span class="flex-1 text-sm text-slate-300 truncate">${escapeHtml(fileName)}${fileSize ? ' · ' + fileSize : ''}</span>
-                    <button onclick="downloadFile('${escapeHtml(fileData.file_path)}')" class="px-3 py-1 rounded bg-scout-500/20 hover:bg-scout-500/30 text-scout-400 text-xs transition-colors flex-shrink-0">
+                    <button onclick="downloadFile('${escapeJsAttr(fileData.file_path)}')" class="px-3 py-1 rounded bg-scout-500/20 hover:bg-scout-500/30 text-scout-400 text-xs transition-colors flex-shrink-0">
                         下载
                     </button>
                 </div>`;
@@ -3417,8 +3434,13 @@ async function loadSession(sid, opts = {}) {
 
 async function downloadFile(filePath) {
     // 直接创建带 download 属性的 <a> 标签，指向下载 API
-    const url = `/api/files/download?path=${encodeURIComponent(filePath)}`;
-    const fileName = filePath.split('/').pop() || 'download';
+    // ★ WebView2 内部使用 Chromium GURL 解析 URL，GURL 会丢弃 query value 里的 `\`（视为非法字符），
+    //   导致后端拿到 "C:UsersadminDesktop..." 这种没有反斜杠的路径而 404。
+    //   把 `\` 替换为 `/` 是 GURL 兼容写法（`/` 在 query value 里是合法字符，不被规范化）。
+    //   后端 /api/files/download 用 os.path.abspath 在 Windows 上对 forward-slash 路径同样能解析。
+    const safePath = String(filePath || '').replace(/\\/g, '/');
+    const url = `/api/files/download?path=${encodeURIComponent(safePath)}`;
+    const fileName = (safePath.split('/').pop() || 'download');
     const a = document.createElement('a');
     a.href = url;
     a.download = fileName;
@@ -3472,7 +3494,9 @@ function openImagePreview(filePath, fileName) {
     }
     overlay.dataset.path = filePath;
     document.getElementById('image-preview-name').textContent = fileName || filePath.split('/').pop() || '';
-    document.getElementById('image-preview-img').src = `/api/files/download?path=${encodeURIComponent(filePath)}`;
+    // ★ 同 downloadFile：把 `\` 换成 `/` 避开 WebView2 GURL 丢反斜杠的坑
+    const safePath = String(filePath || '').replace(/\\/g, '/');
+    document.getElementById('image-preview-img').src = `/api/files/download?path=${encodeURIComponent(safePath)}`;
     overlay.classList.remove('hidden');
 }
 
