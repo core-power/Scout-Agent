@@ -439,10 +439,17 @@ class WebAdapter:
             "request_timeout": config.request_timeout,
         }
         # 2026-09-04：防御性去空白 —— 治愈历史落盘的脏 key/URL（首尾空白是 401 根因之一）；
-        # 空 base_url 转 None 让 SDK 回落官方默认端点，而非把 "" 当端点
+        # 顶层 base_url/api_key 为空时回落到"服务商凭据区"已存值 —— 治愈 UI 保存空输入框
+        # 把顶层端点清空的场景（否则自定义 EAS/中转端点会被替换成 SDK 官方默认 -> ReadTimeout）；
+        # 与 test_config 方案2（请求传入 -> 主配置 -> 凭据区）保持一致
         provider = (config.provider or "").strip()
         api_key = (config.api_key or "").strip()
-        base_url = (config.base_url or "").strip() or None
+        if not api_key:
+            api_key = (config.provider_keys or {}).get(provider, "").strip()
+        base_url = (config.base_url or "").strip()
+        if not base_url:
+            base_url = (config.provider_base_urls or {}).get(provider, "").strip()
+        base_url = base_url or None
         llm = create_provider(
             provider=provider,
             api_key=api_key,
@@ -821,8 +828,15 @@ class WebAdapter:
             if "model" in req:
                 config.model = req["model"]
             if "base_url" in req:
-                # 2026-09-04：落盘前 strip —— 脏 URL（首尾空格/换行）会让正式聊天链路 401
-                config.base_url = str(req["base_url"] or "").strip()
+                # 2026-09-04：落盘前 strip —— 脏 URL（首尾空格/换行）会让正式聊天链路 401；
+                # 显式提交空串时回落到凭据区该 provider 已存 URL，治愈"UI 空输入框清空端点"；
+                # 凭据区也没有时保留旧值不清空（宁可用旧端点，也不能回落 SDK 官方默认）
+                _new_url = str(req["base_url"] or "").strip()
+                if not _new_url:
+                    _new_url = (config.provider_base_urls or {}).get(
+                        config.provider or "", "").strip()
+                if _new_url:
+                    config.base_url = _new_url
             if "api_key" in req and req["api_key"]:
                 # 2026-08-31：传入脱敏回显值（…/***）时回落已存明文，绝不覆盖为掩码
                 config.api_key = _resolve_key(str(req["api_key"]), config.api_key or "")
