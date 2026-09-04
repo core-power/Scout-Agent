@@ -438,11 +438,16 @@ class WebAdapter:
             "stream_timeout": config.stream_timeout,
             "request_timeout": config.request_timeout,
         }
+        # 2026-09-04：防御性去空白 —— 治愈历史落盘的脏 key/URL（首尾空白是 401 根因之一）；
+        # 空 base_url 转 None 让 SDK 回落官方默认端点，而非把 "" 当端点
+        provider = (config.provider or "").strip()
+        api_key = (config.api_key or "").strip()
+        base_url = (config.base_url or "").strip() or None
         llm = create_provider(
-            provider=config.provider,
-            api_key=config.api_key,
+            provider=provider,
+            api_key=api_key,
             model=config.model,
-            base_url=config.base_url,
+            base_url=base_url,
             **retry_kwargs,
         )
         # 模型 Fallback：支持多级 fallback 链（从配置读取）
@@ -455,10 +460,10 @@ class WebAdapter:
             fallback_llms = []
             for fb_model in fallback_models:
                 fb_llm = create_provider(
-                    provider=config.provider,
-                    api_key=config.api_key,
+                    provider=provider,
+                    api_key=api_key,
                     model=fb_model,
-                    base_url=config.base_url,
+                    base_url=base_url,
                     **retry_kwargs,
                 )
                 fallback_llms.append(fb_llm)
@@ -473,7 +478,8 @@ class WebAdapter:
         from scout.memory.vector.embeddings import select_embedding_provider, EMBEDDING_DISABLED
         try:
             emb_provider = (config.embedding_provider or "").strip()
-            emb_key, emb_base = config.api_key, config.base_url
+            # 复用上方清洗后的 key/url（脏值 401 防御统一收口）
+            emb_key, emb_base = api_key, base_url or ""
             if emb_provider and emb_provider != config.provider:
                 _k, _u = self.config_mgr.get_provider_credentials(emb_provider)
                 if _k:
@@ -815,7 +821,8 @@ class WebAdapter:
             if "model" in req:
                 config.model = req["model"]
             if "base_url" in req:
-                config.base_url = req["base_url"]
+                # 2026-09-04：落盘前 strip —— 脏 URL（首尾空格/换行）会让正式聊天链路 401
+                config.base_url = str(req["base_url"] or "").strip()
             if "api_key" in req and req["api_key"]:
                 # 2026-08-31：传入脱敏回显值（…/***）时回落已存明文，绝不覆盖为掩码
                 config.api_key = _resolve_key(str(req["api_key"]), config.api_key or "")
@@ -1307,24 +1314,51 @@ class WebAdapter:
                 return JSONResponse({"error": "请求体必须是 JSON"}, status_code=400)
             from scout.llm.providers.registry import create_provider
             try:
-                provider = req.get("provider", "dashscope")
-                api_key = str(req.get("api_key", "") or "")
+                provider = str(req.get("provider", "dashscope") or "").strip() or "dashscope"
+                # 方案1 (2026-09-04)：Key 全链路去空白 —— 复制粘贴带空格/换行是 401 高频根因
+                api_key = str(req.get("api_key", "") or "").strip()
                 base_url = str(req.get("base_url", "") or "").strip()
+                model = str(req.get("model", "") or "").strip() or "qwen-plus"
                 stored_key, stored_url = self.config_mgr.get_provider_credentials(provider)
                 # 2026-08-31：输入框为空 / 回填脱敏值时回落已存明文，避免测试用掩码连接
-                api_key = _resolve_key(api_key, stored_key)
+                # 末尾二次 strip：治愈历史落盘的首尾带空白脏 key
+                api_key = _resolve_key(api_key, stored_key).strip()
+                # 方案2 (2026-09-04)：base_url 回落顺序 请求传入 → 主配置 → 凭据区。
+                # 旧逻辑只回落凭据区 stored_url —— 当 key 来自请求/主配置而 URL 却取
+                # 凭据区旧值时形成"新 key + 旧端点"跨区错位 → Authorization failed。
                 if not base_url:
-                    base_url = stored_url
+                    cfg = self.config_mgr.load()
+                    if cfg.provider == provider and (cfg.base_url or "").strip():
+                        base_url = cfg.base_url.strip()
+                    else:
+                        base_url = (stored_url or "").strip()
                 llm = create_provider(
                     provider=provider,
                     api_key=api_key,
-                    model=req.get("model", "qwen-plus"),
-                    base_url=base_url,
+                    model=model,
+                    base_url=base_url or None,
                 )
                 resp = await llm.complete([{"role": "user", "content": "Hi"}])
-                return {"status": "ok", "message": f"连接成功: {resp.content[:50]}"}
+                # 回显实际 endpoint（含 bare host 自动补 /v1 的规范化结果），
+                # key/URL 跨区错位、端点填错一眼可见
+                endpoint = str(getattr(llm.client, "base_url", "") or base_url or "")
+                return {
+                    "status": "ok",
+                    "message": f"连接成功: {resp.content[:50]}",
+                    "endpoint": endpoint,
+                    "model": model,
+                }
             except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=400)
+                err = str(e)
+                # 401 类错误附排查提示：令牌无模型权限等问题只能在服务商侧解决，
+                # 提示清单把"代码问题"与"配置/权限问题"一刀切开
+                low = err.lower()
+                if any(k in low for k in ("authorization", "401", "unauthorized",
+                                          "invalid api key", "incorrect api key", "api key")):
+                    err += ("\n排查: ① Key 是否属于该端点（中转 Key 不能打官方/反之）"
+                             "；② 中转令牌是否有该模型权限；③ Base URL 是否缺 /v1"
+                             "；④ Key 是否带空格换行")
+                return JSONResponse({"error": err}, status_code=400)
 
     def _setup_security_routes(self):
         """安全策略 API."""

@@ -13,6 +13,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 from openai import AsyncOpenAI
 
@@ -37,6 +38,30 @@ def _is_retryable(error: BaseException) -> bool:
     return any(kw in msg for kw in _RETRYABLE_KEYWORDS)
 
 
+def _normalize_base_url(url: str | None) -> str | None:
+    """OpenAI 兼容端点规范化 (2026-09-04).
+
+    - 去首尾空白
+    - 仅 scheme://host[:port]（无路径）时自动补 /v1：SDK 会在 base_url 后直接拼
+      /chat/completions，漏写 /v1 是自定义模型 401 "Authorization failed." 的高频根因
+    - 已带路径（/v1、/compatible-mode/v1、/api/v3 等）保持原样，不越权改写
+    """
+    if not url:
+        return url
+    url = url.strip()
+    if not url:
+        return url
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return url
+    if not p.scheme:
+        return url  # 无协议（如 localhost:8000）不处理，交 SDK 报清晰错误
+    if not p.path or p.path == "/":
+        return url.rstrip("/") + "/v1"
+    return url
+
+
 class OpenAIProvider(LLMClient):
     """OpenAI 兼容客户端 — 支持所有兼容 OpenAI API 的服务."""
 
@@ -56,7 +81,13 @@ class OpenAIProvider(LLMClient):
         # ─── 全局限流（防 DashScope 429 limit_burst_rate）───
         min_request_interval: float = 1.0,  # 每请求最小间隔秒数（令牌桶速率）
     ):
-        self.model = model
+        # 2026-09-04：Key/Model/URL 规范化 —— 首尾空白是 401 "Authorization failed."
+        # 高频根因（复制粘贴带空格/换行）；bare host 自动补 /v1。
+        # 收敛在此根治层，聊天/测试连接/fallback/vision 全部路径统一受益。
+        if api_key is not None:
+            api_key = api_key.strip()
+        self.model = (model or "").strip()
+        base_url = _normalize_base_url(base_url)
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries

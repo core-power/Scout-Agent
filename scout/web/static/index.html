@@ -5917,7 +5917,9 @@ async function testConfig() {
     try {
         const resp = await fetch('/api/config/test', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) });
         const result = await resp.json();
-        if (result.status === 'ok') { r.className = 'px-3 py-2.5 rounded-lg text-sm bg-emerald-500/10 text-emerald-400'; r.textContent = '✅ ' + result.message; }
+        // 2026-09-04：回显实际 endpoint（含 /v1 自动规范化），跨区错位/端点填错一眼可见
+        const ep = result.endpoint ? ` @ ${result.endpoint}` : '';
+        if (result.status === 'ok') { r.className = 'px-3 py-2.5 rounded-lg text-sm bg-emerald-500/10 text-emerald-400'; r.textContent = '✅ ' + result.message + ep; }
         else { r.className = 'px-3 py-2.5 rounded-lg text-sm bg-red-500/10 text-red-400'; r.textContent = '❌ ' + (result.error || '连接失败'); }
     } catch(e) { r.className = 'px-3 py-2.5 rounded-lg text-sm bg-red-500/10 text-red-400'; r.textContent = '❌ ' + e.message; }
 }
