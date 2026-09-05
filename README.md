@@ -20,6 +20,7 @@
 
 - [Introduction](#introduction)
 - [Why Scout Agent?](#why-scout-agent)
+- [UI Preview](#ui-preview)
 - [Features](#features)
 - [Signature Features, Deep-Dive](#signature-deep-dive)
 - [Quick Start](#quick-start)
@@ -57,6 +58,115 @@ Most AI assistants are **stateless helpers** — every conversation starts from 
 **Where it shines:** a personal copilot that runs your recurring chores (scheduled + event-driven automation), watches folders and webhooks, answers from your private knowledge base, and reports back through your team's IM — all while keeping your keys, memory and code private on your own hardware.
 
 > 👉 Want the full catalog? See the [Features](#features) table below, or jump straight to [Quick Start](#quick-start).
+
+---
+
+## <a name="ui-preview"></a>🖼 UI Preview
+
+<table>
+  <tr>
+    <td align="center"><b>Main Chat</b><br><img src="docs/images/chat-main-en.png" width="420"></td>
+    <td align="center"><b>Settings — Model</b><br><img src="docs/images/settings-model-en.png" width="420"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Settings — Model</b><br><img src="docs/images/settings-model-embedding-en.png" width="420"></td>
+    <td align="center"><b>ReAct Reflection + Security Block</b><br><img src="docs/images/runtime-security-block-en.png" width="420"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Multi-Agent Mode</b><br><img src="docs/images/runtime-multi-agent-en.png" width="420"></td>
+    <td align="center"><b>Model Monitoring</b><br><img src="docs/images/monitor-usage-en.png" width="420"></td>
+  </tr>
+</table>
+
+<details>
+<summary>📋 More screenshots（14）</summary>
+
+#### 3. Settings — Agent
+
+Configure reply language, run mode (ReAct single-agent loop or Multi-Agent delegation), system prompt, deep thinking and other parameters.
+
+![3. Settings — Agent](docs/images/settings-agent-en.png)
+
+#### 4. Settings — Tools
+
+Configure search engine sources (multi-source concurrent + auto failover), file/code/sandbox tool switches and parameters; applied instantly after saving.
+
+![4. Settings — Tools](docs/images/settings-tools-en.png)
+
+#### 5. Settings — Security
+
+Visual configuration of dangerous command detection (`rm -rf /`, `dd if=`, `mkfs`, `curl | sh` and 13 more patterns), auto-approve toggle, Docker sandbox isolation — keeps the Agent in a restricted environment.
+
+![5. Settings — Security](docs/images/settings-security-en.png)
+
+#### 9. System Monitoring
+
+Real-time CPU, memory, disk, network, Agent runtime status and historical curves.
+
+![9. System Monitoring](docs/images/monitor-system-en.png)
+
+#### 11. Settings — Channels
+
+Feishu, WeChat, WeChat Official Account, WeCom, WeCom Group Bot, WeChat Customer Service, Personal WeChat, Telegram, DingTalk, Discord, Slack, QQ — 12+ platforms; chat with Scout from any of them.
+
+![11. Settings — Channels](docs/images/settings-channels-en.png)
+
+#### 12. Settings — Auth
+
+Optional JWT login password protection for the Web UI and APIs.
+
+![12. Settings — Auth](docs/images/settings-auth-en.png)
+
+#### 13. Plugins
+
+View installed plugins and Skills, unload and reload; Skills discovered online can be installed and auto-triggered in conversations.
+
+![13. Plugins](docs/images/plugins-en.png)
+
+#### 14. Plugin Builder
+
+Describe the plugin you want and the AI generates complete plugin code; you can also search existing Skills/plugins on the web first.
+
+![14. Plugin Builder](docs/images/plugin-builder-en.png)
+
+#### 15. Automation
+
+Event triggers, run history, unattended policy and cron tasks — let Scout react to EventBus events or run tasks on a schedule.
+
+![15. Automation](docs/images/automation-en.png)
+
+#### 16. Observability
+
+Aggregate recent session timelines, success rates and token consumption per trace to quickly locate anomalies.
+
+![16. Observability](docs/images/observe-en.png)
+
+#### 17. Notifications
+
+Configure push rules, type toggles and IM channel targets; centrally manage all notification history.
+
+![17. Notifications](docs/images/notify-en.png)
+
+#### 18. Events
+
+Browse the EventBus event stream (types, sources, payload summaries); plugins and automation both hook into this bus.
+
+![18. Events](docs/images/events-en.png)
+
+#### 19. Watcher
+
+Watch directories for file changes (added/modified/deleted) and push events to the Agent; configurable paths and filter rules.
+
+![19. Watcher](docs/images/watcher-en.png)
+
+#### 20. Webhooks
+
+Register HTTP webhooks to receive external pushes and inject events into Scout sessions or trigger automations; signature verification and routing supported.
+
+![20. Webhooks](docs/images/webhooks-en.png)
+
+
+</details>
 
 ---
 

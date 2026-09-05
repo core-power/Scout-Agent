@@ -20,6 +20,7 @@
 
 - [简介](#简介)
 - [为什么选择 Scout Agent？](#为什么选择-scout-agent)
+- [界面预览](#界面预览)
 - [特性](#特性)
 - [特色功能深潜](#特色功能深潜)
 - [快速开始](#快速开始)
@@ -57,6 +58,115 @@ Scout Agent 是一个智能个人助手 AI 智能体，支持持久记忆、工�
 **最适合这些场景：** 一个帮你跑日常杂活的个人副驾——定时 + 事件驱动的自动化任务、监听文件夹与 Webhook、基于私有知识库问答、通过团队 IM 汇报结果——同时密钥、记忆、代码都私有地留在你自己的硬件上。
 
 > 👉 想看完整清单？见下方 [特性](#特性) 表，或直接跳到 [快速开始](#快速开始)。
+
+---
+
+## <a name="界面预览"></a>🖼 界面预览
+
+<table>
+  <tr>
+    <td align="center"><b>主聊天界面</b><br><img src="docs/images/chat-main.png" width="420"></td>
+    <td align="center"><b>设置 — 模型配置</b><br><img src="docs/images/settings-model.png" width="420"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>设置 — 模型配置</b><br><img src="docs/images/settings-model-embedding.png" width="420"></td>
+    <td align="center"><b>ReAct 反思 + 安全拦截</b><br><img src="docs/images/runtime-security-block-zh.png" width="420"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Multi-Agent 模式</b><br><img src="docs/images/runtime-multi-agent-zh.png" width="420"></td>
+    <td align="center"><b>模型监控</b><br><img src="docs/images/monitor-usage.png" width="420"></td>
+  </tr>
+</table>
+
+<details>
+<summary>📋 查看其余功能截图（14）</summary>
+
+#### 3. 设置 — Agent 行为
+
+设置回复语言、运行模式（ReAct 单智能体循环 或 Multi-Agent 委派架构）、系统提示词与深度思考等参数。
+
+![3. 设置 — Agent 行为](docs/images/settings-agent.png)
+
+#### 4. 设置 — 工具配置
+
+配置搜索引擎源（支持多源并发与自动切换）、文件 / 代码 / 沙箱等工具的开关与参数，保存后即时生效。
+
+![4. 设置 — 工具配置](docs/images/settings-tools.png)
+
+#### 5. 设置 — 安全策略
+
+可视化配置危险命令检测（`rm -rf /`、`dd if=`、`mkfs`、`curl | sh` 等 13 种模式）、自动审批开关、Docker 沙箱隔离，让 Agent 在受限环境中运行。
+
+![5. 设置 — 安全策略](docs/images/settings-security.png)
+
+#### 9. 系统监控
+
+实时查看 CPU、内存、磁盘、网络、Agent 运行状态与历史曲线。
+
+![9. 系统监控](docs/images/monitor-system.png)
+
+#### 11. 设置 — 渠道管理
+
+支持飞书、微信、微信公众号、企业微信、企微群机器人、微信客服、个人微信、Telegram、钉钉、Discord、Slack、QQ 等 12+ 平台接入，配置后即可在这些平台与 Scout 对话。
+
+![11. 设置 — 渠道管理](docs/images/settings-channels.png)
+
+#### 12. 设置 — 登录认证
+
+可选启用 JWT 登录密码保护 Web 界面与 API，提升服务安全性。
+
+![12. 设置 — 登录认证](docs/images/settings-auth.png)
+
+#### 13. 插件管理
+
+查看已安装插件与 Skill，支持卸载与重新加载；从网上发现的 Skill 安装后可在对话中自动触发。
+
+![13. 插件管理](docs/images/plugins.png)
+
+#### 14. AI 插件生成器
+
+描述想要的插件功能，AI 自动生成完整插件代码，也可以先搜索全网现有 Skill/插件。
+
+![14. AI 插件生成器](docs/images/plugin-builder.png)
+
+#### 15. 自动化中心
+
+基于事件触发器、运行历史、无人值守策略与定时任务，让 Scout 响应 EventBus 事件或按 Cron 自动执行任务。
+
+![15. 自动化中心](docs/images/automation.png)
+
+#### 16. 运行观测时间线
+
+按 trace 聚合查看最近会话的运行时间线、成功率与 Token 消耗，快速定位异常。
+
+![16. 运行观测时间线](docs/images/observe.png)
+
+#### 17. 通知中心
+
+配置通知推送规则、类型开关与 IM 渠道目标，集中管理所有通知历史。
+
+![17. 通知中心](docs/images/notify.png)
+
+#### 18. 事件总线
+
+查看系统内 EventBus 广播的事件流（含事件类型、来源、载荷摘要），插件与自动化均基于该总线触发。
+
+![18. 事件总线](docs/images/events.png)
+
+#### 19. 文件监听
+
+监听指定目录的文件变化（新增 / 修改 / 删除），事件自动推送给 Agent 处理，可配置监听路径与过滤规则。
+
+![19. 文件监听](docs/images/watcher.png)
+
+#### 20. 外部回调
+
+注册 HTTP Webhook 接收外部系统推送，将事件注入 Scout 会话或触发自动化任务，支持签名校验与路由配置。
+
+![20. 外部回调](docs/images/webhooks.png)
+
+
+</details>
 
 ---
 
