@@ -65,6 +65,56 @@ if _webview_lib:
 datas += collect_data_files("onnxruntime")
 binaries = collect_dynamic_libs("onnxruntime")
 
+# ── conda 系统库（2026-09-06 修复: 否则运行时崩溃） ────────────
+# 本桌面打包使用 conda 派生的 venv，其 Python 标准库扩展(_ssl/_hashlib/_lzma/
+# _bz2/_sqlite3/_ctypes .pyd)都链接到 conda base 的 Library\bin 下的系统 DLL
+# （OpenSSL/lzma/bz2/sqlite3/libffi）。PyInstaller 只会在自身的搜索路径里解析依赖，
+# 找不到 conda 的 Library\bin → 产物缺这些 DLL → 运行时报
+# "DLL load failed while importing _ssl: 找不到指定的模块"(fastapi/uvicorn import ssl 时崩)。
+# 必须在打包时显式把它们收集进 _internal 根目录。
+def _find_conda_lib_bin():
+    """探测 conda base 的 Library\bin(OpenSSL/lzma/bz2/sqlite3/libffi 所在)."""
+    cands: list[str] = []
+    p = os.environ.get("CONDA_PREFIX")
+    if p:
+        cands.append(os.path.join(p, "Library", "bin"))
+    conda = os.environ.get("CONDA_EXE")
+    if conda:
+        cands.append(os.path.join(os.path.dirname(conda), "Library", "bin"))
+    cands.append(os.path.join(sys.prefix, "Library", "bin"))
+    for base in (
+        r"C:\ProgramData\miniconda3", r"C:\ProgramData\anaconda3",
+        r"D:\miniconda", r"D:\anaconda3",
+        os.path.join(os.path.expanduser("~"), "miniconda3"),
+        os.path.join(os.path.expanduser("~"), "anaconda3"),
+    ):
+        cands.append(os.path.join(base, "Library", "bin"))
+    for c in cands:
+        if os.path.isdir(c) and os.path.exists(os.path.join(c, "libssl-3-x64.dll")):
+            return c
+    return None
+
+
+_conda_lib_bin = _find_conda_lib_bin()
+if _conda_lib_bin:
+    for _dll in (
+        "libssl-3-x64.dll",    # _ssl.pyd
+        "libcrypto-3-x64.dll", # _ssl.pyd / _hashlib.pyd
+        "liblzma.dll",         # _lzma.pyd
+        "LIBBZ2.dll",          # _bz2.pyd
+        "libbz2.dll",          # _bz2.pyd(别名, 保险)
+        "sqlite3.dll",         # _sqlite3.pyd
+        "ffi.dll",             # _ctypes.pyd
+        "ffi-8.dll",           # _ctypes.pyd(libffi 备选版本)
+        "libexpat.dll",        # pyexpat.pyd(xml.parsers, 2026-09-06 构建日志新增缺失)
+    ):
+        _p = os.path.join(_conda_lib_bin, _dll)
+        if os.path.exists(_p):
+            binaries.append((_p, "."))
+            print(f"[spec] 收集 conda 系统库: {_dll}")
+else:
+    print("[spec][warn] 未探测到 conda Library\\bin，跳过 conda 系统库收集(可能仍有 _ssl 崩溃风险)")
+
 # RapidOCR 本地引擎（vision 工具 OCR 兜底，2026-09-04）：
 # 模型 onnx（det/rec/cls 约 15MB）+ config.yaml 必须随包分发，否则打包版 exe
 # OCR 初始化时找不到模型文件直接报错。依赖已在 requirements 记录，此处仅收数据。

@@ -320,16 +320,36 @@ class SkillManager:
             lines.append(f"（另有 {skipped} 个技能未列出，超出索引预算）")
         return header + "\n".join(lines)
 
-    def to_prompt(self, user_input: str, budget_chars: int = DEFAULT_INDEX_BUDGET) -> str:
-        """生成技能 prompt 片段（渐进式披露）.
+    def to_prompt(
+        self,
+        user_input: str,
+        budget_chars: int = DEFAULT_INDEX_BUDGET,
+        top_n: int = 3,
+    ) -> str:
+        """生成技能 prompt 片段（渐进式披露, 2026-09-05 升级为预算内 top-N）.
 
-        - 命中的技能：全文注入（第二层披露）
-        - 其余技能：仅当总预算允许时附带索引
+        v2 仅注入相关度最高的单个技能 —— 复合办公任务（如
+        "Excel 填表后另存为"）需要主配方 office-app-control，保存弹窗环节又
+        需要 file-dialog-control、操作后验证需要 desktop-verify-methods，
+        单技能注入会让模型在配套环节缺配方裸奔。
+
+        新策略（保留渐进式披露语义）：
+        - 所有命中技能按相关度降序，在总预算内逐个全文注入，最多 top_n 个；
+        - 至少保证相关度最高的 1 个一定注入（首个即使超预算也不丢弃）；
+        - 其余技能交给调用方按需走索引（build_skills_index）。
         """
-        skill = self.find_skill(user_input)
-        if skill:
-            return skill.to_prompt()
-        return ""
+        matched = self.find_all(user_input)
+        if not matched:
+            return ""
+        parts: list[str] = []
+        used = 0
+        for skill in matched[: max(1, top_n)]:
+            seg = skill.to_prompt()
+            if used + len(seg) > budget_chars and parts:
+                break
+            parts.append(seg)
+            used += len(seg)
+        return "\n\n".join(parts)
 
     # ── 创建 ──
 

@@ -1,7 +1,7 @@
 ---
 name: office-app-control
 description: Office三件套操控 — Word/Excel/PowerPoint 桌面自动化。含文档输入/保存、Excel单元格定位与写入（名称框直达）、PPT放映控制。Office是标准COM应用，desktop+shell组合最稳。
-trigger: word,excel,powerpoint,ppt,文档,表格,幻灯片,excel写入,word输入,放映幻灯片,office,spreadsheet
+trigger: word,excel,powerpoint,ppt,文档,表格,幻灯片,excel写入,word输入,放映幻灯片,office,spreadsheet,打开文档,打开文件,新建文档,保存文档,写文档,改文档,编辑文档,排版,另存为,保存,填写,填表,填一下,汇总,单元格,合并单元格,设置字号,加粗,宋体,字体,字号,页边距,双面打印,打印,页眉,页脚,筛选,排序,导出
 version: 1.0.0
 author: scout-self-distilled
 ---

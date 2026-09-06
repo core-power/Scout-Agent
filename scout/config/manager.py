@@ -60,7 +60,8 @@ INITIAL_CONFIG = {
     "image_provider": "",
     "embedding_provider": "",
     "max_turns": 60,  # 2026-08-31：单回合步数上限，由 30 提升到 60（长时间高复杂度任务需要更多轮次）
-    "max_loop_seconds": 600,  # 2026-08-28：对话回合总时长上限（秒），超时强制收尾，防止卡死
+    "max_loop_seconds": 1800,  # 2026-09-06：对话回合总时长上限默认提到 1800s（GUI 桌面自动化单步 5~60s，
+                                # 600s 常在十余步后掐断长任务；1800s 仍具防卡死兜底作用）
     "temperature": 0.7,
     "system_prompt": "",  # 已弃用（2026-08-25）：禁止自定义，统一内置模板，仅保留字段兼容旧配置
     "deep_thinking": True,
@@ -116,7 +117,7 @@ class LLMConfig(BaseModel):
     image_provider: str = ""  # 图像模型独立厂商（空 = 跟随主 provider）
     embedding_provider: str = ""  # Embedding 模型独立厂商（空 = 跟随主 provider）
     max_turns: int = 0
-    max_loop_seconds: int = 600
+    max_loop_seconds: int = 1800
     temperature: float = 0.0
     system_prompt: str = ""  # 已弃用（2026-08-25）：禁止自定义，仅保留字段兼容旧配置，Agent 不再读取
     deep_thinking: bool = False

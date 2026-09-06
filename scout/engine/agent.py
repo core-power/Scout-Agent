@@ -76,7 +76,7 @@ class Agent:
         tools: ToolRegistry | None = None,
         callbacks: Callbacks | None = None,
         max_turns: int = 60,
-        max_loop_seconds: int = 600,  # 2026-08-28：回合总时长看门狗（防无限执行卡死）
+        max_loop_seconds: int = 1800,  # 2026-09-06：回合总时长看门狗默认 1800s（GUI 桌面自动化单步 5~60s）
         temperature: float = 0.7,
         deep_thinking: bool = True,
         agent_mode: str = "react",  # "react" 或 "multi_agent"
@@ -335,7 +335,25 @@ class Agent:
 
         self.max_turns = max_turns
 
-        self.max_loop_seconds = max(1, int(max_loop_seconds or 600))
+        self.max_loop_seconds = max(1, int(max_loop_seconds or 1800))
+
+        # ── 2026-09-06 回合输入 token 熔断阈值 ──
+        # 单回合(一次 run_conversation/stream_conversation)累计"新增(非缓存)输入"超过该值
+        # 即强制收尾(走预算耗尽强制总结路径)。防止"截图→看→没进展→再截图"类空转把
+        # 十几万 token 烧完(实测 292.9k token 案例: 35 轮输入 27.9 万, 输出仅 5%)。
+        # 2026-09-06 二轮: 100k 对 GUI 任务过紧(实测 step=18 刚打开软件就被掐), 提到 250k。
+        # 2026-09-06 三轮: 口径改为"prompt - cached"——缓存命中的前缀重放不计入熔断
+        # (API 对缓存只收新计算的零头)，250k 实际可支撑步数提高约 20 倍；真实空转
+        # (每次新截图/新输出都是未缓存内容)仍会累计新 token，止损能力不变。
+        # 仍可用环境变量 SCOUT_TURN_INPUT_LIMIT 按需调整。
+        self._turn_input_limit = int(os.environ.get("SCOUT_TURN_INPUT_LIMIT", "250000"))
+
+        # 长链里程碑压缩频率（2026-09-06）：GUI/工具长链"消息短小、步数多"，
+        # max_tokens 预算与 80 条消息双门槛触发太迟；每 N 步强制一次阶段摘要压缩，
+        # 让回合中段历史保持低位、单次调用输入不再线性膨胀。
+        # 可用环境变量 SCOUT_MILESTONE_EVERY 调整。
+        self._milestone_every = int(os.environ.get("SCOUT_MILESTONE_EVERY", "15"))
+
 
         self.temperature = temperature
 
@@ -390,8 +408,12 @@ class Agent:
         if enable_context:
             from scout.context.manager import ContextManager
 
-            # token 预算从配置读取（2026-08-30）：SCOUT_CONTEXT_MAX_TOKENS
-            # 或 config.context_max_tokens，默认 0=仅按条数治理
+            # token 预算（2026-08-30 + 2026-09-05 默认开启）：
+            # 优先级 config.context_max_tokens > env SCOUT_CONTEXT_MAX_TOKENS > 默认 32768。
+            # 此前默认 0=仅按条数治理：长工具输出（搜索/抓取全文可达数万字符）会按原始体积
+            # 反复全量重发，是多步/GUI 长链任务 token 消耗的主要来源之一。
+            # 默认开启后按 token 即时剪枝超大输出 + 提前触发压缩。
+            # 仅 32K 以下小窗口模型请用 SCOUT_CONTEXT_MAX_TOKENS 调低（如 16384）。
             _max_tokens = 0
             try:
                 from scout.config.manager import ConfigManager
@@ -400,6 +422,13 @@ class Agent:
                 _max_tokens = int(getattr(_cfg, "context_max_tokens", 0) or 0)
             except Exception:
                 _max_tokens = 0
+            if not _max_tokens:
+                try:
+                    _max_tokens = int(os.getenv("SCOUT_CONTEXT_MAX_TOKENS", "0") or 0)
+                except ValueError:
+                    _max_tokens = 0
+            if not _max_tokens:
+                _max_tokens = 32768
             self.context_mgr = ContextManager(max_tokens=_max_tokens)
 
         else:
@@ -1032,6 +1061,17 @@ class Agent:
 
         budget = self._prepare_turn_state(session)
 
+        # 防空转看门狗触发计数（同一回合内提示 2 次仍无进展则强制收尾，2026-09-05）
+        _wd_trips = 0
+
+        # 空输出保护计数（2026-09-06）：连续空回复(无内容无工具调用)≥2 次则按失败收尾，
+        # 禁止"哑火即 done"把没完成的任务谎报完成
+        _empty_replies = 0
+
+        # token 熔断标志（2026-09-06）：break 收尾文案据此区分"熔断"与"步数上限"，
+        # 避免把 max_turns(可能很大)谎报成实际执行步数
+        _fused_by_token = False
+
         # ReAct 循环
         # ── 2026-08-28：回合总时长看门狗 ──
         # 防止 LLM/工具单点挂起或轮数爆炸导致整个回合无限执行（曾出现 60+ 分钟
@@ -1228,19 +1268,46 @@ class Agent:
                 for idx, tc in sorted(_write_tcs, key=lambda x: x[0]):
                     await self._execute_single_tool(session, tc, f"call_{budget.current}_{idx}")
 
-                # 工具执行后剪枝（被移除的消息归档，保证历史可追溯，2026-08-20）
+                # ── 防空转看门狗（2026-09-05）：同参重试/零进展 → 注入中断提示 ──
+                _wd_hint = self._watchdog_hint(session.id)
+                if _wd_hint:
+                    _wd_trips += 1
+                    session.messages.append(
+                        Message(role=Role.USER, content=_wd_hint, metadata={"watchdog": True})
+                    )
+                    if _wd_trips >= 2:
+                        logging.getLogger(__name__).warning(
+                            "看门狗已提示 2 次仍无进展（session=%s step=%s），强制收尾",
+                            session.id,
+                            budget.current,
+                        )
+                        break
 
-                if self.enable_context and self.context_mgr:
-                    _removed = self.context_mgr.prune_tool_outputs(session)
-                    if _removed and self.enable_persistence and self.session_store:
-                        try:
-                            await self.session_store.async_archive_messages(
-                                session.id, _removed, reason="context_prune"
-                            )
-                        except Exception:
-                            logging.getLogger(__name__).debug(
-                                "归档被剪枝消息失败", exc_info=True
-                            )
+                # ── 2026-09-06 回合 token 熔断: 单回合累计输入超阈值强制收尾(防"烧到哑火")──
+                if self._turn_input_over_budget(session.id, _turn_start_ts):
+                    session.messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=(
+                                "【系统熔断】本回合新增输入 token（不含缓存重放）已超过安全阈值（"
+                                + str(self._turn_input_limit)
+                                + "），为控制消耗现在强制收尾："
+                                "立即停止调用任何工具，直接基于已有信息输出当前结论或最终成果。"
+                            ),
+                            metadata={"watchdog": True},
+                        )
+                    )
+                    logging.getLogger(__name__).warning(
+                        "回合新增输入 token 熔断（session=%s step=%s）",
+                        session.id,
+                        budget.current,
+                    )
+                    _fused_by_token = True
+                    break
+
+                # 工具执行后治理（2026-09-06）：剪枝归档 + token 超预算即时压缩 +
+                # 长链里程碑摘要压缩（react/stream 共用 _context_govern）
+                await self._context_govern(session, budget.current)
 
                 # ── Checkpoint：工具执行后保存状态（每3步，与 stream 路径一致，2026-08-31）──
                 if self.checkpoint_manager and budget.current % 3 == 0:
@@ -1277,6 +1344,30 @@ class Agent:
                 # 无工具调用，直接回复
 
                 _final_content = response.content or ""
+
+                # ── 2026-09-06 空输出保护: 模型"哑火"(无内容、无工具调用)不得静默 done ──
+                # 背景: GUI 自动化任务曾出现模型某轮吐空 → 这里直接 status="done"，
+                # 任务实际没完成却被当成功收尾(且不重试、不汇报)。现改为:
+                # 第 1 次空回复 → 注入纠错提示再给一次机会；连续 ≥2 次 → 按失败如实收尾。
+                if not _final_content.strip():
+                    _empty_replies += 1
+                    if _empty_replies < 2:
+                        session.messages.append(
+                            Message(
+                                role=Role.USER,
+                                content=(
+                                    "【系统提示】你刚才没有产生任何输出内容（空回复），也没有调用工具。"
+                                    "请继续完成用户的任务：需要更多信息就先调用对应工具获取，"
+                                    "能够作答就直接给出最终回答。不要静默结束。"
+                                ),
+                                metadata={"watchdog": True},
+                            )
+                        )
+                        continue
+                    _final_content = (
+                        "⚠️ 任务未能完成：模型连续两次空回复（无内容、无工具调用），"
+                        "疑似输出中断或陷入死循环。请检查模型服务状态后重试。"
+                    )
 
                 reply = Message(
                     role=Role.ASSISTANT,
@@ -1372,7 +1463,7 @@ class Agent:
                     "usage": self._collect_turn_usage(session.id, _turn_start_ts, _turn_usage),
                 }
 
-        # 预算耗尽
+        # 预算耗尽 / 熔断 / 超时收尾
 
         budget_msg = self._build_budget_exhausted_msg(session, budget.current)
 
@@ -1385,7 +1476,16 @@ class Agent:
         ):
             forced = await self._force_final_output(session)
 
-        if forced:
+        if _fused_by_token:
+            # ── 2026-09-06：token 熔断收尾——如实说明原因，不谎报"已达步数上限" ──
+            _base = forced or budget_msg
+            final_text = _base + (
+                "\n\n---\n\n⚠️ 本回合新增输入 token（不含缓存重放）已达熔断阈值（"
+                + str(self._turn_input_limit)
+                + "），已提前终止以避免继续计费膨胀。任务可能尚未完成，以上为当前进度。"
+                "回复「继续」可在新回合中续跑（预算重新计算）。"
+            )
+        elif forced:
             final_text = (
                 forced
                 + "\n\n---\n\n⚠️ 本轮已达到步数上限（"
@@ -1547,6 +1647,19 @@ class Agent:
 
         # ── 2026-08-28：回合总时长看门狗（与 _run_react 一致）──
         _turn_deadline = time.monotonic() + self.max_loop_seconds
+
+        # 回合输入 token 熔断起点（2026-09-06，与 _run_react 路径一致）
+        _turn_start_ts = time.time()
+
+        # 防空转看门狗触发计数（2026-09-05）：同回合内提示 2 次仍无进展则强制收尾，与 _run_react 一致
+        _wd_trips = 0
+
+        # 空输出保护计数（2026-09-06）：连续空回复(无内容无工具调用)≥2 次则按失败收尾，
+        # 与 _run_react 路径一致，禁止"哑火即 done"把没完成的任务谎报完成
+        _empty_replies = 0
+
+        # token 熔断标志（2026-09-06，与 _run_react 路径一致）
+        _fused_by_token = False
 
         while not budget.exhausted:
             if self._cancelled:
@@ -2007,17 +2120,51 @@ class Agent:
 
                     yield Delta()
 
-                if self.enable_context and self.context_mgr:
-                    _removed = self.context_mgr.prune_tool_outputs(session)
-                    if _removed and self.enable_persistence and self.session_store:
-                        try:
-                            await self.session_store.async_archive_messages(
-                                session.id, _removed, reason="context_prune"
-                            )
-                        except Exception:
-                            logging.getLogger(__name__).debug(
-                                "归档被剪枝消息失败", exc_info=True
-                            )
+                # ── 防空转看门狗（2026-09-05，与 _run_react 一致）──
+                # 回合内工具全失败 ≥8 次，或最近 4 次同工具同失败文本 ≥3 → 注入中断提示；
+                # 同一回合提示 2 次仍无进展则强制收尾（复用下方预算耗尽收尾路径）。
+                _wd_hint = self._watchdog_hint(session.id)
+                if _wd_hint:
+                    _wd_trips += 1
+                    session.messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=_wd_hint,
+                            metadata={"watchdog": True},
+                        )
+                    )
+                    if _wd_trips >= 2:
+                        logging.getLogger(__name__).warning(
+                            "看门狗已提示 2 次仍无进展（session=%s step=%s），强制收尾",
+                            session.id,
+                            budget.current,
+                        )
+                        break
+
+                # ── 2026-09-06 回合 token 熔断（与 _run_react 路径一致）──
+                if self._turn_input_over_budget(session.id, _turn_start_ts):
+                    session.messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=(
+                                "【系统熔断】本回合新增输入 token（不含缓存重放）已超过安全阈值（"
+                                + str(self._turn_input_limit)
+                                + "），为控制消耗现在强制收尾："
+                                "立即停止调用任何工具，直接基于已有信息输出当前结论或最终成果。"
+                            ),
+                            metadata={"watchdog": True},
+                        )
+                    )
+                    logging.getLogger(__name__).warning(
+                        "回合新增输入 token 熔断（session=%s step=%s）",
+                        session.id,
+                        budget.current,
+                    )
+                    _fused_by_token = True
+                    break
+
+                # 工具执行后治理（2026-09-06）：剪枝归档 + 即时压缩 + 长链里程碑摘要
+                await self._context_govern(session, budget.current)
 
                 # 智能路由 (2026-08-04 修改): 移除步数升级逻辑。
 
@@ -2029,6 +2176,29 @@ class Agent:
 
             else:
                 # 无工具调用 — 文本回复
+
+                # ── 2026-09-06 空输出保护（与 _run_react 路径一致）──
+                # 模型"哑火"(无文本、无工具调用)不得静默 done：
+                # 第 1 次空回复注入纠错提示再给一次机会；连续 ≥2 次按失败如实收尾。
+                if not collected_text.strip():
+                    _empty_replies += 1
+                    if _empty_replies < 2:
+                        session.messages.append(
+                            Message(
+                                role=Role.USER,
+                                content=(
+                                    "【系统提示】你刚才没有产生任何输出内容（空回复），也没有调用工具。"
+                                    "请继续完成用户的任务：需要更多信息就先调用对应工具获取，"
+                                    "能够作答就直接给出最终回答。不要静默结束。"
+                                ),
+                                metadata={"watchdog": True},
+                            )
+                        )
+                        continue
+                    collected_text = (
+                        "⚠️ 任务未能完成：模型连续两次空回复（无内容、无工具调用），"
+                        "疑似输出中断或陷入死循环。请检查模型服务状态后重试。"
+                    )
 
                 final_text = collected_text
 
@@ -2117,7 +2287,7 @@ class Agent:
 
                 return
 
-        # 预算耗尽
+        # 预算耗尽 / 熔断 / 超时收尾
 
         budget_msg = "\n\n" + self._build_budget_exhausted_msg(session, budget.current)
 
@@ -2133,7 +2303,16 @@ class Agent:
         ):
             forced = await self._force_final_output(session)
 
-        if forced:
+        if _fused_by_token:
+            # ── 2026-09-06：token 熔断收尾——如实说明原因，不谎报"已达步数上限" ──
+            _base = forced or budget_msg
+            final_text = _base + (
+                "\n\n---\n\n⚠️ 本回合新增输入 token（不含缓存重放）已达熔断阈值（"
+                + str(self._turn_input_limit)
+                + "），已提前终止以避免继续计费膨胀。任务可能尚未完成，以上为当前进度。"
+                "回复「继续」可在新回合中续跑（预算重新计算）。"
+            )
+        elif forced:
             final_text = (
                 forced
                 + "\n\n---\n\n⚠️ 本轮已达到步数上限（"
@@ -2765,6 +2944,8 @@ class Agent:
         上下文剪枝（物理删除旧消息）影响，预算耗尽总结能反映真实调用数。
         按 session 隔离、每个 turn 开头重置。
         """
+        from collections import deque
+
         st = self._tool_stats.setdefault(
             session_id,
             {"total": 0, "ok": 0, "fail": 0, "tools": {}, "fail_tools": {}, "snippets": []},
@@ -2788,6 +2969,155 @@ class Agent:
                         snippets.append(frag)
                         # 只保留最近 3 条，保持总结简洁
                         del snippets[:-3]
+
+        # 防空转看门狗环形日志：记录最近调用 (tool, success, 输出摘要)，不受剪枝影响
+        ring = st.setdefault("ring", deque(maxlen=12))
+        _frag = " ".join((output or "").strip().split())
+        ring.append((name, success, _frag[:160]))
+
+    def _watchdog_hint(self, session_id: str) -> str | None:
+        """防空转看门狗（2026-09-05）：同参重复失败 / 零进展 / 假进展检测，返回提示文本或 None.
+
+        背景：GUI 自动化曾出现 500 步 / 137k token 空耗——同一工具、同一报错反复
+        重试而不换路线。规则：
+        1) 已执行 >=8 次且 0 成功 → 能力缺口/环境不允许（硬死路），强制转向说明或如实汇报；
+        2) 最近 4 次调用中 >=3 次同一工具、同一失败文本 → 原地打转；
+        3)（2026-09-06）最近多轮 ≥4 次引用同一张图片/同一文件路径（截图→OCR→像素解析
+           循环但无任何推进）→ "看得见但动不了"假进展，提示转向或如实汇报。
+        """
+        st = self._tool_stats.get(session_id)
+        if not st:
+            return None
+        ring = st.get("ring") or []
+        if not ring:
+            return None
+        total = st.get("total", 0)
+        ok = st.get("ok", 0)
+        if total >= 8 and ok == 0:
+            return (
+                "【系统看门狗】本回合已连续执行 "
+                + str(total)
+                + " 次工具调用且无一成功——当前路线大概率不可行"
+                "（能力缺口/环境不允许/前置条件缺失）。请立即停止空转：\n"
+                "1) 若有更可靠的替代路线（换 API/接口、换工具、补前置条件），先说明再执行一次；\n"
+                "2) 否则直接向用户如实汇报：任务为何做不了、卡在哪一步、缺什么，不要再消耗步数。"
+            )
+        same = 0
+        last = ring[-1]
+        for r in reversed(list(ring)[-4:]):
+            if r[0] == last[0] and not r[1] and r[2] == last[2] and r[2]:
+                same += 1
+            else:
+                break
+        if same >= 3:
+            return (
+                "【系统看门狗】你已连续 "
+                + str(same)
+                + " 次对同一工具（"
+                + last[0]
+                + "）发起相同调用并得到相同失败结果——这是在原地打转。\n"
+                "立即停止重复该调用：要么换一种完全不同的方式，要么向用户如实汇报当前障碍"
+                "与所需前置条件。"
+            )
+        # 规则 3（2026-09-06）："假进展"——最近 8 次 ≥4 次引用同一张图片/同一文件路径。
+        # 实测案例：agent 对同一张截图反复 desktop 截图 + vision OCR + execute_code 像素解析
+        # 35 轮（工具都"成功"、输出各有不同 → 规则 1/2 都不触发），实际毫无推进、白烧 29 万
+        # token。凡输出摘要里反复出现同一图片/文件名的，判为"看得见但动不了"。
+        _pic_re = re.compile(r"[\w\-]+\.(?:png|jpe?g|bmp|gif)", re.I)
+        _recent = list(ring)[-8:]
+        if len(_recent) >= 6:
+            _pic_keys = []
+            for _r in _recent:
+                _m = _pic_re.search(_r[2] or "")
+                if _m:
+                    _pic_keys.append(_m.group(0).lower())
+            if _pic_keys:
+                from collections import Counter
+
+                _top_file, _top_n = Counter(_pic_keys).most_common(1)[0]
+                if _top_n >= 4:
+                    return (
+                        "【系统看门狗】你已在最近多轮里反复查看/解析同一文件（"
+                        + _top_file
+                        + "，累计 "
+                        + str(_top_n)
+                        + " 次）却没有推进任务——这是典型的\"看得见但动不了\"空转。\n"
+                        "立即停止重复截图/读图/像素探测：要么直接执行下一步操作"
+                        "（点击/输入/写文件/调用真实 API 等），要么向用户如实汇报："
+                        "界面是否阻塞、缺少什么条件、你卡在哪一步。"
+                    )
+        return None
+
+    async def _context_govern(self, session: Session, step: int) -> None:
+        """回合内上下文治理（react/stream 共用，2026-09-06 抽取）.
+
+        每步工具执行后调用一次：
+        1. 剪枝旧工具输出（被移除消息归档，保证历史可追溯）；
+        2. token 超预算时立即压缩（保留最近 N 条 + LLM 摘要 + 记忆 flush）；
+        3. 里程碑压缩：长链任务（GUI 自动化 30~60 步）单步消息少、常到不了 80 条
+           也不超 token 预算，仅靠 needs_compression 可能永不压缩 → 历史全量重发
+           到尾。按步数每 ``_milestone_every`` 步强制做一次阶段摘要（min_total 门槛
+           放宽到 keep_recent+6），让回合中段历史保持低位、单次调用输入不再膨胀。
+        """
+        if not (self.enable_context and self.context_mgr):
+            return
+        cm = self.context_mgr
+
+        # 1) 剪枝
+        _removed = cm.prune_tool_outputs(session)
+        if _removed and self.enable_persistence and self.session_store:
+            try:
+                await self.session_store.async_archive_messages(
+                    session.id, _removed, reason="context_prune"
+                )
+            except Exception:
+                logging.getLogger(__name__).debug("归档被剪枝消息失败", exc_info=True)
+
+        # 2) token 超预算即时压缩
+        if cm.needs_compression(session):
+            try:
+                await cm.compress(session, self.llm, memory_flush=self.memory_flush)
+            except Exception:
+                logging.getLogger(__name__).debug("turn 内上下文压缩失败", exc_info=True)
+            return
+
+        # 3) 里程碑压缩（长链按步数兜底，compress 内部会再校验是否有可压缩区间）
+        if step > 0 and self._milestone_every > 0 and step % self._milestone_every == 0:
+            try:
+                await cm.compress(
+                    session,
+                    self.llm,
+                    memory_flush=self.memory_flush,
+                    min_total=cm.keep_recent + 6,
+                )
+            except Exception:
+                logging.getLogger(__name__).debug("里程碑摘要压缩失败", exc_info=True)
+
+    def _turn_input_over_budget(self, session_id: str, turn_start_ts: float) -> bool:
+        """回合累计"新增(非缓存)输入"是否超过熔断阈值（2026-09-06）.
+
+        通过 llm_usage 表按 session + 时间窗汇总本回合 prompt_tokens - cached_tokens
+        （只计真实新计算量；缓存命中的前缀重放按零头计费，不计入熔断预算）；
+        超阈值返回 True（调用方 break 走预算耗尽/强制总结收尾）。
+        提供方不上报 cached_tokens（为 0/NULL）时自动退化为全量口径，保护不丢失；
+        查询失败时保守返回 False（不因统计故障误杀正常任务）。
+        """
+        try:
+            from scout.llm.tracker import token_tracker
+
+            rows = token_tracker._query(
+                "SELECT COALESCE(SUM(MAX(prompt_tokens - COALESCE(cached_tokens, 0), 0)), 0) AS inp "
+                "FROM llm_usage WHERE session_id = ? AND timestamp >= ? AND timestamp <= ?",
+                (
+                    session_id,
+                    datetime.fromtimestamp(turn_start_ts).isoformat(),
+                    datetime.now().isoformat(),
+                ),
+            )
+            used = int((rows[0] or {}).get("inp") or 0) if rows else 0
+            return used >= self._turn_input_limit
+        except Exception:
+            return False
 
     async def _force_final_output(self, session: Session) -> str:
         """预算耗尽时，最后再调一次主模型（不带工具）基于已获取信息直接产出最终成果.
@@ -3523,14 +3853,19 @@ class Agent:
 
         messages: list[dict] = [{"role": "system", "content": self.system_prompt}]
 
-        # 仅对当轮（最后一条 user 消息）注入 runtime_context，历史轮次的注入内容不再重复发送
-        _last_user_rt = ""
-        for _msg in reversed(session.messages):
-            if _msg.role == Role.USER and _msg.metadata.get("runtime_context"):
-                _last_user_rt = _msg.metadata["runtime_context"]
-                break
+        # runtime_context 注入治理（2026-09-05 token 优化）：
+        # 仅“最近一条带 runtime_context 的 user 消息（当轮）”需要注入，且注入到该消息自身位置，
+        # 取代旧版“每步追加到最后一条 user 消息”的方案。旧版问题：
+        #   1) 每次 API 请求都把整段技能/记忆/摘要全文重复挂到动态尾部 → 每步多付一份完整注入；
+        #   2) 注入位置随步数漂移（看门狗等新 user 消息插在前面）→ 前缀缓存无法命中。
+        # 新版注入点固定在该 user 消息的历史位置，后续各步重发内容逐字节一致：
+        #   前缀缓存命中时近乎免费；无缓存时也仅保留一份而非每步重复追加。
+        _last_rt_idx = -1
+        for _i, _m in enumerate(session.messages):
+            if _m.role == Role.USER and _m.metadata.get("runtime_context"):
+                _last_rt_idx = _i
 
-        for msg in session.messages:
+        for _idx, msg in enumerate(session.messages):
             # ── SYSTEM 消息：仅保留压缩器生成的 [对话摘要]，其余动态内容已移入 runtime_context ──
 
             if msg.role == Role.SYSTEM:
@@ -3539,7 +3874,12 @@ class Agent:
                 continue
 
             elif msg.role == Role.USER:
-                messages.append({"role": "user", "content": msg.content})
+                _uc = msg.content or ""
+                if _idx == _last_rt_idx:
+                    _rt_now = msg.metadata.get("runtime_context") or ""
+                    if _rt_now:
+                        _uc = _uc + "\n\n" + _rt_now
+                messages.append({"role": "user", "content": _uc})
 
             elif msg.role == Role.ASSISTANT:
                 if msg.metadata.get("tool_calls"):
@@ -3578,14 +3918,6 @@ class Agent:
                         "content": msg.content,
                     }
                 )
-
-        # ── 当轮 runtime_context 注入（仅最后一条 user 消息，不落库） ──
-
-        if _last_user_rt:
-            for _m in reversed(messages):
-                if _m["role"] == "user":
-                    _m["content"] = _m["content"] + "\n\n" + _last_user_rt
-                    break
 
         # ── v3-Final P0: 断言仅 1 条非摘要 system 消息（[对话摘要] 不计入，保证长对话压缩后上下文不丢失） ──
 

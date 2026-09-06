@@ -1,7 +1,7 @@
 ---
 name: file-dialog-control
 description: Windows文件对话框操控 — 打开/保存/另存为/上传对话框是 GUI 自动化最大拦路虎。含对话框类名(#32770)、控件树（文件名Edit/保存按钮/侧栏）、中文路径输入、类型下拉、覆盖确认处理。实测配方。
-trigger: 保存对话框,打开对话框,另存为,上传,文件选择器,选择文件,保存文件,save dialog,open dialog,upload dialog,file picker,导出文件,导出为,保存到,存到桌面,保存这个文件
+trigger: 保存对话框,打开对话框,另存为,上传,文件选择器,选择文件,保存文件,save dialog,open dialog,upload dialog,file picker,导出文件,导出为,保存到,保存这个文件
 version: 1.0.0
 author: scout-self-distilled
 ---

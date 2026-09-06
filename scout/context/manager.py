@@ -98,14 +98,17 @@ class ContextManager:
                 total += 4
         return total
 
+    def _over_budget(self, session: Session) -> bool:
+        """token 维度是否已超压缩预算（2026-09-05 提取，供 needs_compression/compress 共用）."""
+        if self.max_tokens <= 0:
+            return False
+        return self.count_tokens(session) >= int(self.max_tokens * self.compress_ratio)
+
     def needs_compression(self, session: Session) -> bool:
         """判断是否需要压缩：条数超限 或 token 超预算（二者任一触发）."""
         if len(session.messages) >= self.compress_threshold:
             return True
-        if self.max_tokens > 0:
-            if self.count_tokens(session) >= int(self.max_tokens * self.compress_ratio):
-                return True
-        return False
+        return self._over_budget(session)
 
     def prune_tool_outputs(self, session: Session) -> list[Message]:
         """剪枝 — 控制工具输出数量，保持前缀稳定以命中缓存（2026-08-19 优化）.
@@ -192,13 +195,20 @@ class ContextManager:
 
         return removed
 
-    def get_compression_range(self, session: Session) -> tuple[int, int] | None:
+    def get_compression_range(
+        self, session: Session, min_total: int | None = None
+    ) -> tuple[int, int] | None:
         """获取需要压缩的消息范围 [start, end).
 
         保留最近 keep_recent 条消息，压缩其余的。
+
+        min_total（2026-09-05）：允许 token 超预算触发的压缩在消息数不足
+        ``compress_threshold`` 时也生效——长链任务（GUI 自动化等单指令 60 步）
+        通常到不了 80 条消息就早已远超 token 预算；若仍死守 80 条门槛，
+        token 预算压缩形同虚设。默认仍为 ``compress_threshold``（按条数触发场景）。
         """
         total = len(session.messages)
-        if total < self.compress_threshold:
+        if total < (min_total if min_total is not None else self.compress_threshold):
             return None
 
         # 找到 system prompt 之后的第一条消息
@@ -219,6 +229,7 @@ class ContextManager:
         session: Session,
         llm=None,
         memory_flush: Any | None = None,
+        min_total: int | None = None,
     ) -> dict[str, Any]:
         """压缩会话 — 将旧消息替换为 LLM 生成的摘要.
 
@@ -227,6 +238,9 @@ class ContextManager:
             llm: 可选 LLM（用于生成摘要与 memory_flush 的结构化抽取）。
             memory_flush: 可选 ``MemoryFlush`` —— 压缩前先把将被替换的
                 旧消息段抽取为长期记忆，防止压缩摘要丢失关键信息（2026-08-27）。
+            min_total: 可选 —— 显式放宽触发压缩的最小消息数门槛
+                （2026-09-06 里程碑压缩场景：长链任务消息不足 compress_threshold
+                时也需按步数做阶段摘要；默认 None 走原有策略）。
         """
         info = {"compressed": False, "removed": 0, "summary": "", "flushed": False}
 
@@ -234,7 +248,22 @@ class ContextManager:
         pruned = self.prune_tool_outputs(session)
         info["pruned_chars"] = pruned
 
-        rng = self.get_compression_range(session)
+        # 触发压缩的最小消息数门槛：
+        # - min_total 显式传入时以调用方为准（2026-09-06 里程碑压缩）；
+        # - token 超预算时放宽（默认 80 条）：门槛取 keep_recent+prune_batch+2 与
+        #   compress_threshold 一半的较大者，保证至少能压缩出"保留最近 N 条"之外
+        #   的一段有效消息，避免白调 LLM 摘要；
+        # - 其余场景仍为 compress_threshold（按条数触发）。
+        _min_total = self.compress_threshold
+        if min_total is not None:
+            _min_total = max(self.keep_recent + 3, int(min_total))
+        elif self._over_budget(session):
+            _min_total = max(
+                self.keep_recent + self.prune_batch + 2,
+                int(self.compress_threshold * 0.5),
+            )
+
+        rng = self.get_compression_range(session, min_total=_min_total)
         if not rng:
             return info
 

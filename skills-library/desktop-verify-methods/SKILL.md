@@ -1,7 +1,7 @@
 ---
 name: desktop-verify-methods
 description: GUI操作验证方法库 — 每类操作怎么确认"真的成功了"。工具返回success≠目标应用执行了。含窗口状态/文本输入/发送消息/文件保存/网页加载/进程启动六类验证手段与失败重试策略。
-trigger: 验证,确认成功,怎么知道成功,操作失败,重试,verify,screenshot verify,did it work
+trigger: 验证,确认成功,怎么知道成功,操作失败,重试,verify,screenshot verify,did it work,成功了吗,成功了没,没反应,确认一下,检查一下,怎么确认,白屏,没动静,没生效
 version: 1.0.0
 author: scout-self-distilled
 ---

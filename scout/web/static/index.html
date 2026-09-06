@@ -213,6 +213,138 @@
         html:not(.dark) .tab-active { border-bottom-color: #0e7490 !important; color: #0e7490 !important; }
         /* Mode check icon */
         html:not(.dark) .mode-check { color: #0e7490 !important; }
+        /* ── Light: 亮色系文字(300/400)暗化, 保证白底可读 (2026-09-05) ── */
+        html:not(.dark) .text-emerald-300 { color: #047857 !important; }
+        html:not(.dark) .text-emerald-400 { color: #059669 !important; }
+        html:not(.dark) .text-amber-300 { color: #b45309 !important; }
+        html:not(.dark) .text-amber-400 { color: #b45309 !important; }
+        html:not(.dark) .text-blue-300 { color: #1d4ed8 !important; }
+        html:not(.dark) .text-blue-400 { color: #1d4ed8 !important; }
+        html:not(.dark) .text-cyan-300 { color: #0e7490 !important; }
+        html:not(.dark) .text-cyan-400 { color: #0e7490 !important; }
+        html:not(.dark) .text-green-300 { color: #15803d !important; }
+        html:not(.dark) .text-green-400 { color: #15803d !important; }
+        html:not(.dark) .text-indigo-300 { color: #4338ca !important; }
+        html:not(.dark) .text-indigo-400 { color: #4338ca !important; }
+        html:not(.dark) .text-pink-300 { color: #be185d !important; }
+        html:not(.dark) .text-pink-400 { color: #be185d !important; }
+        html:not(.dark) .text-purple-300 { color: #7e22ce !important; }
+        html:not(.dark) .text-purple-400 { color: #7e22ce !important; }
+        html:not(.dark) .text-red-300 { color: #b91c1c !important; }
+        html:not(.dark) .text-red-400 { color: #b91c1c !important; }
+        html:not(.dark) .text-rose-300 { color: #be123c !important; }
+        html:not(.dark) .text-rose-400 { color: #be123c !important; }
+        html:not(.dark) .text-violet-300 { color: #6d28d9 !important; }
+        html:not(.dark) .text-violet-400 { color: #6d28d9 !important; }
+        html:not(.dark) .text-orange-300 { color: #c2410c !important; }
+        html:not(.dark) .text-orange-400 { color: #c2410c !important; }
+        html:not(.dark) .text-yellow-300 { color: #a16207 !important; }
+        html:not(.dark) .text-yellow-400 { color: #a16207 !important; }
+        html:not(.dark) .text-teal-300 { color: #0f766e !important; }
+        html:not(.dark) .text-teal-400 { color: #0f766e !important; }
+        html:not(.dark) .text-lime-300 { color: #4d7c0f !important; }
+        html:not(.dark) .text-lime-400 { color: #4d7c0f !important; }
+        html:not(.dark) .text-sky-300 { color: #0369a1 !important; }
+        html:not(.dark) .text-sky-400 { color: #0369a1 !important; }
+        html:not(.dark) .text-fuchsia-300 { color: #a21caf !important; }
+        html:not(.dark) .text-fuchsia-400 { color: #a21caf !important; }
+        /* 亮色 hover 变体同步 */
+        html:not(.dark) .hover\:text-emerald-300:hover { color: #047857 !important; }
+        html:not(.dark) .hover\:text-amber-300:hover { color: #b45309 !important; }
+        html:not(.dark) .hover\:text-red-400:hover { color: #b91c1c !important; }
+        html:not(.dark) .hover\:text-violet-300:hover { color: #6d28d9 !important; }
+        html:not(.dark) .hover\:text-blue-300:hover { color: #1d4ed8 !important; }
+        /* ── Light: 代码高亮切换 GitHub Light 配色 (2026-09-05) ── */
+        /* 原引用 github-dark.min.css 为深色专用；白底 + 浅色 token 几乎隐形，整体改深。 */
+        html:not(.dark) .msg-content pre code.hljs,
+        html:not(.dark) .msg-content pre code { color: #24292f !important; background: transparent !important; }
+        html:not(.dark) .msg-content .hljs-doctag,
+        html:not(.dark) .msg-content .hljs-keyword,
+        html:not(.dark) .msg-content .hljs-meta .hljs-keyword,
+        html:not(.dark) .msg-content .hljs-template-tag,
+        html:not(.dark) .msg-content .hljs-template-variable,
+        html:not(.dark) .msg-content .hljs-type,
+        html:not(.dark) .msg-content .hljs-variable.language_ { color: #cf222e !important; }
+        html:not(.dark) .msg-content .hljs-title,
+        html:not(.dark) .msg-content .hljs-title.class_,
+        html:not(.dark) .msg-content .hljs-title.class_.inherited__,
+        html:not(.dark) .msg-content .hljs-title.function_ { color: #8250df !important; }
+        html:not(.dark) .msg-content .hljs-attr,
+        html:not(.dark) .msg-content .hljs-attribute,
+        html:not(.dark) .msg-content .hljs-literal,
+        html:not(.dark) .msg-content .hljs-meta,
+        html:not(.dark) .msg-content .hljs-number,
+        html:not(.dark) .msg-content .hljs-operator,
+        html:not(.dark) .msg-content .hljs-selector-attr,
+        html:not(.dark) .msg-content .hljs-selector-class,
+        html:not(.dark) .msg-content .hljs-selector-id,
+        html:not(.dark) .msg-content .hljs-variable { color: #0550ae !important; }
+        html:not(.dark) .msg-content .hljs-meta .hljs-string,
+        html:not(.dark) .msg-content .hljs-regexp,
+        html:not(.dark) .msg-content .hljs-string { color: #0a3069 !important; }
+        html:not(.dark) .msg-content .hljs-built_in,
+        html:not(.dark) .msg-content .hljs-symbol { color: #953800 !important; }
+        html:not(.dark) .msg-content .hljs-code,
+        html:not(.dark) .msg-content .hljs-comment,
+        html:not(.dark) .msg-content .hljs-formula { color: #6e7781 !important; }
+        html:not(.dark) .msg-content .hljs-name,
+        html:not(.dark) .msg-content .hljs-quote,
+        html:not(.dark) .msg-content .hljs-selector-pseudo,
+        html:not(.dark) .msg-content .hljs-selector-tag { color: #116329 !important; }
+        html:not(.dark) .msg-content .hljs-subst { color: #24292f !important; }
+        html:not(.dark) .msg-content .hljs-section { color: #0550ae !important; font-weight: 700; }
+        html:not(.dark) .msg-content .hljs-bullet { color: #9a6700 !important; }
+        html:not(.dark) .msg-content .hljs-emphasis { color: #24292f !important; font-style: italic; }
+        html:not(.dark) .msg-content .hljs-strong { color: #24292f !important; font-weight: 700; }
+        html:not(.dark) .msg-content .hljs-addition { color: #116329 !important; background-color: rgba(35,134,54,0.15) !important; }
+        html:not(.dark) .msg-content .hljs-deletion { color: #cf222e !important; background-color: rgba(207,34,46,0.12) !important; }
+        /* ── Light: 深底容器补齐浅化 + 实心按钮恢复白字 (2026-09-06) ──
+           背景: 上一轮把文字全部暗化、却漏了把对应深底容器变浅, 导致
+           "深字压近黑/深紫底" 反而比深色主题更看不清; text-white 全局暗化
+           又误伤了实心深色按钮(发送/保存/批准等)。此块统一补齐。 */
+        /* ① 工具卡 / 子代理工具卡 / Multi-Agent 卡片(近黑/深紫底 → 浅灰/浅紫) */
+        html:not(.dark) .bg-\[\#0d1117\] { background: #dfe2e6 !important; border-color: #b8bec6 !important; }
+        html:not(.dark) .bg-\[\#150d24\] { background: #e8e5f2 !important; border-color: rgba(124,58,237,0.30) !important; }
+        html:not(.dark) .bg-\[\#140d22\] { background: #e8e5f2 !important; border-color: rgba(124,58,237,0.28) !important; }
+        html:not(.dark) .ma-panel { background: linear-gradient(135deg, #ece8f8, #ddd8ee) !important; border-color: rgba(124,58,237,0.35) !important; }
+        /* ② 用户消息气泡 / 其它半透明深灰容器 / 图谱 tooltip */
+        html:not(.dark) .bg-slate-700\/50 { background: #d1d5db !important; }
+        html:not(.dark) .bg-slate-700\/30 { background: #e5e7eb !important; }
+        html:not(.dark) .hover\:bg-slate-700\/50:hover { background: #d1d5db !important; }
+        html:not(.dark) .bg-slate-800\/95 { background: #dfe2e6 !important; border-color: #b8bec6 !important; }
+        /* ③ 补暗化 200 级 / 透明度 / 500 级亮色文字(浅底可读) */
+        html:not(.dark) .text-violet-200 { color: #6d28d9 !important; }
+        html:not(.dark) .text-violet-400\/70 { color: rgba(109,40,217,0.75) !important; }
+        html:not(.dark) .text-amber-400\/70 { color: rgba(180,83,9,0.85) !important; }
+        html:not(.dark) .text-amber-400\/80 { color: rgba(180,83,9,0.90) !important; }
+        html:not(.dark) .text-amber-500 { color: #b45309 !important; }
+        html:not(.dark) .text-emerald-200 { color: #047857 !important; }
+        html:not(.dark) .text-emerald-500 { color: #047857 !important; }
+        html:not(.dark) .text-red-400\/60 { color: rgba(185,28,28,0.75) !important; }
+        /* ④ 实心深底按钮保持白字(修复 116 行 text-white 全局暗化的误伤) */
+        html:not(.dark) .bg-scout-500.text-white,
+        html:not(.dark) .bg-scout-600.text-white,
+        html:not(.dark) .bg-emerald-600.text-white,
+        html:not(.dark) .bg-amber-600.text-white,
+        html:not(.dark) .bg-slate-700.text-white,
+        html:not(.dark) .bg-red-500\/80.text-white { color: #ffffff !important; }
+        html:not(.dark) .hover\:bg-amber-500:hover { background: #d97706 !important; }
+        html:not(.dark) .hover\:bg-emerald-500:hover { background: #059669 !important; }
+        /* 渐变实心按钮(登录/保存知识页/添加记忆等)同属深底, 保持白字 */
+        html:not(.dark) .bg-gradient-to-r.from-scout-400.to-scout-500.text-white,
+        html:not(.dark) .bg-gradient-to-r.from-scout-500.to-scout-600.text-white { color: #ffffff !important; }
+        html:not(.dark) #send-btn, html:not(.dark) #stop-btn { color: #ffffff !important; }
+        /* ── Light: 更新提示 toast 恢复浅字 (2026-09-06) ──
+           深绿浮窗 #update-banner 在 light 下背景保持深绿(浮窗语义两主题一致),
+           但内部文字被全局暗化规则(116/117 行)误伤成近黑 → "深字压深底"完全不可见。
+           此处按容器作用域恢复白/浅色, 高优先级 ID 选择器压过全局类规则。 */
+        html:not(.dark) #update-banner { background: rgba(2,44,34,0.94) !important; border-color: rgba(5,150,105,0.55) !important; }
+        html:not(.dark) #update-banner .text-slate-200,
+        html:not(.dark) #update-banner #update-version,
+        html:not(.dark) #update-banner #update-link { color: #ffffff !important; }
+        html:not(.dark) #update-banner .text-emerald-400 { color: #34d399 !important; }
+        html:not(.dark) #update-banner .text-slate-400 { color: #94a3b8 !important; }
+        html:not(.dark) #update-banner .text-slate-400:hover { color: #ffffff !important; }
     </style>
     <script src="/static/i18n.js"></script>
     <script>
@@ -1059,7 +1191,7 @@
                     <div class="bg-[#1a1a1a] border border-white/10 rounded-lg p-4">
                         <div class="flex items-center justify-between mb-3">
                             <h3 class="text-sm font-medium text-slate-300">当前版本</h3>
-                            <span id="current-version" class="text-lg font-mono text-scout-400">v1.0.0.0</span>
+                            <span id="current-version" class="text-lg font-mono text-scout-400">v1.0.0.2</span>
                         </div>
                         <div id="update-indicator" class="hidden text-sm text-green-400 mt-2">
                             <span class="inline-block w-2 h-2 bg-green-400 rounded-full mr-2"></span>
@@ -1071,7 +1203,12 @@
                         <h3 class="text-sm font-medium text-slate-300 mb-3">版本说明</h3>
                         <div class="text-xs text-slate-400 space-y-2">
                             <div>
-                                <div class="text-scout-400 font-medium mb-1">v1.0.0.0 (2026-08-07)</div>
+                                <div class="text-scout-400 font-medium mb-1">v1.0.0.2 (2026-09-05)</div>
+                                <ul class="list-disc list-inside space-y-1 text-slate-500">
+                                    <li>引擎 token 优化：runtime_context 去重注入、默认开启 token 预算治理</li>
+                                    <li>长链任务（GUI 自动化等）turn 内自动上下文压缩，显著降低 token 消耗</li>
+                                </ul>
+                                <div class="text-scout-400 font-medium mb-1 mt-3">v1.0.0.0 (2026-08-07)</div>
                                 <ul class="list-disc list-inside space-y-1 text-slate-500">
                                     <li>初始稳定版本发布</li>
                                     <li>支持多模型配置（DashScope、OpenAI 等）</li>

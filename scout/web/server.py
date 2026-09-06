@@ -142,7 +142,7 @@ def create_web_app(agent=None) -> FastAPI:
             logging.getLogger(__name__).debug("读取 web_docs 配置失败: %s", e)
     app = FastAPI(
         title="Scout Agent",
-        version="1.0.0.0",
+        version="1.0.0.2",
         lifespan=_lifespan,
         docs_url="/docs" if _docs_enabled else None,
         redoc_url="/redoc" if _docs_enabled else None,
@@ -382,6 +382,6 @@ def create_web_app(agent=None) -> FastAPI:
     # 健康检查端点（用于 Docker）
     @app.get("/health")
     async def health_check():
-        return {"status": "healthy", "version": "1.0.0.0"}
+        return {"status": "healthy", "version": "1.0.0.2"}
 
     return app

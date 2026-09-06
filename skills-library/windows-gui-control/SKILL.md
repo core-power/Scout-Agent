@@ -38,6 +38,36 @@ author: scout-self-distilled
 | 截图默认 0.5 降采样 | vision 读得快；若必须用像素坐标，物理坐标 = 截图坐标 × 2 |
 | 控件 rect 也可用 | read_controls 输出的 rect=(x,y,w,h) 是物理像素，可直接 click |
 
+### 防点错三件套（2026-09-05，工具已内置，直接用）
+
+坐标仍有偏差时按下面顺序用，比"截图→再猜一次"省钱得多：
+
+| 机制 | 怎么用 | 效果 |
+|---|---|---|
+| **probe 先行**（读操作，无副作用） | 点之前 `probe x=<px> y=<py>` 或 `probe rel_x=.. rel_y=..`，返回该点命中的控件类型/名称/矩形，或"无控件命中（空白/自绘区）" | 命中 Button/Edit = 方向对；命中空白 = 千万别点，按截图改 rel 再 probe |
+| **snap 自动吸附**（click 家族默认开启） | 无需额外参数。点击会吸附到命中控件中心，回复含 `吸附→Button "发送"` | 目测差几个像素也能点准控件中心；`snap=false` 才点精确点 |
+| **命中回读** | 点击回复含 `吸附→...` 与 `focus=<类名>`；没有吸附行 = 自绘区按原坐标点了 | 点完立刻知道落点；仍是 Pane/无吸附且界面没变化 = 点空了，别再重复点 |
+
+### 任意 Windows 应用：先探档再选路（2026-09-05 通用三档）
+
+坐标问题本质分三种根因，**陌生软件第一步 `probe` 任意点**，看回复里的档位标签
+`[T1-UIA]` / `[T2-Win32]` / `[T3-自绘]` 再选策略——不必每应用定制一套：
+
+| 档位 | probe 表现 | 是什么 | 操作策略 |
+|---|---|---|---|
+| **T1-UIA** | `[T1-UIA] 命中: Button/Edit...` | 现代控件树（原生 Win32 标准控件/WPF/UWP/多数 Electron） | `click_control`/`type_control` 按控件名最稳；坐标点击 rel + snap 自动吸附 |
+| **T2-Win32** | UIA 空、`[T2-Win32] 命中` | 老式 HWND 树（Delphi/MFC/VB6、老国产行业软件） | 工具已自动兜底 win32 树：控件按名操作、snap 吸附都可用；`read_controls` 看类名（Button/Edit/SysListView32） |
+| **T3-自绘** | UIA 与 Win32 树均无命中 | 完全自绘无树（微信 4.x/腾讯会议/钉钉/游戏/网银插件） | 截图 → rel_x/rel_y → `snap=false` 精确点 → 截图验证 → 固化 macro |
+
+- 判档别凭印象：同为"聊天软件"，微信 4.x 是 T3、飞书是 T1（Electron 开了辅助树）；
+  老数据库/收银/行业软件大多是 **T2 而非 T3**——probe 一探便知，T2 能省掉一堆 rel 苦工。
+- T1/T2 点完看回复 `吸附→` 与 `focus=`；无 `吸附→` 且界面没变 = 点空，别重复点。
+- T3 无树不可吸附：全靠 rel + 点后截图验证；布局固定后打 `macro` 一次固化反复用。
+- drag 起点自动吸附（防落列表行间隙变"框选"），终点精确不吸附——同窗用
+  `rel_x2/rel_y2`（窗口移动不失效），跨窗用 `x2/y2`。
+- probe 报「警告: 点不在窗口矩形内」= 坐标系错位（给了窗口截图内坐标或窗口已移动）→ 改 rel；
+  点在窗口内会附 `rel≈` 值可直接复用。
+
 ## 输入规则
 
 | 规则 | 原因 |
@@ -51,9 +81,10 @@ author: scout-self-distilled
 
 | 类型 | 特征 | 打法 | 例子 |
 |---|---|---|---|
-| 标准 Win32 | read_controls 有丰富控件 | click_control/type_control 按控件名，最稳 | 记事本、calc、老版软件 |
-| Qt/Chromium 自绘 | 控件树为空/只有 1 个 Pane | rel 坐标 + 剪贴板粘贴 + 点按钮 | 微信 4.x、部分新国产软件 |
-| Electron | 控件树部分可用 | 控件优先，rel 兜底 | VS Code、飞书 |
+| 现代 Win32/WPF/UWP（T1） | read_controls 有丰富 UIA 树 | click_control/type_control 按控件名，最稳 | 记事本、calc、设置 |
+| 老式 Win32 HWND（T2） | UIA 空但 win32 经典树可用 | 工具自动兜底：按名操作/snap 吸附均走 win32 树 | Delphi/MFC/VB6 老国产软件、老数据库前端 |
+| Qt/Chromium 自绘（T3） | 控件树为空/只有 1 个 Pane | rel 坐标 + 剪贴板粘贴 + 点按钮 + 截图验证 | 微信 4.x、腾讯会议、部分新国产软件 |
+| Electron（多为 T1/T2 混合） | 控件树部分可用 | 控件优先，rel 兜底 | VS Code、飞书 |
 | 浏览器页面 | — | **改用 browser 工具**（playwright，比 GUI 点击稳 10 倍） | Chrome/Edge |
 
 ## 避坑清单（全部实测踩过）

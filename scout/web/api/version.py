@@ -5,6 +5,7 @@ import subprocess
 import json
 import os
 import re
+import sys
 import urllib.request
 from typing import Optional
 
@@ -17,9 +18,26 @@ RELEASES_URL = f"https://github.com/{REPO}/releases"
 
 def get_local_version() -> str:
     """获取本地版本号：优先 VERSION 文件（源码仓库 / 打包后 _internal/VERSION）"""
-    version_file = Path(__file__).parent.parent.parent.parent / "VERSION"
-    if version_file.exists():
-        return version_file.read_text().strip()
+    # 2026-09-05：PyInstaller 冻结后本模块位于 PYZ 内，__file__ 不是真实磁盘路径，
+    # 且 importlib.metadata 无 dist-info 会回退 "unknown"——必须显式探测 _MEIPASS。
+    _candidates = []
+    _meipass = getattr(sys, "_MEIPASS", "")
+    if _meipass:
+        _candidates.append(Path(_meipass) / "VERSION")
+    try:
+        _candidates.append(Path(sys.executable).parent / "VERSION")
+        _candidates.append(Path(sys.executable).parent / "_internal" / "VERSION")
+    except Exception:
+        pass
+    _candidates.append(Path(__file__).parent.parent.parent.parent / "VERSION")
+    for _v in _candidates:
+        try:
+            if _v.exists():
+                _txt = _v.read_text().strip()
+                if _txt:
+                    return _txt
+        except Exception:
+            continue
     try:
         from scout import __version__
 

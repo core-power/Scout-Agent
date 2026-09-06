@@ -45,6 +45,39 @@ author: scout-self-distilled
 | 截图默认 0.5 降采样 | vision 返回的坐标 ×2 才是物理像素；或全用 rel 规避 |
 | 微信最小化到托盘找不到 | 直接 launch/activate process=Weixin，自动恢复 |
 | 输入框失焦 | click_type 自带点击聚焦；若仍失败，先 click 输入框再 type_text |
+| rel 目测偏几像素 | 微信部分区域暴露控件树——先 `probe rel_x=.. rel_y=..`：命中即报控件名+窗口内 rel≈ 值，click 自动吸附中心；报「点不在窗口矩形内」= 把窗口截图坐标当屏幕坐标用了，改 rel 表达 |
+| 点按钮没反应 | 点完看回复有没有 `吸附→Button`/focus；全无且界面没变 = 点空/点偏，probe 后换坐标再点，别盲目重复 |
+
+## 场景 C：低 token 打包发送（desktop macro，2026-09-05 新增）
+
+会话已打开且标题确认是目标联系人后，把“打字+发送”压成 **1 次 macro 调用**（替代
+click_type + click + screenshot 三次往返，省 ~60% 步骤与 vision 开销）:
+
+```
+desktop action=macro verify_screenshot=true
+       macro={"steps":[
+         {"action":"click_type","process":"Weixin","rel_x":0.5,"rel_y":0.93,"text":"会议链接: xxx"},
+         {"action":"sleep","seconds":0.5},
+         {"action":"click","process":"Weixin","rel_x":0.46,"rel_y":0.94},   # 发送按钮
+         {"action":"sleep","seconds":1.0}
+       ],"process":"Weixin"}
+```
+
+发文件同理（复制到剪贴板 → 粘贴进输入框 → 等上传 → 点发送）:
+
+```
+macro={"steps":[
+  {"action":"copy_file","file":"C:/path/xxx.pdf"},
+  {"action":"click","process":"Weixin","rel_x":0.5,"rel_y":0.93},
+  {"action":"press_key","keys":"^v"},
+  {"action":"sleep","seconds":1.5},     # 等文件预览/上传
+  {"action":"click","process":"Weixin","rel_x":0.46,"rel_y":0.94},
+  {"action":"sleep","seconds":2.0}
+],"process":"Weixin"}
+```
+
+**红线**：切会话（场景 B 的“vision 读列表→决策点哪条”）绝不可塞进 macro——那需要实时视觉
+决策。macro 只打包“聊天已确认后”的确定性尾巴。发完仍按“验证标准”截图确认气泡。
 
 ## 验证标准
 

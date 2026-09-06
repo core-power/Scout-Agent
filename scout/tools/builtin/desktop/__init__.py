@@ -53,12 +53,12 @@ logger = logging.getLogger(__name__)
 _WRITE_ACTIONS = {
     "activate", "launch", "close_window", "click", "double_click",
     "right_click", "click_control", "type_control", "type_text",
-    "press_key", "scroll", "drag", "click_type", "copy_file",
+    "press_key", "scroll", "drag", "click_type", "copy_file", "macro",
 }
 
 _READ_ACTIONS = {
     "list_windows", "find_window", "active_window", "read_controls",
-    "screenshot", "wait", "clip_read",
+    "screenshot", "wait", "clip_read", "probe",
 }
 
 _ALL_ACTIONS = sorted(_READ_ACTIONS | _WRITE_ACTIONS)
@@ -67,6 +67,11 @@ _ALL_ACTIONS = sorted(_READ_ACTIONS | _WRITE_ACTIONS)
 _MAX_WINDOWS = 40
 _MAX_CONTROLS = 60
 _CTRL_TEXT_LEN = 80
+
+# macro（确定性序列宏）上限——防 LLM 一次塞爆/失控
+_MACRO_MAX_STEPS = 30
+_MACRO_TOTAL_TIMEOUT = 300.0  # 整体墙钟预算（秒）
+_MACRO_STEP_LOG_LEN = 240  # 每步回执单行截断长度
 
 # 截图目录（数据目录下，与 browser 截图同区）
 _SHOT_DIR = Path(_SCOUT_DATA_DIR) / "screenshots"
@@ -584,6 +589,34 @@ def _cache_wrapper(w, process: str, title: str, index: int) -> None:
         pass
 
 
+def _load_shot_meta(img_path: str) -> dict | None:
+    """读取截图元数据（截图工具保存的同名 .meta.json）.
+
+    用于把视觉读数的截图内坐标自动换算为屏幕坐标：物理点 =
+    (win_left, win_top) 屏幕偏移 + 截图坐标 / scale。
+    无 meta（截图被清理/来自旧版/URL 图片）→ 返回 None，调用方按原坐标处理。
+    """
+    if not img_path:
+        return None
+    try:
+        import json
+        p = Path(img_path)
+        mp = p.with_suffix(".meta.json")
+        if not mp.exists():
+            return None
+        m = json.loads(mp.read_text(encoding="utf-8"))
+        if not isinstance(m, dict):
+            return None
+        m.setdefault("scale", 1.0)
+        m.setdefault("win_left", 0)
+        m.setdefault("win_top", 0)
+        m.setdefault("shot_w", -1)
+        m.setdefault("shot_h", -1)
+        return m
+    except Exception:  # noqa: BLE001 — meta 损坏视为不存在
+        return None
+
+
 def _find_wrapper(
     title: str = "", title_re: bool = False, index: int = 0,
     timeout: float = 0.0, process: str = "",
@@ -683,21 +716,33 @@ def _win_summary(w) -> str:
     return f"[{w.handle}] pid={pid} exe={pname}{state} \"{(w.window_text() or '')[:60]}\""
 
 
-def _ctrl_line(c) -> str:
+def _ctrl_line(c, with_center: bool = False) -> str:
     try:
         t = c.window_text() or ""
+        ei = c.element_info
+        # win32 经典树（backend="win32"）无 control_type/automation_id——降级取类名
+        ctype = getattr(ei, "control_type", None) or ""
+        auto_id = getattr(ei, "automation_id", None) or ""
+        if not ctype:
+            try:
+                ctype = c.friendly_class_name()
+            except Exception:  # noqa: BLE001
+                ctype = ""
         line = (
-            f"- {c.element_info.control_type} | name=\"{t[:_CTRL_TEXT_LEN]}\" "
-            f"| auto_id=\"{c.element_info.automation_id or ''}\""
+            f"- {ctype} | name=\"{t[:_CTRL_TEXT_LEN]}\" "
+            f"| auto_id=\"{auto_id}\""
         )
         # 物理矩形（DPI 感知后 = 真实屏幕像素，可直接用于 click x/y）
         try:
             r = c.rectangle()
             line += f" | rect=({r.left},{r.top},{r.width()},{r.height()})"
+            # read_controls 输出带中心点：T1/T2 应用免截图免 vision 直接可点
+            if with_center:
+                line += f" | center=({r.left + r.width() // 2},{r.top + r.height() // 2})"
         except Exception:  # noqa: BLE001
             pass
         # 输入类控件：读实际内容（ValuePattern 优先；UWP 应用 texts() 只回 Name）
-        ctype = (c.element_info.control_type or "").lower()
+        ctype = ctype.lower()
         if ctype in ("edit", "document"):
             content = ""
             try:
@@ -718,6 +763,118 @@ def _ctrl_line(c) -> str:
         return "- <control gone>"
 
 
+# UIA 容器型控件（坐标命中/吸附时跳过——点容器中心不是用户意图，容易误触）
+_SNAP_SKIP_TYPES = {
+    "pane", "window", "titlebar", "group", "list", "tree", "table",
+    "document", "scrollbar", "menubar", "toolbar", "statusbar",
+    "splitter", "custom",  # 自绘大区域（微信/腾讯会议整窗常为 Custom）
+}
+
+# win32 经典树（backend="win32"）类名级跳过的容器（无交互意义的巨区/装饰）
+_SNAP_SKIP_W32 = {
+    "#32770",  # 对话框本体
+    "mdiclient", "scrollbar", "statusbar", "rebarwindow32",
+    "tooltips_class32", "sysheader32", "grip",
+}
+
+
+def _win32_wrapper(w):
+    """给 UIA 窗口建 win32 经典 backend wrapper（老式 Delphi/MFC/VB6 的控件树）.
+
+    背景（2026-09-05 通用化）：很多老式 Windows 软件在 UIA 下是空树，
+    但子窗口其实是标准 HWND（类名 Button/Edit/SysListView32 等），用
+    pywinauto backend="win32" 才能看到。建失败返回 None（可能非老式）。
+    """
+    try:
+        from pywinauto import Application
+
+        hwnd = w.handle
+        app = Application(backend="win32").connect(handle=hwnd, timeout=3)
+        return app.window(handle=hwnd)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _hit_w32(w32, x: int, y: int):
+    """win32 经典树命中：含点 (x,y) 的最小子窗口控件（老式应用 UIA 空树时用）."""
+    try:
+        ctrls = w32.descendants()
+    except Exception:  # noqa: BLE001
+        return None
+    best = None
+    best_area = None
+    for c in ctrls:
+        try:
+            r = c.rectangle()
+            if not (r.left <= x < r.right and r.top <= y < r.bottom):
+                continue
+            try:
+                cls = (c.class_name() or "").lower()
+            except Exception:  # noqa: BLE001
+                cls = ""
+            if cls in _SNAP_SKIP_W32:
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+        area = (r.right - r.left) * (r.bottom - r.top)
+        if best is None or area < best_area:
+            best, best_area = c, area
+    return best
+
+
+def _hit_control(w, x: int, y: int):
+    """返回包含点 (x,y) 的最小可交互 UIA 控件；无则 None（点空/自绘区）.
+
+    背景（2026-09-05）：vision/rel 目测坐标常差几个像素导致点错/点偏。
+    对原生控件树用"矩形包含 + 面积最小"选中最深叶子控件，即可把落点
+    吸附到控件中心（probe 先行确认，click snap=true 自动校正）。
+    自绘应用（微信 4.x 等无控件树）遍历近乎空树，快速返回 None。
+    """
+    try:
+        ctrls = w.descendants()
+    except Exception:  # noqa: BLE001
+        return None
+    best = None
+    best_area = None
+    for c in ctrls:
+        try:
+            r = c.rectangle()
+            if not (r.left <= x < r.right and r.top <= y < r.bottom):
+                continue
+            if (c.element_info.control_type or "").lower() in _SNAP_SKIP_TYPES:
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+        area = (r.right - r.left) * (r.bottom - r.top)
+        if best is None or area < best_area:
+            best, best_area = c, area
+    return best
+
+
+def _snap_control(w, x: int, y: int, max_ratio: float = 0.6):
+    """把 (x,y) 吸附到命中最深控件中心；返回 (cx, cy, control|None).
+
+    None 表示未吸附（无控件树 / 点空白 / 命中控件过大如近整窗 Pane），
+    此时调用方保持原坐标点击并如实报告。
+    """
+    c = _hit_control(w, x, y)
+    if c is None:
+        return x, y, None
+    try:
+        r = c.rectangle()
+        wr = w.rectangle()
+        w_area = (wr.right - wr.left) * (wr.bottom - wr.top)
+        if w_area > 0 and (r.right - r.left) * (r.bottom - r.top) >= w_area * max_ratio:
+            return x, y, None  # 控件近整窗（容器残留）——吸附无意义，不点中心
+        return (
+            r.left + (r.right - r.left) // 2,
+            r.top + (r.bottom - r.top) // 2,
+            c,
+        )
+    except Exception:  # noqa: BLE001
+        return x, y, None
+
+
 class DesktopTool(ToolDefinition):
     """本机桌面 GUI 自动化（Windows）."""
 
@@ -728,19 +885,32 @@ class DesktopTool(ToolDefinition):
         "ROUTE: GUI app/window → this tool; CLI tasks → shell; reminders/AI timers → scheduler; "
         "absent-user/boot tasks → shell schtasks (current-user tasks need no admin; NEVER /RU "
         "SYSTEM for GUI).\n"
-        "FLOW: list_windows/find_window → activate → read_controls (UIA names+rects) or "
-        "screenshot→vision for coordinates → click_control/type_control by name. Custom-drawn UIs "
+        "FLOW: list_windows/find_window → activate → read_controls (UIA names+rects+center → "
+        "click x/y from center, no screenshot needed) or screenshot→vision→click(img=<shot path>) "
+        "for custom-drawn UIs. "
+        "Custom-drawn UIs "
         "(WeChat 4.x exposes NO UIA controls): rel_x/rel_y or x/y clicks + type_text/press_key.\n"
         "SPEED: (a) click_type = click+type+keys in ONE call — prefer over separate calls; "
         "(b) verify_screenshot=true attaches post-action screenshot, saving a call; "
-        "(c) screenshots default 0.5 downscale — multiply vision coords by 2; "
+        "(c) screenshots default 0.5 downscale — after vision reads a shot, pass the shot path "
+        "to click as img=<path> so the tool auto-converts coords (NEVER hand-multiply by 2); "
         "(d) vision only at decision points, otherwise trust tool results. "
         "Repeated ops on the same window auto-hit a 2s handle cache (no need to re-find).\n"
-        "CLICK ACCURACY: click/click_type results include focus=<ClassName> of the control "
-        "that received the click — sanity-check it (search box click → focus should be an "
-        "Edit/Input class; still a Pane means you MISSED → adjust coords and retry, don't "
-        "type blindly). Vision-read coords may be off by a few px; prefer rel_x/rel_y on "
-        "fixed-layout apps.\n"
+        "CLICK ACCURACY (anti-misclick): click/double_click/right_click/click_type auto-SNAP "
+        "the point to the UIA control center under it; drag start snaps too, drag END is an exact "
+        "drop point (never snapped) — use rel_x2/rel_y2 (same window, move-safe) or x2/y2 "
+        "(cross-window). scroll accepts rel_x/rel_y as well. snap=false disables. UNIVERSAL "
+        "STRATEGY for ANY Windows app — probe auto-classifies it into 3 tiers before you act: "
+        "[T1-UIA] modern control tree → click_control/type_control by control name, or coords + "
+        "snap; [T2-Win32] legacy HWND tree (Delphi/MFC/VB6, empty under UIA) → same by-name "
+        "tools AUTO-retry on the win32 tree and snap snaps there too; [T3-self-drawn] no tree at "
+        "all (WeChat 4.x / meeting apps / games) → raw coords kept; use screenshot → "
+        "rel_x/rel_y → click snap=false → screenshot verify → macro. probe reports the tier tag, "
+        "control name+rect, in-window rel≈, and warns when the point is OUTSIDE the window rect "
+        "(window-only screenshot coords must then be re-expressed as rel). Cheap workflow: probe "
+        "→ confirm tier/control → click (snaps to center). After clicking, reply includes "
+        "focus=<ClassName> (still a Pane on a native app = MISSED → adjust and retry, don't type "
+        "blindly). Vision-read pixel coords are unreliable; prefer rel_x/rel_y.\n"
         "WINDOWS: prefer process= over title= (WeChat: 'Weixin'; title = current chat name, "
         "changes constantly). [min] windows have off-screen rects — activate first. One DPI-aware "
         "physical-pixel system: screenshot coords = control rects = mouse coords.\n"
@@ -755,7 +925,27 @@ class DesktopTool(ToolDefinition):
         "keys register; first result row ≈rel_y 0.12–0.20 (vision reads text only); input box "
         "≈(0.60,0.925); send ≈(0.46,0.94). Send message: launch Weixin → click_type rel(0.085,0.055) "
         "text=<contact> → wait 1s → screenshot+vision pick first entry → click it → click_type "
-        "rel(0.60,0.925) text=<msg> → {ENTER} → screenshot verify."
+        "rel(0.60,0.925) text=<msg> → {ENTER} → screenshot verify.\n"
+        "MACRO (anti-token): when >=3 deterministic steps run in a row, pack them into ONE macro "
+        "action instead of N separate calls — saves N-1 LLM round-trips (the #1 GUI token cost). "
+        "macro=<JSON string> {\"steps\":[{\"action\":<one desktop action>, ...its kwargs...}, ...], "
+        "\"fail_fast\":true|false}; macro-level process/title/index/timeout are inherited by steps "
+        "that don't set their own. Step vocabulary: the write/wait actions (activate, launch, "
+        "close_window, click, double_click, right_click, click_control, type_control, type_text, "
+        "press_key, scroll, drag, click_type, copy_file, wait) plus sleep "
+        "({\"action\":\"sleep\",\"seconds\":1.0}). Steps run back-to-back with NO LLM/vision between "
+        "them, so every value must be fully decided now (fixed rel coords, known texts). NEVER macro a "
+        "step whose correct value depends on a previous step's live result (e.g. which dialog "
+        "appeared) — do that decision as a normal step, then macro the deterministic tail. "
+        "fail_fast=true (default) stops at the first failing step and returns the per-step log for "
+        "one-shot diagnosis; verify_screenshot=true appends ONE final screenshot of the whole result. "
+        "WeChat send example (chat ALREADY open and title confirmed = target contact; never macro "
+        "the chat-switch decision part): macro={\"steps\":[{\"action\":\"click_type\","
+        "\"process\":\"Weixin\",\"rel_x\":0.5,\"rel_y\":0.93,\"text\":\"会议链接: xxx\"},"
+        "{\"action\":\"sleep\",\"seconds\":0.5},{\"action\":\"click\",\"rel_x\":0.46,"
+        "\"rel_y\":0.94},{\"action\":\"sleep\",\"seconds\":1.0}],\"process\":\"Weixin\"} — 点输入框"
+        "打字 + 点发送按钮（微信4.x 合成 Enter 不发送，勿用 {ENTER}），结束用 verify_screenshot=true"
+        "确认消息气泡出现。切会话的『vision 读列表→决策』部分必须留在宏外。"
     )
     parameters = {
         "type": "object",
@@ -771,7 +961,8 @@ class DesktopTool(ToolDefinition):
             },
             "scale": {
                 "type": "number",
-                "description": "screenshot downscale, default 0.5 (multiply vision coords by 1/scale). 1.0 = 1:1.",
+                "description": "screenshot downscale, default 0.5. 降采样后点击请把截图路径传给 "
+                "click 的 img= 参数让工具自动换算坐标，勿手算。1.0 = 1:1。",
             },
             "title": {
                 "type": "string",
@@ -814,15 +1005,32 @@ class DesktopTool(ToolDefinition):
                 "type": "string",
                 "description": "Key sequence for press_key, pywinauto syntax: {ENTER} {ESC} ^a ^c ^v {TAB}.",
             },
-            "x": {"type": "integer", "description": "X screen coordinate (click/scroll/drag start)."},
-            "y": {"type": "integer", "description": "Y screen coordinate (click/scroll/drag start)."},
+            "x": {"type": "integer", "description": "X screen coordinate (click/scroll/drag start/probe point)."},
+            "y": {"type": "integer", "description": "Y screen coordinate (click/scroll/drag start/probe point)."},
+            "img": {
+                "type": "string",
+                "description": "坐标来源的截图路径（desktop screenshot 返回的 path）。当 x/y 是 vision "
+                "读取该截图的像素坐标时传入，工具按截图 meta（scale + 窗口偏移）自动换算成屏幕坐标，"
+                "杜绝手算降采样缩放出错。不传或坐标超出该截图范围 = 按屏幕绝对坐标处理。"
+                "适用: click/double_click/right_click/click_type 的 x/y（rel_x/rel_y 不需要）。",
+            },
             "x2": {
                 "type": "integer",
-                "description": "drag: end X (screen absolute).",
+                "description": "drag: end X (screen absolute; cross-window drag). "
+                "Prefer rel_x2/rel_y2 when both ends are inside the same window.",
             },
             "y2": {
                 "type": "integer",
-                "description": "drag: end Y (screen absolute).",
+                "description": "drag: end Y (screen absolute; cross-window drag).",
+            },
+            "rel_x2": {
+                "type": "number",
+                "description": "drag: end at fraction (0~1) of start window WIDTH — window move "
+                "safe. Requires title/process (same window as start). Exact drop point, NOT snapped.",
+            },
+            "rel_y2": {
+                "type": "number",
+                "description": "drag: end at fraction (0~1) of start window HEIGHT.",
             },
             "duration": {
                 "type": "number",
@@ -835,12 +1043,22 @@ class DesktopTool(ToolDefinition):
             },
             "rel_x": {
                 "type": "number",
-                "description": "Click at fraction (0~1) of window WIDTH (0.085 = 8.5% from left). "
+                "description": "Fraction (0~1) of target window WIDTH (0.085 = 8.5% from left). "
+                "Used by click-family / click_type / probe / drag start / scroll. "
                 "Preferred over vision pixel coords for fixed-layout apps.",
             },
             "rel_y": {
                 "type": "number",
-                "description": "Click at fraction (0~1) of window HEIGHT.",
+                "description": "Fraction (0~1) of target window HEIGHT.",
+            },
+            "snap": {
+                "type": "boolean",
+                "description": "Snap the given point to the center of the UIA control under it "
+                "(default true). Applies to click/double_click/right_click/click_type and drag "
+                "START point — fixes vision/rel points a few px off and pulls points in list gaps "
+                "onto a control (default click would rubber-band select). Self-drawn UIs keep raw "
+                "coords and report no snap. drag END is an exact drop point: never snapped. "
+                "snap=false = use the exact point.",
             },
             "scroll": {
                 "type": "string",
@@ -867,6 +1085,12 @@ class DesktopTool(ToolDefinition):
             "timeout": {
                 "type": "integer",
                 "description": "Seconds for wait/find retry (default 10).",
+            },
+            "macro": {
+                "type": "string",
+                "description": "JSON string packing >=3 deterministic steps into ONE call (anti-token; "
+                "see description MACRO section). {\"steps\":[{action + its kwargs}, ...], "
+                "\"fail_fast\": true|false} — inherits top-level process/title/index/timeout.",
             },
         },
         "required": ["action"],
@@ -999,7 +1223,7 @@ class DesktopTool(ToolDefinition):
                 continue
             if control and control not in (c.window_text() or ""):
                 continue
-            lines.append(_ctrl_line(c))
+            lines.append(_ctrl_line(c, with_center=True))
             if len(lines) >= _MAX_CONTROLS:
                 lines.append(f"...（超过 {_MAX_CONTROLS} 个控件，已截断；可用 control/control_type/depth 过滤）")
                 break
@@ -1012,7 +1236,9 @@ class DesktopTool(ToolDefinition):
         window_only: bool = False, scale: float = 0.0, **kw,
     ) -> Observation:
         _SHOT_DIR.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 文件名带毫秒：防止同秒内多次截图（screenshot 与 vision 并行/verify 附带截图）
+        # 互相覆盖 png/meta，造成坐标错配
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         path = _SHOT_DIR / f"desktop_{ts}.png"
         if window_only or (title or (kw.get("process") or "").strip()):
             w = _find_wrapper(title, title_re, index, timeout=kw.get("timeout", 5) or 5, process=kw.get("process", ""))
@@ -1069,14 +1295,48 @@ class DesktopTool(ToolDefinition):
             s = 0.5
         if 0 < s < 1.0:
             img = img.resize((max(1, int(img.size[0] * s)), max(1, int(img.size[1] * s))))
-            note = f"（已降采样 {s:.0%}，坐标需按比例换算：原坐标 = 截图坐标 / {s:.2f}）"
-        else:
-            note = "（1:1 原始像素，可直接用于 click x/y）"
+        # 写截图元数据（降采样比例 + 窗口在屏幕上的偏移）——click 传 img=<此 path>
+        # 即自动把视觉读数的截图坐标换算成屏幕坐标，缩放换算交给代码而非 LLM 手算
+        try:
+            import json
+            is_window = bool(window_only or (title or (kw.get("process") or "").strip()))
+            if is_window:
+                wr = w.rectangle()
+                win_left, win_top = wr.left, wr.top
+            else:
+                win_left = win_top = 0
+            meta = {
+                "path": str(path),
+                "kind": "window" if is_window else "fullscreen",
+                "scale": s if 0 < s <= 1.0 else 1.0,
+                "shot_w": img.size[0],
+                "shot_h": img.size[1],
+                "win_left": int(win_left),
+                "win_top": int(win_top),
+                "created": datetime.now().isoformat(timespec="seconds"),
+            }
+            path.with_suffix(".meta.json").write_text(
+                json.dumps(meta, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001 — meta 缺失不影响截图，点击退化为原坐标
+            logger.debug("截图 meta 写入失败: %s", path, exc_info=True)
         img.save(str(path))
+        note = (
+            f"（已降采样 scale={s:.2f}，shot={img.size[0]}x{img.size[1]}）"
+            if 0 < s < 1.0 else "（1:1 原始像素）"
+        )
         return self._ok(
             f"截图已保存: {path}（{img.size[0]}x{img.size[1]}）{note}\n"
-            f"提示: 可用 vision 工具读取该图片让模型理解界面并返回目标坐标。",
-            {"path": str(path), "width": img.size[0], "height": img.size[1]},
+            f"坐标用法: 让 vision 读本图返回目标像素坐标后，把坐标和本截图路径一起传给 "
+            f"desktop click 的 img=<此 path>（x/y 为该截图内坐标），工具会自动换算为屏幕坐标，"
+            f"切勿手算 scale。",
+            {
+                "path": str(path),
+                "img": str(path),
+                "scale": s if 0 < s <= 1.0 else 1.0,
+                "width": img.size[0],
+                "height": img.size[1],
+            },
         )
 
     async def _do_wait(
@@ -1308,35 +1568,90 @@ class DesktopTool(ToolDefinition):
         send_keys(keys)
         return self._ok(f"已发送按键: {keys}")
 
-    def _resolve_click_point(self, kwargs: dict) -> tuple[int, int] | None:
-        """解析点击坐标：支持绝对 x/y 与窗口相对比例 rel_x/rel_y（0~1）.
+    def _click_point_with_win(self, kwargs: dict):
+        """解析点击物理点并附带目标窗口；返回 (px, py, w|None).
 
-        rel 模式（2026-09-03）：vision 对话模型返回的像素坐标实测不可靠（偏差
-        达窗口尺寸量级），而微信等应用窗口布局固定——搜索框恒在左上 ≈(0.085,
-        0.055)。按窗口矩形比例计算物理坐标，稳定可靠。
+        - x/y 绝对模式：直接用像素点；为支持 snap 吸附尽力找一次窗口
+          （走 2s handle 缓存，通常无感；找不到窗口 = 点击桌面等，不吸附）。
+        - rel_x/rel_y 模式（2026-09-03 起）：vision 模型返回像素坐标不可靠
+          （偏差达窗口尺寸量级），固定布局应用按窗口矩形比例换算最稳。
+        - 返回 (-1,-1,None) 表示参数不足/窗口未找到，调用方报错。
         """
         x = kwargs.get("x")
         y = kwargs.get("y")
         if x is not None and y is not None and int(x) >= 0 and int(y) >= 0:
-            return int(x), int(y)
+            px, py = int(x), int(y)
+            # img=<截图 path>：视觉读数是截图内坐标（截图可能被降采样），
+            # 换算逻辑放代码里自动完成（读同名 .meta.json），杜绝 LLM 手算 ×2 的
+            # 系统性偏移；坐标超出该截图范围则视为已是屏幕坐标，原样使用。
+            meta = _load_shot_meta(str(kwargs.get("img") or ""))
+            if meta is not None and 0 <= px <= meta.get("shot_w", -1) and 0 <= py <= meta.get("shot_h", -1):
+                scale = float(meta.get("scale") or 1.0) or 1.0
+                px = int(meta.get("win_left", 0) or 0) + int(float(px) / scale + 0.5)
+                py = int(meta.get("win_top", 0) or 0) + int(float(py) / scale + 0.5)
+            w = None
+            if str(kwargs.get("snap", "true")).lower() not in ("0", "false", "no"):
+                try:
+                    w = _find_wrapper(
+                        kwargs.get("title", ""), kwargs.get("title_re", False),
+                        kwargs.get("index", 0), timeout=0.0,
+                        process=kwargs.get("process", ""),
+                    )
+                except Exception:  # noqa: BLE001 — 找不到窗口不影响纯坐标点击
+                    w = None
+            return px, py, w
         rx = kwargs.get("rel_x")
         ry = kwargs.get("rel_y")
         if rx is None or ry is None:
-            return None
+            return -1, -1, None
         w = _find_wrapper(
             kwargs.get("title", ""), kwargs.get("title_re", False),
             kwargs.get("index", 0), timeout=kwargs.get("timeout", 5) or 5,
             process=kwargs.get("process", ""),
         )
         if w is None:
-            return None
+            return -1, -1, None
         # 强制前台：pywinauto set_focus 对微信等自绘窗口不可靠，强行抢前台
         _force_foreground(w.handle)
         r = w.rectangle()
         return (
             r.left + int(float(rx) * r.width()),
             r.top + int(float(ry) * r.height()),
+            w,
         )
+
+    def _apply_snap(self, w, snap: str, px: int, py: int):
+        """snap!=false 且有窗口时把 (px,py) 吸附到命中最深控件中心.
+
+        先 UIA 树；UIA 空树时自动兜底 win32 经典树（老式应用，2026-09-05）。
+        返回 (cx, cy, hit)：吸附失败（自绘无树/命中近整窗/异常）时保持
+        原坐标并返回 hit=None——调用方如实报告"吸附→"行即可，不影响落点。
+        """
+        if w is None or str(snap).lower() in ("0", "false", "no"):
+            return px, py, None
+        try:
+            cx, cy, hit = _snap_control(w, px, py)
+            if hit is not None:
+                return cx, cy, hit
+        except Exception:  # noqa: BLE001 — UIA 吸附失败继续尝试 win32 树
+            pass
+        try:
+            w32 = _win32_wrapper(w)
+            if w32 is not None:
+                hit = _hit_w32(w32, px, py)
+                if hit is not None:
+                    try:
+                        r = hit.rectangle()
+                        return (
+                            r.left + (r.right - r.left) // 2,
+                            r.top + (r.bottom - r.top) // 2,
+                            hit,
+                        )
+                    except Exception:  # noqa: BLE001
+                        return px, py, None
+        except Exception:  # noqa: BLE001 — 兜底失败不影响原坐标点击
+            pass
+        return px, py, None
 
     async def _do_click_type(
         self, x: int = -1, y: int = -1, text: str = "", keys: str = "",
@@ -1348,18 +1663,20 @@ class DesktopTool(ToolDefinition):
         ReAct 循环 2-5s LLM + 可能的截图/vision 验证 5-60s）。
         支持相对坐标 rel_x/rel_y（按目标窗口矩形比例，微信等固定布局首选）。
         """
-        point = self._resolve_click_point({"x": x, "y": y, **kw})
-        if point is None:
+        px, py, w = self._click_point_with_win({"x": x, "y": y, **kw})
+        if px < 0 or py < 0:
             return self._err(ERROR_INVALID_ARGS, "缺少坐标（x/y 绝对坐标 或 rel_x/rel_y 窗口相对比例）")
         if not text and not keys:
             return self._err(ERROR_INVALID_ARGS, "缺少 text（输入内容）或 keys（按键）参数")
         from pywinauto import mouse
         from pywinauto.keyboard import send_keys
 
-        px, py = point
-        mouse.click(button="left", coords=(px, py))
+        cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
+        mouse.click(button="left", coords=(cx, cy))
         time.sleep(max(0.05, float(click_delay or 0.3)))
-        parts = [f"({px},{py})"]
+        parts = [f"({cx},{cy})"]
+        if hit is not None:
+            parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
         fs = _focus_summary()
         if fs:
             parts.append(fs)
@@ -1380,44 +1697,78 @@ class DesktopTool(ToolDefinition):
         return self._ok("已点击 " + "、".join(parts))
 
     async def _do_click(self, x: int = -1, y: int = -1, **kw) -> Observation:
-        point = self._resolve_click_point({"x": x, "y": y, **kw})
-        if point is None:
+        px, py, w = self._click_point_with_win({"x": x, "y": y, **kw})
+        if px < 0 or py < 0:
             return self._err(ERROR_INVALID_ARGS, "缺少坐标（x/y 或 rel_x/rel_y）")
         from pywinauto import mouse
 
-        mouse.click(button="left", coords=point)
+        cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
+        mouse.click(button="left", coords=(cx, cy))
         time.sleep(0.08)
         fs = _focus_summary()
-        return self._ok(f"已左键点击 ({point[0]},{point[1]})" + (f"；{fs}" if fs else ""))
+        parts = [f"已左键点击 ({cx},{cy})"]
+        if hit is not None:
+            parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
+        if fs:
+            parts.append(fs)
+        return self._ok("；".join(parts))
 
     async def _do_double_click(self, x: int = -1, y: int = -1, **kw) -> Observation:
-        point = self._resolve_click_point({"x": x, "y": y, **kw})
-        if point is None:
+        px, py, w = self._click_point_with_win({"x": x, "y": y, **kw})
+        if px < 0 or py < 0:
             return self._err(ERROR_INVALID_ARGS, "缺少坐标（x/y 或 rel_x/rel_y）")
         from pywinauto import mouse
 
-        mouse.double_click(button="left", coords=point)
-        return self._ok(f"已双击 ({point[0]},{point[1]})")
+        cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
+        mouse.double_click(button="left", coords=(cx, cy))
+        parts = [f"已双击 ({cx},{cy})"]
+        if hit is not None:
+            parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
+        return self._ok("；".join(parts))
 
     async def _do_right_click(self, x: int = -1, y: int = -1, **kw) -> Observation:
-        point = self._resolve_click_point({"x": x, "y": y, **kw})
-        if point is None:
+        px, py, w = self._click_point_with_win({"x": x, "y": y, **kw})
+        if px < 0 or py < 0:
             return self._err(ERROR_INVALID_ARGS, "缺少坐标（x/y 或 rel_x/rel_y）")
         from pywinauto import mouse
 
-        mouse.right_click(coords=point)
-        return self._ok(f"已右键点击 ({point[0]},{point[1]})")
+        cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
+        mouse.right_click(coords=(cx, cy))
+        parts = [f"已右键点击 ({cx},{cy})"]
+        if hit is not None:
+            parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
+        return self._ok("；".join(parts))
 
     async def _do_scroll(
         self, x: int = -1, y: int = -1, scroll: str = "down", amount: int = 3, **kw,
     ) -> Observation:
+        """滚动鼠标滚轮；坐标缺省 = 鼠标当前位置.
+
+        坐标支持 rel_x/rel_y（2026-09-05，相对目标窗口矩形比例换算）——
+        滚轮只要求落点在某区域内即可，用 rel 免 vision 绝对像素换算。
+        """
         from pywinauto import mouse
 
-        # 坐标缺省 = 鼠标当前位置
-        coords = (int(x), int(y)) if (x >= 0 and y >= 0) else None
+        coords = None
+        rx, ry = kw.get("rel_x"), kw.get("rel_y")
+        if rx is not None and ry is not None:
+            w = _find_wrapper(
+                kw.get("title", ""), kw.get("title_re", False),
+                kw.get("index", 0), timeout=kw.get("timeout", 5) or 5,
+                process=kw.get("process", ""),
+            )
+            if w is None:
+                return self._err(ERROR_NOT_FOUND, "未找到窗口（rel_x/rel_y 需要目标窗口 title/process）")
+            r = w.rectangle()
+            coords = (
+                r.left + int(float(rx) * r.width()),
+                r.top + int(float(ry) * r.height()),
+            )
+        elif x >= 0 and y >= 0:
+            coords = (int(x), int(y))
         delta = abs(int(amount)) if amount else 3
         mouse.scroll(coords=coords, wheel_dist=delta if scroll != "up" else -delta)
-        return self._ok(f"已滚动 {scroll} {delta} 格" + (f" @({x},{y})" if coords else "（鼠标当前位置）"))
+        return self._ok(f"已滚动 {scroll} {delta} 格" + (f" @{coords}" if coords else "（鼠标当前位置）"))
 
     async def _do_drag(
         self, x: int = -1, y: int = -1, x2: int = -1, y2: int = -1,
@@ -1428,29 +1779,52 @@ class DesktopTool(ToolDefinition):
         背景（2026-09-04）：目标应用（滑块/画布/拖文件入窗）靠 WM_MOUSEMOVE
         事件流做 Hit-Test——瞬移（一次 move 到终点）会被判定为非拖拽而丢弃。
         分步 move + 每步 sleep 产生真实事件流；duration 建议 >=0.6s。
-        起点支持 rel_x/rel_y（相对窗口比例），终点用屏幕绝对坐标 x2/y2。
+        坐标（2026-09-05 统一防点错）：
+        - 起点：x/y 绝对 或 rel_x/rel_y；默认 snap 吸附到命中最深控件中心
+          （起点若点偏到列表行间隙会变"框选"而非拖动——吸附兜底）。
+        - 终点：rel_x2/rel_y2（相对起点同一窗口换算，窗口移动不失效）或
+          x2/y2 屏幕绝对（跨窗口拖拽用）；终点是精确落点，不吸附。
         """
-        start = self._resolve_click_point({"x": x, "y": y, **kw})
-        if start is None:
+        px, py, w = self._click_point_with_win({"x": x, "y": y, **kw})
+        if px < 0 or py < 0:
             return self._err(ERROR_INVALID_ARGS, "缺少起点坐标（x/y 或 rel_x/rel_y）")
-        if int(x2) < 0 or int(y2) < 0:
-            return self._err(ERROR_INVALID_ARGS, "缺少终点坐标 x2/y2（屏幕绝对坐标）")
         from pywinauto import mouse
+
+        # 起点吸附：按下位置纠偏到命中最深控件上（失败保持原坐标）
+        sx, sy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
+        # 终点：rel_x2/rel_y2 按起点同一窗口换算优先；否则 x2/y2 屏幕绝对
+        rx2, ry2 = kw.get("rel_x2"), kw.get("rel_y2")
+        if rx2 is not None and ry2 is not None:
+            if w is None:
+                return self._err(
+                    ERROR_INVALID_ARGS,
+                    "rel_x2/rel_y2 需要起点窗口上下文（title/process）——跨窗口拖拽请用 x2/y2 绝对坐标",
+                )
+            r = w.rectangle()
+            ex = r.left + int(float(rx2) * r.width())
+            ey = r.top + int(float(ry2) * r.height())
+            end = f"rel({rx2},{ry2})→({ex},{ey})"
+        elif int(x2) >= 0 and int(y2) >= 0:
+            ex, ey = int(x2), int(y2)
+            end = f"({ex},{ey})"
+        else:
+            return self._err(ERROR_INVALID_ARGS, "缺少终点坐标（rel_x2/rel_y2 或 x2/y2）")
 
         n = max(4, int(steps))
         dur = max(0.1, float(duration or 0.6))
-        mouse.press(button="left", coords=start)
+        mouse.press(button="left", coords=(sx, sy))
         time.sleep(0.15)  # 让目标注册按下状态
         for i in range(1, n + 1):
-            xi = start[0] + (int(x2) - start[0]) * i // n
-            yi = start[1] + (int(y2) - start[1]) * i // n
+            xi = sx + (ex - sx) * i // n
+            yi = sy + (ey - sy) * i // n
             mouse.move(coords=(xi, yi))
             time.sleep(dur / n)
         time.sleep(0.1)
-        mouse.release(button="left", coords=(int(x2), int(y2)))
-        return self._ok(
-            f"已拖拽 ({start[0]},{start[1]}) → ({int(x2)},{int(y2)})（{n} 步 / {dur:.1f}s）"
-        )
+        mouse.release(button="left", coords=(ex, ey))
+        parts = [f"已拖拽 ({sx},{sy}) → {end}（{n} 步 / {dur:.1f}s）"]
+        if hit is not None:
+            parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
+        return self._ok("；".join(parts))
 
     async def _do_copy_file(self, file: str = "", **kw) -> Observation:
         """文件放入剪贴板（CF_HDROP）——聊天应用发文件的第一步.
@@ -1472,6 +1846,123 @@ class DesktopTool(ToolDefinition):
             "文件复制到剪贴板失败（剪贴板被占用或路径不存在: " + "; ".join(missing or files) + "）",
         )
 
+    async def _do_macro(self, macro: str = "", **kw) -> Observation:
+        """确定性序列宏——把 >=3 个无决策分支的原子动作压成一次工具调用.
+
+        收益：正常 GUI 流程 N 个动作 = N 次 LLM 往返（每步还要截图→vision→决策），
+        打包成宏后 = 1 次往返 + 可选的 1 张最终截图。步骤间不做任何 LLM/vision
+        决策，因此每步取值必须在调用前完全确定（固定 rel 坐标/已知文本）。
+
+        步骤格式（JSON 数组，逐项传给对应 _do_* 处理器）:
+          {"steps": [
+              {"action": "click_type", "process": "Weixin", "rel_x": 0.085, "rel_y": 0.055,
+               "text": "媳妇"},
+              {"action": "sleep", "seconds": 1.0},
+              {"action": "press_key", "keys": "{ENTER}"},
+              ...
+          ], "fail_fast": true}
+        允许的动作 = 写操作 + wait（read 操作含截图不参与，宏结束统一 verify）；
+        macro 顶层 process/title/title_re/index/timeout 作为各步骤缺省窗口上下文。
+        """
+        import asyncio
+        import json
+
+        allowed = {
+            "activate", "launch", "close_window", "click", "double_click",
+            "right_click", "click_control", "type_control", "type_text",
+            "press_key", "scroll", "drag", "click_type", "copy_file", "wait",
+        }
+        try:
+            spec = json.loads((macro or "").strip() or "{}")
+        except json.JSONDecodeError as e:
+            return self._err(ERROR_INVALID_ARGS, f"macro 不是合法 JSON: {e}")
+        if not isinstance(spec, dict):
+            return self._err(ERROR_INVALID_ARGS, "macro 须为 JSON 对象，形如 {\"steps\": [...]}")
+        steps = spec.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return self._err(ERROR_INVALID_ARGS, "macro.steps 缺失或为空")
+        if len(steps) > _MACRO_MAX_STEPS:
+            return self._err(ERROR_INVALID_ARGS, f"macro 步数 {len(steps)} 超过上限 {_MACRO_MAX_STEPS}")
+        fail_fast = bool(spec.get("fail_fast", True))
+
+        # 宏级默认窗口上下文（步骤未显式指定时继承）
+        defaults = {
+            k: kw[k] for k in ("process", "title", "title_re", "index", "timeout")
+            if kw.get(k) not in (None, "", False)
+        }
+
+        lines = [f"macro 开始（{len(steps)} 步, fail_fast={fail_fast}）"]
+        t0 = time.monotonic()
+        done = 0
+        for i, step in enumerate(steps, 1):
+            if not isinstance(step, dict):
+                lines.append(f"step{i}: <跳过非对象步骤 {step!r}>")
+                continue
+            action = str(step.get("action") or "").strip()
+            if action == "sleep":
+                secs = max(0.0, min(float(step.get("seconds", 0.5) or 0.5), 15.0))
+                if secs > 0:
+                    await asyncio.sleep(secs)
+                lines.append(f"step{i} [sleep] OK: {secs}s")
+                done = i
+                continue
+            if action == "macro" or action not in allowed:
+                return self._err(
+                    ERROR_INVALID_ARGS,
+                    f"macro 第 {i} 步含非法动作: {action!r}"
+                    f"（可用: {', '.join(sorted(allowed))}, sleep）",
+                )
+            if time.monotonic() - t0 > _MACRO_TOTAL_TIMEOUT:
+                lines.append(f"step{i}: 整体超时（>{_MACRO_TOTAL_TIMEOUT:.0f}s），中止")
+                break
+            args = dict(step)
+            args.pop("action", None)
+            # 步骤内禁止单独截图（否则每步一张图，宏的意义就没了）；结束统一 verify
+            args.pop("verify_screenshot", None)
+            args.pop("verify", None)
+            for k, v in defaults.items():
+                args.setdefault(k, v)
+            try:
+                obs = await getattr(self, f"_do_{action}")(**args)
+            except Exception as e:  # noqa: BLE001 — 步骤级兜底，失败可定位
+                logger.exception("macro step %s (%s) 异常", i, action)
+                lines.append(f"step{i} [{action}] EXCEPTION: {type(e).__name__}: {e}")
+                if fail_fast:
+                    return self._err(
+                        ERROR_INTERNAL,
+                        "\n".join(lines) + f"\n→ 宏在第 {i} 步中止（步骤抛异常）",
+                    )
+                continue
+            done = i
+            head = ""
+            if obs and obs.output:
+                head = obs.output.splitlines()[0]
+                if len(head) > _MACRO_STEP_LOG_LEN:
+                    head = head[:_MACRO_STEP_LOG_LEN] + "…"
+            if obs and obs.success:
+                lines.append(f"step{i} [{action}] OK: {head}")
+            else:
+                lines.append(f"step{i} [{action}] FAIL: {head or '<无输出>'}")
+                if fail_fast:
+                    return self._err(
+                        ERROR_INTERNAL,
+                        "\n".join(lines)
+                        + f"\n→ 宏在第 {i} 步中止（fail_fast=true；按上文定位后重试，或整体换思路）",
+                    )
+        elapsed = time.monotonic() - t0
+        lines.append(
+            f"macro 完成: {done}/{len(steps)} 步成功，耗时 {elapsed:.1f}s"
+            f"（1 次工具调用 ≈ 省去 {done - 1} 次 LLM 往返）"
+        )
+        return self._ok(
+            "\n".join(lines),
+            {
+                "macro_steps_ok": done,
+                "macro_steps_total": len(steps),
+                "macro_elapsed": round(elapsed, 1),
+            },
+        )
+
     async def _do_clip_read(self, **kw) -> Observation:
         """读取剪贴板（文本/文件列表）——感知用户刚复制的内容."""
         text, files = _read_clipboard()
@@ -1488,27 +1979,129 @@ class DesktopTool(ToolDefinition):
             )
         return self._ok("剪贴板为空或内容类型不支持（仅支持文本/文件）")
 
+    async def _do_probe(self, x: int = -1, y: int = -1, **kw) -> Observation:
+        """坐标命中检测（读操作）——点之前先看 (x,y) 处是什么.
+
+        背景（2026-09-05）：vision/rel 目测坐标常偏几个像素导致点错。
+        三档自动探测（2026-09-05 通用化，适用任意 Windows 软件）：先 UIA
+        树按"矩形包含 + 面积最小"找最深控件；UIA 空树自动换 win32 经典树
+        （老式 Delphi/MFC/VB6）；均无命中 = 自绘区。输出 [T1-UIA]/
+        [T2-Win32]/[T3-自绘] 档位标记与对应策略、控件类型/名称/矩形、
+        可吸附中心与窗口内 rel≈。命中 = 坐标方向正确；未命中 = 空白或
+        自绘区，点前先按截图改 rel 再 probe。
+        """
+        px, py, w = self._click_point_with_win({"x": x, "y": y, **kw})
+        if px < 0 or py < 0:
+            return self._err(ERROR_INVALID_ARGS, "缺少坐标（x/y 或 rel_x/rel_y）")
+        if w is None:
+            return self._ok(
+                f"probe ({px},{py}) → 无匹配窗口（点在桌面/其它窗口上，或窗口未找到）"
+            )
+        try:
+            r = w.rectangle()
+            wr = f"rect=({r.left},{r.top},{r.right - r.left}x{r.bottom - r.top})"
+        except Exception:  # noqa: BLE001
+            r = None
+            wr = "rect=?"
+        lines = [f"probe ({px},{py}) → {_win_summary(w)} {wr}"]
+        # 坐标与窗口矩形关系诊断（2026-09-05）：区分"点错位置"与"坐标系错位"
+        if r is not None:
+            inside = r.left <= px < r.right and r.top <= py < r.bottom
+            if not inside:
+                lines.append(
+                    f"警告: 点不在窗口矩形内（窗口左上=({r.left},{r.top})，"
+                    f"相对窗口偏移=({px - r.left},{py - r.top})）"
+                    "——若坐标取自窗口截图则是窗口内坐标，点击应改 rel_x/rel_y；"
+                    "若取自全屏截图请重查窗口位置（窗口可能已移动）"
+                )
+            else:
+                rw = max(1, r.right - r.left)
+                rh = max(1, r.bottom - r.top)
+                lines.append(
+                    f"点在窗口内 rel≈({(px - r.left) / rw:.3f},{(py - r.top) / rh:.3f})"
+                )
+        c = _hit_control(w, px, py)
+        if c is not None:
+            lines.append("[T1-UIA] 命中: " + _ctrl_line(c))
+            try:
+                cr = c.rectangle()
+                cx = cr.left + (cr.right - cr.left) // 2
+                cy = cr.top + (cr.bottom - cr.top) // 2
+                lines.append(f"可吸附中心 snap=({cx},{cy}) — click 会点这里")
+            except Exception:  # noqa: BLE001
+                pass
+            lines.append("策略: 控件名操作优先（click_control/type_control）；坐标点击用 rel + snap 吸附")
+        else:
+            # T2：UIA 空树 → win32 经典树再探（老式 Delphi/MFC 应用在 UIA 下常为空树）
+            c2 = None
+            w32 = _win32_wrapper(w)
+            if w32 is not None:
+                c2 = _hit_w32(w32, px, py)
+            if c2 is not None:
+                lines.append("[T2-Win32] UIA 无命中，经典树命中: " + _ctrl_line(c2))
+                try:
+                    cr = c2.rectangle()
+                    cx = cr.left + (cr.right - cr.left) // 2
+                    cy = cr.top + (cr.bottom - cr.top) // 2
+                    lines.append(f"可吸附中心 snap=({cx},{cy}) — click 吸附已自动兜底 win32 树")
+                except Exception:  # noqa: BLE001
+                    pass
+                lines.append("策略: 老式软件——click_control/type_control 按控件名最稳（已自动兜底 win32 树）")
+            else:
+                lines.append("[T3-自绘] UIA 与 Win32 经典树均无命中——该点是空白或自绘区，不要坐标盲点")
+                lines.append("策略: 全屏截图 → 目测 rel_x/rel_y → probe 复检 → click(snap=false) → 截图验证 → 固化 macro")
+        return self._ok("\n".join(lines))
+
     # ── 内部 ──────────────────────────────────────────────
 
     @staticmethod
     def _locate_control(w, control: str, control_type: str, control_index: int):
-        """在窗口内按 name/type 过滤定位控件，返回第 control_index 个匹配."""
+        """在窗口内按 name/type 过滤定位控件，返回第 control_index 个匹配.
+
+        UIA 树找不到时自动兜底 win32 经典树（老式 Delphi/MFC 应用，2026-09-05），
+        使 click_control/type_control 对老式软件同样可按控件名操作。
+        """
+        matched = []
         try:
             ctrls = w.descendants()
         except Exception:  # noqa: BLE001
-            return None
-        matched = []
+            ctrls = []
         for c in ctrls:
             try:
                 if control and control not in (c.window_text() or ""):
                     continue
-                if control_type and (c.element_info.control_type or "").lower() != control_type.lower():
-                    continue
+                if control_type:
+                    ctype = (getattr(c.element_info, "control_type", None) or "").lower()
+                    if ctype != control_type.lower():
+                        continue
             except Exception:  # noqa: BLE001
                 continue
             matched.append(c)
             if len(matched) > max(50, control_index + 1):
                 break
+        if not matched:
+            w32 = _win32_wrapper(w)
+            if w32 is not None:
+                try:
+                    ctrls = w32.descendants()
+                except Exception:  # noqa: BLE001
+                    ctrls = []
+                for c in ctrls:
+                    try:
+                        if control and control not in (c.window_text() or ""):
+                            continue
+                        if control_type:
+                            try:
+                                cls = (c.friendly_class_name() or "").lower()
+                            except Exception:  # noqa: BLE001
+                                cls = (c.class_name() or "").lower()
+                            if cls != control_type.lower():
+                                continue
+                        matched.append(c)
+                        if len(matched) > max(50, control_index + 1):
+                            break
+                    except Exception:  # noqa: BLE001
+                        continue
         if not matched:
             return None
         return matched[min(control_index, len(matched) - 1)]
