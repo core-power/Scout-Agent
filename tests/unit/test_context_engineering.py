@@ -276,7 +276,12 @@ async def test_memory_context_ranks_by_importance():
     assembler = ContextAssembler(memory_store=store, memory_limit=1)
     text = await assembler.build_memory_context("q")
     assert "高重要度记忆" in text
-    assert "低重要度记忆" not in text
+    # ★ 2026-09-16：行为有意变更。原断言基于"全局 top-N 截断"语义（低重要度
+    # 必然被挤出）。现改为**分层配额 + 事实层保底** —— 长期事实（居住地/忌口/
+    # 约束）对回答正确性的影响远大于一条相关技能，故低重要度事实也可能保留。
+    # 实测动机：全局截断下 preference/fact 被长条目挤掉，导致推荐了"川湘菜"
+    # 给不吃辣的用户。
+    assert "低重要度记忆" in text, "事实层保底应保留低重要度但属于 facts 层的记忆"
 
 
 @pytest.mark.asyncio
@@ -339,6 +344,12 @@ async def test_agent_extracts_memory_on_conversation_end(tmp_path):
     agent = _make_mini_agent(memory_extractor=extractor)
     res = await agent.run_conversation("我希望以后都用中文回复，请记住。")
     assert res["response"]
+    # ★ 2026-09-16：记忆抽取已改为**后台任务**（不再阻塞用户响应 —— 实测让
+    # 用户每次对话白等 10~25s 的一次 LLM 往返）。因此测试需要先等后台任务
+    # 跑完再断言；原实现是同步 await，所以旧测试无需等待。
+    _bg = getattr(agent, "_bg_tasks", None)
+    if _bg:
+        await asyncio.gather(*list(_bg), return_exceptions=True)
     hits = store.search("中文", limit=5)
     assert any("中文" in h.content for h in hits)
 

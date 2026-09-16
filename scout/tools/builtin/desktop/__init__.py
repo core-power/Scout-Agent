@@ -26,10 +26,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import ctypes.wintypes as wt  # noqa: F401  —  供 _paste_text 使用
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -49,17 +51,25 @@ from scout.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
+# ★ 2026-09-14 平台守卫：desktop 仅 Windows（pywinauto/Win32 UIA）。
+# 非导入即炸（pywinauto 均为函数内惰性导入），但注册与执行都按此开关。
+_IS_WINDOWS = sys.platform == "win32"
+
 # 写操作名单（便于上层策略/审计识别；工具内仅作日志标记）
 _WRITE_ACTIONS = {
     "activate", "launch", "close_window", "click", "double_click",
     "right_click", "click_control", "type_control", "type_text",
     "press_key", "scroll", "drag", "click_type", "copy_file", "macro",
+    "set_date",
 }
 
 _READ_ACTIONS = {
     "list_windows", "find_window", "active_window", "read_controls",
-    "screenshot", "wait", "clip_read", "probe",
+    "screenshot", "wait", "clip_read", "probe", "locate",
 }
+
+# 支持 find=<自然语言目标> 的点击类动作（内部截图→VL 定位→注入坐标点击）
+_FIND_CLICK_ACTIONS = {"click", "double_click", "right_click", "click_type"}
 
 _ALL_ACTIONS = sorted(_READ_ACTIONS | _WRITE_ACTIONS)
 
@@ -75,6 +85,261 @@ _MACRO_STEP_LOG_LEN = 240  # 每步回执单行截断长度
 
 # 截图目录（数据目录下，与 browser 截图同区）
 _SHOT_DIR = Path(_SCOUT_DATA_DIR) / "screenshots"
+
+# ── 屏幕变化检测（2026-09-08）：与同范围上一张做像素 diff，几乎未变化则短路 ──
+# 背景：GUI 任务高频出现"操作→截图→读图"循环；界面实际未变（等加载/点击无效）
+# 时重复截图+vision 是纯浪费（VL 实测 16-21s/次 + 一轮 LLM 往返）。
+# - 写操作后的第一张截图永不跳过（"操作未生效"是关键信息），仅附警示；
+# - 之后（纯状态轮询）未变化 → 直接返回上一张路径，连新文件都不落盘；
+# - force=true 强制新截图；SCOUT_SHOT_SKIP_UNCHANGED=0 一键回滚。
+_SHOT_SIG_SIZE = (160, 100)  # 对比用统一缩放尺寸（与 scale 参数无关，跨 scale 稳定）
+_SHOT_DIFF_TH = 2.0          # 平均像素差阈值（0-255）：光标闪烁/抗锯齿噪声远低于此
+_SHOT_SKIP_ENABLED = os.getenv("SCOUT_SHOT_SKIP_UNCHANGED", "1") != "0"
+_SHOT_LAST: dict[str, dict] = {}  # scope -> {"sig": Image, "path": str}，每范围仅留最近一张
+_SHOT_LAST_MAX = 8                # 防长会话窗口句柄累积
+_SHOT_EXPECT_CHANGE = False       # 写操作成功后置 True：下一张截图必须真实落盘
+
+
+def _shot_signature(img):
+    """固定小尺寸灰度签名图（PIL），供相邻帧像素 diff."""
+    return img.convert("L").resize(_SHOT_SIG_SIZE)
+
+
+def _img_mean_diff(a, b) -> float:
+    """两签名图的平均像素差（0-255）；尺寸不一致返回 255（视为已变化）."""
+    if a.size != b.size:
+        return 255.0
+    from PIL import ImageChops
+
+    hist = ImageChops.difference(a, b).histogram()
+    total = sum(hist)
+    if not total:
+        return 255.0
+    return sum(i * c for i, c in enumerate(hist)) / total
+
+
+# ── VL 定位（2026-09-08）：find=<自然语言目标> → 截图→VL→坐标→(点击) ──
+# 定位决策从 screenshot→vision→click 三次工具调用 2~3 轮 LLM 往返压缩为一次调用。
+# grounding 交给 VL 专用模型（与"chat 模型像素 grounding 不可靠"结论不冲突）；
+# snap 吸附仍生效——T1 应用点击自动校正到控件中心。
+_LOCATE_PROMPT = (
+    "在截图中定位目标元素: {target}\n"
+    "找到后返回该元素**中心点**在图片内的像素坐标。只输出一行 JSON，格式严格为:\n"
+    '{{"found": true, "x": <中心x>, "y": <中心y>}}\n'
+    '找不到或不确定时只输出: {{"found": false, "x": 0, "y": 0}}\n'
+    "不要输出任何其他文字。"
+)
+
+
+# ── UIA 兜底定位：自然语言目标 → 控件名匹配词提取（2026-09-10）──
+_UIA_STOPWORDS = (
+    "按钮", "输入框", "文本框", "下拉框", "复选框", "单选框", "图标", "控件",
+    "菜单项", "菜单", "选项", "标签页", "标签", "区域", "位置", "那个", "这个", "一个",
+)
+_UIA_ADJWORDS = (
+    "红色", "蓝色", "绿色", "黄色", "白色", "黑色", "灰色", "紫色",
+    "大的", "小的", "顶部", "底部", "左侧", "右侧", "上方", "下方",
+)
+
+
+def _extract_locate_needles(find: str) -> list[str]:
+    """从自然语言目标提取控件名匹配词（UIA 兜底定位用）.
+
+    "红色提交按钮" → ["提交", "红色提交"]（先试去形容词的干净词，命中率高）
+    """
+    s = (find or "").strip()
+    for w in _UIA_STOPWORDS:
+        s = s.replace(w, "")
+    needles: list[str] = []
+    stripped = s
+    for w in _UIA_ADJWORDS:
+        stripped = stripped.replace(w, "")
+    if len(stripped) >= 2:
+        needles.append(stripped)
+    if s and s != stripped and len(s) >= 2:
+        needles.append(s)
+    return needles
+
+
+def _grab_per_monitor(virtual_rect: tuple[int, int, int, int]):
+    """逐显示器抓屏并按物理坐标拼接（混合 DPI 多屏兜底，2026-09-11）.
+
+    ImageGrab.grab(all_screens=True) 在**混合缩放多屏**（如主屏 150% +
+    副屏 100%）上可能被系统 DISPLAY DC 按主屏 DPI 拉伸副屏区域，截图像素
+    与虚拟屏 rect 不对齐 → 坐标换算错位。逐屏抓取（bbox=该屏物理 rect，
+    DISPLAY DC 原生虚拟屏坐标）后拼到虚拟屏画布，绕开整屏 DC 的拉伸问题。
+    返回 PIL Image 或 None。
+    """
+    try:
+        import ctypes
+
+        from PIL import Image, ImageGrab
+
+        u32 = ctypes.windll.user32
+        MONITORENUMPROC = ctypes.WINFUNCTYPE(
+            ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_long * 4), ctypes.c_void_p,
+        )
+        mons: list[tuple[int, int, int, int]] = []
+
+        def _cb(hmon, hdc, lprect, _):
+            r = lprect.contents
+            mons.append((int(r[0]), int(r[1]), int(r[2]), int(r[3])))
+            return True
+
+        u32.EnumDisplayMonitors(None, None, MONITORENUMPROC(_cb), 0)
+        if not mons:
+            return None
+        vl, vt, vr, vb = virtual_rect
+        canvas = Image.new("RGB", (vr - vl, vb - vt))
+        pasted = 0
+        for l, t, r, b in mons:
+            try:
+                shot = ImageGrab.grab(bbox=(l, t, r, b))
+                if shot.size != (r - l, b - t):
+                    # 该屏 DC 尺寸与物理 rect 不符（DPI 拉伸）→ 对齐缩放保底
+                    shot = shot.resize((r - l, b - t))
+                canvas.paste(shot, (l - vl, t - vt))
+                pasted += 1
+            except Exception:  # noqa: BLE001 — 单屏失败继续其余屏
+                continue
+        return canvas if pasted == len(mons) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── 粗→细两段定位（2026-09-11）：弱 VL 模型在局部小图上定位成功率显著更高 ──
+_COARSE_PROMPT = (
+    "在截图中找到 {target} 所在的大致区域。"
+    "只输出一行 JSON，格式严格为: "
+    '{{"found": true, "left": <0-100>, "top": <0-100>, "right": <0-100>, "bottom": <0-100>}}'
+    "（数值为相对截图宽高的百分比，框要略大于目标本身）。"
+    "找不到或不确定时只输出: "
+    '{{"found": false}}'
+    "不要输出任何其他文字。"
+)
+
+
+def _parse_coarse_answer(text: str) -> tuple[float, float, float, float] | None:
+    """解析粗定位回答 → (left, top, right, bottom) 0~1 比例；无效返回 None."""
+    if not text:
+        return None
+    m = re.search(r"\{[^}]+\}", text, re.S)
+    if not m:
+        return None
+    try:
+        import json
+
+        d = json.loads(m.group(0))
+        if not d.get("found", True):
+            return None
+        l = max(0.0, min(100.0, float(d["left"]))) / 100
+        t = max(0.0, min(100.0, float(d["top"]))) / 100
+        r = max(0.0, min(100.0, float(d["right"]))) / 100
+        b = max(0.0, min(100.0, float(d["bottom"]))) / 100
+        if r <= l or b <= t:
+            return None
+        if (r - l) < 0.03 or (b - t) < 0.03:
+            return None  # 区域过小（可疑）
+        if (r - l) > 0.98 and (b - t) > 0.98:
+            return None  # 全图 = 无信息量
+        return (l, t, min(r, 1.0), min(b, 1.0))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _crop_by_region(src: Path, region: tuple[float, float, float, float]) -> Path | None:
+    """按 0~1 比例区域裁剪截图并落盘到源图旁（粗→细定位用）."""
+    try:
+        from PIL import Image
+
+        img = Image.open(src)
+        w, h = img.size
+        l, t, r, b = region
+        box = (max(0, int(l * w)), max(0, int(t * h)), min(w, int(r * w)), min(h, int(b * h)))
+        if box[2] - box[0] < 10 or box[3] - box[1] < 10:
+            return None
+        out = src.with_name(src.stem + "_crop.png")
+        img.crop(box).save(str(out))
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── OCR 文本锚定兜底（2026-09-10，T3 自绘应用定位）──
+# 2026-09-07 曾移除 RapidOCR 依赖（减负 160MB，用户决策）；此处为"定位"场景
+# 动态导入：源码环境有依赖则启用（文本目标按 OCR 框中心点击，比 VL 像素
+# 定位可靠），发布包无依赖则自动禁用——importlib 动态加载不会被
+# PyInstaller 静态分析收编，包体积零变化。
+_OCR_ENGINE: object | None = None
+
+
+def _get_ocr_engine():
+    """惰性加载 RapidOCR 引擎（模块级单例；不可用返回 None）."""
+    global _OCR_ENGINE
+    if _OCR_ENGINE is None:
+        try:
+            import importlib
+
+            mod = importlib.import_module("rapidocr_onnxruntime")
+            _OCR_ENGINE = mod.RapidOCR()
+        except Exception:  # noqa: BLE001 — 依赖缺失时静默禁用
+            _OCR_ENGINE = False
+    return _OCR_ENGINE or None
+
+
+def _parse_locate_answer(text: str) -> tuple[int, int] | None:
+    """从 VL 回答解析目标图片内坐标 (x, y).
+
+    兼容 JSON / x=..y=.. / 裸数字对；明确 found:false 或解析失败返回 None。
+    """
+    if not text:
+        return None
+    low = text.lower()
+    if re.search(r'["\']?found["\']?\s*[:=]\s*false', low):
+        return None
+    best: tuple[int, int] | None = None
+    for m in re.finditer(r"\{[^{}]*\}", text):
+        s = m.group(0)
+        mx = re.search(r'["\']x["\']\s*[:=]\s*(\d+)', s)
+        my = re.search(r'["\']y["\']\s*[:=]\s*(\d+)', s)
+        if mx and my:
+            best = (int(mx.group(1)), int(my.group(1)))
+    if best:
+        return best
+    mx = re.search(r"\bx\s*[=＝:：]\s*\(?\s*(\d{1,5})", text, re.I)
+    my = re.search(r"\by\s*[=＝:：]\s*\(?\s*(\d{1,5})", text, re.I)
+    if mx and my:
+        return int(mx.group(1)), int(my.group(1))
+    pairs = re.findall(r"(?<![\d.])(\d{1,5})\s*[,，]\s*(\d{1,5})(?![\d.])", text)
+    if pairs:
+        x, y = pairs[-1]
+        return int(x), int(y)
+    return None
+
+
+def _poll_control_hit(w, needle: str) -> tuple[bool, list[str]]:
+    """wait 事件轮询辅助：任一控件文本包含 needle 即命中.
+
+    返回 (是否命中, 用于超时提示的最近控件文本样例≤12)."""
+    needle_l = (needle or "").lower()
+    names: list[str] = []
+    try:
+        ctrls = w.descendants()
+    except Exception:  # noqa: BLE001 — 自绘 UI/树读取失败按未命中处理
+        return False, []
+    for c in ctrls:
+        try:
+            txt = (c.window_text() or "").strip()
+        except Exception:  # noqa: BLE001
+            continue
+        if not txt:
+            continue
+        if needle_l in txt.lower():
+            return True, [txt]
+        if txt not in names and len(names) < 12:
+            names.append(txt)
+    return False, names
 
 _DPI_AWARE_DONE = False
 
@@ -106,6 +371,17 @@ def _ensure_dpi_aware() -> None:
         # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
         if not u32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
             u32.SetProcessDPIAware()  # Win8.1 以下降级
+        # ★ 2026-09-11 成功性验证：exe 壳进程可能因 CLR/已有窗口抢先而设置失败，
+        # 默默继续会让鼠标/窗口坐标被虚拟化（150% 缩放下全错位）——显式告警。
+        val = ctypes.c_int(-1)
+        h = ctypes.windll.kernel32.GetCurrentProcess()
+        hr = ctypes.windll.shcore.GetProcessDpiAwareness(ctypes.c_void_p(h), ctypes.byref(val))
+        if hr == 0 and val.value < 2:
+            logger.warning(
+                "DPI 感知未生效（状态=%s）——高 DPI/多屏环境下坐标将被虚拟化，"
+                "点击会整体偏移！请检查 launcher 启动日志。",
+                val.value,
+            )
     except Exception:  # noqa: BLE001 — 设置失败不阻断工具，仅坐标可能受影响
         logger.warning("DPI awareness 设置失败（高 DPI 屏上坐标可能偏移）", exc_info=True)
 
@@ -557,6 +833,77 @@ def _enum_top_windows_by_process(process: str) -> list:
 _WIN_CACHE: dict[tuple, tuple] = {}
 _WIN_CACHE_TTL = 2.0
 
+# 启动后等待窗口出现的上限（秒）★ 2026-09-14：把 wait 内联进 launch 结果，
+# 省去模型「launch → 未就绪 → wait → activate」的一次往返（GUI 任务每次往返
+# 都是一个 LLM 步，且常伴随截图/vision 重观察）。
+_LAUNCH_WAIT_SECONDS = 6.0
+
+
+# ── UIA 控件树缓存（2026-09-15，性能）──────────────────────────────
+# 背景：read_controls 每次都执行 w.descendants() 从根遍历整棵控件树，再对**全部**
+# 控件排序后只取前 N 个。飞书等自绘应用的树很大，而 UIA 取属性是跨进程 COM 调用，
+# 于是"读一次飞书"的开销极高，且短时间内重复读取（模型连续几步都在看同一窗口）
+# 完全是重复劳动——用户反馈"UIA 全量重建、无缓存、耗时且重复"。
+# 设计：按 (hwnd, depth, control, control_type) 缓存**已渲染好的文本行**（不缓存
+# 跨进程控件对象，避免悬挂引用）；用窗口"轻量指纹"（标题 + 矩形）校验是否仍然
+# 对应当前界面，TTL 内直接复用。需要最新结构时传 force_refresh=true 绕过缓存。
+_UIA_TREE_CACHE: dict[tuple, tuple] = {}
+_UIA_TREE_TTL = 2.5
+
+
+def _win_light_fingerprint(hwnd: int) -> tuple:
+    """窗口轻量指纹：标题 + 屏幕矩形（不触碰控件树，开销可忽略）."""
+    try:
+        import ctypes
+
+        u = ctypes.windll.user32
+        h = ctypes.c_void_p(hwnd)
+        if not u.IsWindow(h):
+            return ()
+        buf = ctypes.create_unicode_buffer(512)
+        u.GetWindowTextW(h, buf, 512)
+
+        class _RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
+
+        r = _RECT()
+        u.GetWindowRect(h, ctypes.byref(r))
+        return (buf.value, r.left, r.top, r.right, r.bottom)
+    except Exception:  # noqa: BLE001
+        return ()
+
+
+def _uia_tree_get(ck: tuple, fp: tuple) -> list[str] | None:
+    """命中且指纹一致、未过期 → 返回缓存的控件行；否则 None（并清理失效项）."""
+    if not fp:
+        return None
+    ent = _UIA_TREE_CACHE.get(ck)
+    if not ent:
+        return None
+    _fp, lines, exp = ent
+    if _fp != fp or time.time() > exp:
+        _UIA_TREE_CACHE.pop(ck, None)
+        return None
+    return lines
+
+
+def _uia_tree_put(ck: tuple, fp: tuple, lines: list[str]) -> None:
+    """写入缓存（简单容量上限，避免长会话无界增长）."""
+    if not fp or not lines:
+        return
+    try:
+        if len(_UIA_TREE_CACHE) > 64:
+            for k in list(_UIA_TREE_CACHE)[:32]:
+                _UIA_TREE_CACHE.pop(k, None)
+        _UIA_TREE_CACHE[ck] = (fp, lines, time.time() + _UIA_TREE_TTL)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def _cached_wrapper(process: str, title: str, title_re: bool, index: int):
     """命中缓存且 hwnd 仍有效则返回 wrapper，否则 None."""
@@ -775,6 +1122,9 @@ _SNAP_SKIP_W32 = {
     "#32770",  # 对话框本体
     "mdiclient", "scrollbar", "statusbar", "rebarwindow32",
     "tooltips_class32", "sysheader32", "grip",
+    # 2026-09-08：Chromium 渲染子窗口（近整窗巨区）——微信 4.x/Electron 应用
+    # UIA 空树时 win32 兜底会吸到它中心，离目标极远
+    "chrome_widgetwin_1", "chrome_renderwidgethosthwnd",
 }
 
 
@@ -796,7 +1146,16 @@ def _win32_wrapper(w):
 
 
 def _hit_w32(w32, x: int, y: int):
-    """win32 经典树命中：含点 (x,y) 的最小子窗口控件（老式应用 UIA 空树时用）."""
+    """win32 经典树命中：含点 (x,y) 的最小子窗口控件（老式应用 UIA 空树时用）.
+
+    2026-09-08：补近整窗面积守卫（与 UIA 侧 _snap_control 的 0.6 对齐）——
+    此前无守卫，含点的近整窗渲染子窗口会被选中并吸到其中心。
+    """
+    try:
+        wr = w32.rectangle()
+        w_area = (wr.right - wr.left) * (wr.bottom - wr.top)
+    except Exception:  # noqa: BLE001
+        w_area = 0
     try:
         ctrls = w32.descendants()
     except Exception:  # noqa: BLE001
@@ -817,6 +1176,9 @@ def _hit_w32(w32, x: int, y: int):
         except Exception:  # noqa: BLE001
             continue
         area = (r.right - r.left) * (r.bottom - r.top)
+        # 近整窗子窗口（渲染巨区）不参与吸附
+        if w_area > 0 and area >= w_area * 0.6:
+            continue
         if best is None or area < best_area:
             best, best_area = c, area
     return best
@@ -843,11 +1205,47 @@ def _hit_control(w, x: int, y: int):
                 continue
             if (c.element_info.control_type or "").lower() in _SNAP_SKIP_TYPES:
                 continue
+            # 2026-09-08：矩形健全性 + 可见性 —— 最小化(-32000)/零尺寸/不可见
+            # 控件（虚拟列表所有 item 同 rect、隐藏层）参与吸附会把点击拉偏
+            if r.left <= -30000 or r.top <= -30000 or r.right <= r.left or r.bottom <= r.top:
+                continue
+            try:
+                if not c.is_visible():
+                    continue
+            except Exception:  # noqa: BLE001 — 可见性判定失败不阻塞
+                pass
         except Exception:  # noqa: BLE001
             continue
         area = (r.right - r.left) * (r.bottom - r.top)
         if best is None or area < best_area:
             best, best_area = c, area
+    return best
+
+
+def _window_at_point(px: int, py: int):
+    """返回包含屏幕点的最小可见顶层窗口 wrapper.
+
+    2026-09-08：无 title/process 上下文的坐标点击，此前 _find_wrapper("","")
+    会返回"第一个可见窗口"（UIA 枚举序）——点视觉上落在 B 窗口上，吸附却
+    发生在 A 窗口的控件上，实际点击落错窗口。改为按矩形包含选最小窗口。
+    """
+    try:
+        wins = _uia_desktop().windows()
+    except Exception:  # noqa: BLE001
+        return None
+    best = None
+    best_area = None
+    for w in wins:
+        try:
+            if not w.is_visible():
+                continue
+            r = w.rectangle()
+            if r.left <= px < r.right and r.top <= py < r.bottom:
+                area = (r.right - r.left) * (r.bottom - r.top)
+                if best is None or area < best_area:
+                    best, best_area = w, area
+        except Exception:  # noqa: BLE001
+            continue
     return best
 
 
@@ -880,72 +1278,49 @@ class DesktopTool(ToolDefinition):
 
     name = "desktop"
     description = (
-        "Control desktop GUI apps on Windows — THE tool for any GUI task (WeChat/QQ/Feishu/any "
-        "window: launch, click, type, read screens, send keys). Never drive GUIs via shell.\n"
-        "ROUTE: GUI app/window → this tool; CLI tasks → shell; reminders/AI timers → scheduler; "
-        "absent-user/boot tasks → shell schtasks (current-user tasks need no admin; NEVER /RU "
-        "SYSTEM for GUI).\n"
-        "FLOW: list_windows/find_window → activate → read_controls (UIA names+rects+center → "
-        "click x/y from center, no screenshot needed) or screenshot→vision→click(img=<shot path>) "
-        "for custom-drawn UIs. "
-        "Custom-drawn UIs "
-        "(WeChat 4.x exposes NO UIA controls): rel_x/rel_y or x/y clicks + type_text/press_key.\n"
-        "SPEED: (a) click_type = click+type+keys in ONE call — prefer over separate calls; "
-        "(b) verify_screenshot=true attaches post-action screenshot, saving a call; "
-        "(c) screenshots default 0.5 downscale — after vision reads a shot, pass the shot path "
-        "to click as img=<path> so the tool auto-converts coords (NEVER hand-multiply by 2); "
-        "(d) vision only at decision points, otherwise trust tool results. "
-        "Repeated ops on the same window auto-hit a 2s handle cache (no need to re-find).\n"
-        "CLICK ACCURACY (anti-misclick): click/double_click/right_click/click_type auto-SNAP "
-        "the point to the UIA control center under it; drag start snaps too, drag END is an exact "
-        "drop point (never snapped) — use rel_x2/rel_y2 (same window, move-safe) or x2/y2 "
-        "(cross-window). scroll accepts rel_x/rel_y as well. snap=false disables. UNIVERSAL "
-        "STRATEGY for ANY Windows app — probe auto-classifies it into 3 tiers before you act: "
-        "[T1-UIA] modern control tree → click_control/type_control by control name, or coords + "
-        "snap; [T2-Win32] legacy HWND tree (Delphi/MFC/VB6, empty under UIA) → same by-name "
-        "tools AUTO-retry on the win32 tree and snap snaps there too; [T3-self-drawn] no tree at "
-        "all (WeChat 4.x / meeting apps / games) → raw coords kept; use screenshot → "
-        "rel_x/rel_y → click snap=false → screenshot verify → macro. probe reports the tier tag, "
-        "control name+rect, in-window rel≈, and warns when the point is OUTSIDE the window rect "
-        "(window-only screenshot coords must then be re-expressed as rel). Cheap workflow: probe "
-        "→ confirm tier/control → click (snaps to center). After clicking, reply includes "
-        "focus=<ClassName> (still a Pane on a native app = MISSED → adjust and retry, don't type "
-        "blindly). Vision-read pixel coords are unreliable; prefer rel_x/rel_y.\n"
-        "WINDOWS: prefer process= over title= (WeChat: 'Weixin'; title = current chat name, "
-        "changes constantly). [min] windows have off-screen rects — activate first. One DPI-aware "
+        "Control desktop GUI apps on Windows — THE tool for any GUI task. Never drive GUIs via shell.\n"
+        "ROUTE: GUI → this tool; CLI → shell; reminders → scheduler; absent-user/boot → shell "
+        "schtasks (current user needs no admin; NEVER /RU SYSTEM for GUI).\n"
+        "FLOW: find_window/list_windows → activate → read_controls (UIA names+rects+center, click "
+        "by center, no screenshot) or screenshot→vision→click(img=<path>) for self-drawn UIs "
+        "(WeChat 4.x has NO UIA tree → rel_x/rel_y + type_text/press_key).\n"
+        "SPEED: (a) click_type = click+type+keys in ONE call; (b) verify_screenshot=true attaches "
+        "post-action shot; (c) vision-read coords → click img=<shot path> auto-converts (NEVER "
+        "hand-multiply; screen=true if coords are already screen coords); (d) vision only at "
+        "decision points, trust tool results; same-window ops hit a 2s cache; (e) wait "
+        "until_control/until_title_contains replaces screenshot+vision for 'did it load' checks "
+        "(zero tokens); (f) screenshot short-circuits when unchanged (reuses previous path; "
+        "force=true override); after a write action '[变化检测] 几乎一致' warning = MISSED "
+        "action, not success; (g) click find=<target> / locate = one-call VL grounding (use only "
+        "when no UIA tree and you must look at the screen).\n"
+        "CLICK ACCURACY: click-family auto-SNAPs to the UIA control center under the point "
+        "(snap=false disables); drag start snaps, drag END is exact (rel_x2/rel_y2 same-window, "
+        "x2/y2 cross-window); scroll takes rel too. probe classifies apps: [T1-UIA] → "
+        "click_control/type_control by name or coords+snap; [T2-Win32 legacy (Delphi/MFC)] → "
+        "same by-name tools auto-retry the win32 tree; [T3-self-drawn] → screenshot → rel → "
+        "click snap=false → verify → macro. probe reports tier, control name+rect, rel≈, and "
+        "warns if the point is outside the window rect. Cheap workflow: probe → confirm → click. "
+        "After clicking, reply includes focus=<ClassName> (a Pane on a native app = MISSED → "
+        "adjust, don't type blindly). Prefer rel_x/rel_y over vision pixel coords.\n"
+        "WINDOWS: prefer process= over title= (WeChat process 'Weixin'; title = chat name, "
+        "changes). [min] windows have off-screen rects — activate first. One DPI-aware "
         "physical-pixel system: screenshot coords = control rects = mouse coords.\n"
-        "FIELD NOTES: UAC prompts can NOT be automated — if launch/click hangs, tell the user to "
-        "approve. IME: wait 0.3s between CJK typing and {ENTER}, or paste=true bypasses IME. "
-        "Send files in chat apps: copy_file → click input → ^v → {ENTER} (NEVER drag). "
-        "clip_read when user references just-copied content. Open/Save dialogs: type_control the "
-        "full absolute path + {ENTER} — don't click Browse. drag: duration >=0.6s (Hit-Test needs "
-        "real move events; instant moves discarded).\n"
-        "WECHAT 4.x (fixed layout → use rel coords, NEVER vision pixel coords — chat models are "
-        "unreliable at pixel grounding): search box ≈(0.085,0.055), no caret shown after click but "
-        "keys register; first result row ≈rel_y 0.12–0.20 (vision reads text only); input box "
-        "≈(0.60,0.925); send ≈(0.46,0.94). Send message: launch Weixin → click_type rel(0.085,0.055) "
-        "text=<contact> → wait 1s → screenshot+vision pick first entry → click it → click_type "
-        "rel(0.60,0.925) text=<msg> → {ENTER} → screenshot verify.\n"
-        "MACRO (anti-token): when >=3 deterministic steps run in a row, pack them into ONE macro "
-        "action instead of N separate calls — saves N-1 LLM round-trips (the #1 GUI token cost). "
-        "macro=<JSON string> {\"steps\":[{\"action\":<one desktop action>, ...its kwargs...}, ...], "
-        "\"fail_fast\":true|false}; macro-level process/title/index/timeout are inherited by steps "
-        "that don't set their own. Step vocabulary: the write/wait actions (activate, launch, "
-        "close_window, click, double_click, right_click, click_control, type_control, type_text, "
-        "press_key, scroll, drag, click_type, copy_file, wait) plus sleep "
-        "({\"action\":\"sleep\",\"seconds\":1.0}). Steps run back-to-back with NO LLM/vision between "
-        "them, so every value must be fully decided now (fixed rel coords, known texts). NEVER macro a "
-        "step whose correct value depends on a previous step's live result (e.g. which dialog "
-        "appeared) — do that decision as a normal step, then macro the deterministic tail. "
-        "fail_fast=true (default) stops at the first failing step and returns the per-step log for "
-        "one-shot diagnosis; verify_screenshot=true appends ONE final screenshot of the whole result. "
-        "WeChat send example (chat ALREADY open and title confirmed = target contact; never macro "
-        "the chat-switch decision part): macro={\"steps\":[{\"action\":\"click_type\","
-        "\"process\":\"Weixin\",\"rel_x\":0.5,\"rel_y\":0.93,\"text\":\"会议链接: xxx\"},"
-        "{\"action\":\"sleep\",\"seconds\":0.5},{\"action\":\"click\",\"rel_x\":0.46,"
-        "\"rel_y\":0.94},{\"action\":\"sleep\",\"seconds\":1.0}],\"process\":\"Weixin\"} — 点输入框"
-        "打字 + 点发送按钮（微信4.x 合成 Enter 不发送，勿用 {ENTER}），结束用 verify_screenshot=true"
-        "确认消息气泡出现。切会话的『vision 读列表→决策』部分必须留在宏外。"
+        "FIELD NOTES: UAC can NOT be automated — ask the user. IME: wait 0.3s between CJK typing "
+        "and {ENTER}, or paste=true. Send files: copy_file → click input → ^v → {ENTER} (NEVER "
+        "drag). Open/Save dialogs: type_control the full absolute path + {ENTER} — don't click "
+        "Browse. drag duration >=0.6s (Hit-Test needs real move events).\n"
+        "WECHAT 4.x (rel coords only — NEVER vision pixel coords): search ≈(0.085,0.055), first "
+        "result row ≈rel_y 0.12–0.20, input ≈(0.60,0.925), send ≈(0.46,0.94). Send: click_type "
+        "rel(0.085,0.055) text=<contact> → wait 1s → pick first entry → click_type rel(0.60,0.925) "
+        "text=<msg> → click send button（微信4.x 合成 Enter 不发送，勿用 {ENTER}）→ verify.\n"
+        "MACRO (anti-token #1): >=3 deterministic steps → ONE macro call, saves N-1 LLM "
+        "round-trips. macro=<JSON> {\"steps\":[{\"action\":<action>, ...kwargs...}, ...], "
+        "\"fail_fast\":true}; step vocabulary = the write/wait actions plus sleep "
+        "({\"action\":\"sleep\",\"seconds\":1.0}); macro-level process/title/index/timeout are "
+        "inherited by steps without their own. Values must be fully decided now — NEVER macro a "
+        "step whose value depends on a previous step's live result (decide that as a normal "
+        "step, then macro the deterministic tail). fail_fast=true stops at the first failure "
+        "with a per-step log; verify_screenshot=true appends ONE final screenshot."
     )
     parameters = {
         "type": "object",
@@ -958,6 +1333,23 @@ class DesktopTool(ToolDefinition):
             "verify_screenshot": {
                 "type": "boolean",
                 "description": "Write actions: attach post-action screenshot to the result. Default false.",
+            },
+            "date": {
+                "type": "string",
+                "description": "set_date: 目标日期（2026-09-11 / 2026/9/11 / 2026年9月11日）。按 年→月→日 逐段键入纯数字（段满自动跳段），专治 QDateEdit/DateTimePicker 等分段控件——整串输入会被解析错乱。",
+            },
+            "find": {
+                "type": "string",
+                "description": "click/double_click/right_click/click_type & locate: natural-language "
+                "target (e.g. '红色提交按钮' / '搜索输入框'). Internally screenshots + VL-locates + "
+                "converts to screen coords, then clicks (snap still applies). One call replaces "
+                "screenshot→vision→click. Requires vision model configured; fails safely to "
+                "read_controls/rel fallback hints otherwise.",
+            },
+            "screen": {
+                "type": "boolean",
+                "description": "x/y 是屏幕绝对坐标：与 img= 同传但坐标并非截图内坐标时置 true，"
+                "跳过截图坐标换算（默认 false=按 img 截图坐标自动换算）。",
             },
             "scale": {
                 "type": "number",
@@ -1082,6 +1474,23 @@ class DesktopTool(ToolDefinition):
                 "enum": ["appear", "vanish"],
                 "description": "wait: wait for window to appear (default) or vanish.",
             },
+            "until_control": {
+                "type": "string",
+                "description": "wait: poll until a control whose text contains this substring appears "
+                "in the target window (UIA, zero token). Use INSTEAD of screenshot-then-vision for "
+                "'did it load / send succeed' checks. Timeout reply includes recent control-text samples.",
+            },
+            "until_title_contains": {
+                "type": "string",
+                "description": "wait: poll until any top-level window title contains this substring "
+                "(e.g. a new dialog). Zero token, no screenshot needed.",
+            },
+            "force": {
+                "type": "boolean",
+                "description": "screenshot: force a fresh capture even when the screen looks unchanged "
+                "since the last shot of the same scope (default false = unchanged screen short-circuits "
+                "and returns the previous path).",
+            },
             "timeout": {
                 "type": "integer",
                 "description": "Seconds for wait/find retry (default 10).",
@@ -1106,6 +1515,16 @@ class DesktopTool(ToolDefinition):
     platforms = ("windows",)
 
     async def execute(self, **kwargs) -> Observation:
+        # ★ 2026-09-14 平台守卫：desktop 依赖 pywinauto/Win32（仅 Windows）。
+        # import 是惰性的（非 Windows 不会在模块加载时炸），但执行时必须
+        # 明确拒绝并告知原因，而不是让 pywinauto ImportError 裸抛。
+        if not _IS_WINDOWS:
+            return self._err(
+                ERROR_INVALID_ARGS,
+                "desktop 工具仅支持 Windows（依赖 pywinauto/Win32 UIA）。"
+                "当前平台不可用——Linux 请用 shell（xdotool/wmctrl），"
+                "macOS 请用 shell（osascript/AppleScript）。",
+            )
         action = str(kwargs.get("action") or "").strip()
         if action not in _ALL_ACTIONS:
             return self._err(
@@ -1114,21 +1533,64 @@ class DesktopTool(ToolDefinition):
             )
         # 任何操作前先统一坐标系（高 DPI 屏防点击偏移）
         _ensure_dpi_aware()
+        # find=<自然语言目标>：点击类动作内部先 VL 定位再注入坐标（2026-09-08）
+        # 定位+点击一次调用完成，省 2 次工具调用与 1~2 轮 LLM 往返
+        if action in _FIND_CLICK_ACTIONS and str(kwargs.get("find") or "").strip():
+            px, py, err = await self._locate_point(str(kwargs["find"]).strip(), kwargs)
+            if err is not None:
+                return err
+            # ★ 2026-09-09：同时清掉 img/screen —— _locate_point 已把坐标换算成
+            # 屏幕坐标写回 x/y，若残留 img=，点击路径会把屏幕坐标再当截图坐标
+            # 换算一次（全屏 0.5 降采样时坐标直接减半 → 点错位置）
+            kwargs = {
+                k: v for k, v in kwargs.items()
+                if k not in ("find", "rel_x", "rel_y", "x", "y", "img", "screen")
+            }
+            kwargs["x"], kwargs["y"] = px, py
         if action in _WRITE_ACTIONS:
             logger.info("desktop tool write action: %s args=%s", action, kwargs)
+            # ★ 2026-09-11 四态回读验证：写操作前快照各范围最新截图签名，
+            # verify_screenshot 时与操作后差分 → confirmed/partial/suspected_noop/unverifiable
+            _pre_shots = {k: dict(v) for k, v in _SHOT_LAST.items()}
 
         try:
             handler = getattr(self, f"_do_{action}")
             obs = await handler(**kwargs)
         except RuntimeError as e:
-            # 依赖缺失等可读错误
+            # 依赖缺失等可读错误（_uia_desktop 等惰性导入点的显式提示）
             return self._err(ERROR_INTERNAL, str(e))
+        except ImportError as e:
+            # ★ 2026-09-14 分类上报：依赖缺失（pywinauto/PIL 未装）与普通
+            # 执行错误区分——此前混在通用 Exception 里，agent 无从判断
+            # "装依赖能解决"还是"换个方法"。
+            logger.exception("desktop tool dependency missing (%s)", action)
+            return self._err(
+                ERROR_INTERNAL,
+                f"依赖缺失: {e} —— desktop 工具需要 pywinauto + Pillow，"
+                "请执行 `pip install pywinauto Pillow` 后重试（不要重试当前操作）。",
+            )
+        except PermissionError as e:
+            logger.exception("desktop tool permission denied (%s)", action)
+            return self._err(
+                ERROR_INTERNAL,
+                f"权限不足: {e} —— 可能被安全软件/UIPI（以管理员运行的应用）拦截，"
+                "尝试以相同权限运行 Scout 或换目标窗口。",
+            )
         except Exception as e:  # noqa: BLE001
             logger.exception("desktop tool error (%s)", action)
             return self._err(ERROR_INTERNAL, f"{type(e).__name__}: {e}")
 
+        # 写操作成功 → 置"预期变化"标记：下一张截图永不跳过（"操作未生效"是
+        # 关键信息，不可被屏幕变化检测短路），最多附警示，见 _do_screenshot
+        if obs.success and action in _WRITE_ACTIONS:
+            global _SHOT_EXPECT_CHANGE
+            _SHOT_EXPECT_CHANGE = True
+
         # 写操作执行成功且请求了 verify_screenshot → 自动附带窗口截图
         # （省一轮独立的 screenshot 工具调用 = 省一次 LLM 往返）
+        # ★ 2026-09-11 升级为四态回读验证（对标 winhand-use）：
+        #   confirmed（界面显著变化）/ partial（细微变化）/
+        #   suspected_noop（几乎未变——不是失败，是"回去重看"）/ unverifiable
         if (
             obs.success
             and action in _WRITE_ACTIONS
@@ -1138,8 +1600,32 @@ class DesktopTool(ToolDefinition):
                 shot = await self._do_screenshot(**kwargs)
                 if shot.success:
                     first_line = shot.output.splitlines()[0]
+                    verify_note = ""
+                    try:
+                        _scope = (shot.metadata or {}).get("scope") or ""
+                        _pre = _pre_shots.get(_scope) if _pre_shots else None
+                        _cur = _SHOT_LAST.get(_scope)
+                        if _pre is not None and _cur is not None and _scope:
+                            _diff = _img_mean_diff(_pre["sig"], _cur["sig"])
+                            if _diff >= _SHOT_DIFF_TH:
+                                verify_note = (
+                                    f"\n[验证 confirmed] 界面已变化（像素差 {_diff:.2f}）"
+                                )
+                            elif _diff >= 0.3:
+                                verify_note = (
+                                    f"\n[验证 partial] 界面细微变化（像素差 {_diff:.2f}）——结合上下文判断是否生效"
+                                )
+                            else:
+                                verify_note = (
+                                    f"\n[验证 suspected_noop] 界面几乎未变（像素差 {_diff:.2f}）——"
+                                    "操作可能未生效，请重新观察界面（read_controls/probe/读图），勿盲目重试"
+                                )
+                        else:
+                            verify_note = "\n[验证 unverifiable] 无操作前同范围截图可比对，请自行确认效果"
+                    except Exception:  # noqa: BLE001 — 差分失败退化为原行为
+                        verify_note = ""
                     obs = self._ok(
-                        obs.output + f"\n[verify_screenshot] {first_line}",
+                        obs.output + f"\n[verify_screenshot] {first_line}{verify_note}",
                         {**(obs.metadata or {}), **(shot.metadata or {})},
                     )
             except Exception:  # noqa: BLE001 — 附带截图失败不影响主操作结果
@@ -1199,6 +1685,18 @@ class DesktopTool(ToolDefinition):
         w = _find_wrapper(title or "", title_re, index, timeout=kw.get("timeout", 5) or 5, process=kw.get("process", ""))
         if w is None:
             return self._err(ERROR_NOT_FOUND, f"未找到窗口: {title or '(空标题)'}")
+        # ★ 2026-09-15：控件树缓存命中则直接复用（省掉整棵树的跨进程遍历与排序）。
+        # 过滤条件不同 → 结果不同，故一并进缓存键；force_refresh 可强制取最新。
+        _hwnd = int(getattr(w, "handle", 0) or 0)
+        _ck = (_hwnd, int(depth or 0), str(control or ""), str(control_type or "").lower())
+        _fp = _win_light_fingerprint(_hwnd)
+        if not kw.get("force_refresh"):
+            _hit = _uia_tree_get(_ck, _fp)
+            if _hit is not None:
+                return self._ok(
+                    f"窗口 \"{w.window_text()}\" 控件 {len(_hit)} 个（复用 2.5s 内的结构缓存，"
+                    f"需要最新请传 force_refresh=true）:\n" + "\n".join(_hit)
+                )
         try:
             ctrls = w.descendants(depth=depth) if depth and depth > 0 else w.descendants()
         except Exception as e:  # noqa: BLE001
@@ -1212,8 +1710,11 @@ class DesktopTool(ToolDefinition):
                 return _prio.get((c.element_info.control_type or "").lower(), 2)
             except Exception:  # noqa: BLE001
                 return 2
-        ctrls = sorted(ctrls, key=_key)
         lines = []
+        # ★ 2026-09-15：先按过滤条件筛出候选，**再**按交互价值排序取前 N。
+        # 原实现对全量控件排序后才过滤取前 N —— 白排了大半棵树（UIA 取属性是
+        # 跨进程调用，排序时的每次 key 计算都要过 COM）。
+        _cands = []
         for c in ctrls:
             try:
                 ctype = c.element_info.control_type or ""
@@ -1223,12 +1724,304 @@ class DesktopTool(ToolDefinition):
                 continue
             if control and control not in (c.window_text() or ""):
                 continue
+            _cands.append((_key(c), c))
+        _cands.sort(key=lambda x: x[0])
+        for _k, c in _cands:
             lines.append(_ctrl_line(c, with_center=True))
             if len(lines) >= _MAX_CONTROLS:
                 lines.append(f"...（超过 {_MAX_CONTROLS} 个控件，已截断；可用 control/control_type/depth 过滤）")
                 break
+        _uia_tree_put(_ck, _fp, lines)
         return self._ok(
             f"窗口 \"{w.window_text()}\" 控件 {len(lines)} 个:\n" + ("\n".join(lines) or "（无匹配控件）")
+        )
+
+    async def _locate_point(self, find: str, kwargs: dict) -> tuple[int, int, Observation | None]:
+        """find= 定位公共实现：截图→VL→图片坐标→屏幕坐标（含 scale/偏移换算）.
+
+        返回 (px, py, None) 成功；(-1, -1, err) 失败——err 已是可直接回传的失败
+        Observation（未配置视觉模型/截图失败/VL 失败/未找到/坐标越界防幻觉）。
+        """
+        try:
+            from scout.tools.builtin.vision import _call_vision, get_vl_config, resolve_mode
+        except Exception as e:  # noqa: BLE001
+            return -1, -1, self._err(ERROR_INTERNAL, f"vision 模块不可用: {e}")
+        api_key, base_url, model, cfg_proxy = get_vl_config()
+        mode = resolve_mode(cfg_proxy) if cfg_proxy is not None else ("vl" if api_key and model else "none")
+        if mode != "vl" or not api_key:
+            return -1, -1, self._err(
+                ERROR_INVALID_ARGS,
+                "find/locate 定位需要已配置视觉模型（vision_model）。"
+                "未配置前请改用 read_controls（T1/T2 应用）或 rel_x/rel_y 固定布局坐标。",
+            )
+        shot = await self._do_screenshot(**kwargs)
+        if not shot.success:
+            return -1, -1, shot
+        shot_path = str((shot.metadata or {}).get("path") or "")
+        meta = _load_shot_meta(shot_path) or {}
+        obs = await _call_vision(
+            api_key, base_url, model, shot_path, _LOCATE_PROMPT.format(target=find)
+        )
+        if not obs.success:
+            # ★ 2026-09-11 失败统一出口：兜底链（UIA→OCR）→ VL 强化重试（1.0原图/粗→细）
+            return await self._locate_failed_path(
+                find, kwargs, shot_path, meta,
+                self._err(ERROR_INTERNAL, f"VL 定位调用失败: {obs.output[:300]}"),
+            )
+        parsed = _parse_locate_answer(obs.output)
+        if parsed is None:
+            return await self._locate_failed_path(
+                find, kwargs, shot_path, meta,
+                self._err(
+                    ERROR_NOT_FOUND,
+                    f"VL 未能定位目标 {find!r}（回答: {obs.output[:200]}）。"
+                    "可换更具体的描述重试，或改用 read_controls / rel_x/rel_y / screenshot+vision。",
+                ),
+            )
+        ix, iy = parsed
+        scale = float(meta.get("scale") or 1.0) or 1.0
+        sw, sh = int(meta.get("shot_w") or 0), int(meta.get("shot_h") or 0)
+        if sw and sh and not (0 <= ix <= sw and 0 <= iy <= sh):
+            return await self._locate_failed_path(
+                find, kwargs, shot_path, meta,
+                self._err(
+                    ERROR_NOT_FOUND,
+                    f"VL 返回坐标 ({ix},{iy}) 超出截图范围 {sw}x{sh}，视为定位失败（防幻觉护栏）。",
+                ),
+            )
+        px = int(meta.get("win_left", 0) or 0) + int(ix / scale + 0.5)
+        py = int(meta.get("win_top", 0) or 0) + int(iy / scale + 0.5)
+        return px, py, None
+
+    def _ocr_fallback_locate(self, find: str, shot_path: str, meta: dict) -> tuple[int, int, str] | None:
+        """OCR 文本锚定兜底：在截图上按文字框定位目标中心（T3 自绘应用）.
+
+        UIA/win32 树为空的纯自绘应用（微信 4.x、腾讯会议等），按钮本质是
+        文字标签——OCR 找到文字框中心即命中，确定性远高于 VL 像素定位。
+        依赖 RapidOCR（动态加载，环境无依赖返回 None 不报错）。
+        """
+        engine = _get_ocr_engine()
+        if engine is None or not shot_path:
+            return None
+        needles = _extract_locate_needles(find)
+        if not needles:
+            return None
+        try:
+            result, _ = engine(shot_path)
+        except Exception:  # noqa: BLE001
+            return None
+        if not result:
+            return None
+        scale = float(meta.get("scale") or 1.0) or 1.0
+        win_left = int(meta.get("win_left", 0) or 0)
+        win_top = int(meta.get("win_top", 0) or 0)
+        for needle in needles:
+            for item in result:
+                # RapidOCR 输出: [box(4点), text, score]
+                try:
+                    box, text = item[0], str(item[1] or "").strip()
+                except Exception:  # noqa: BLE001
+                    continue
+                if len(text) < 2:
+                    continue
+                if needle in text or text in needle:
+                    xs = [p[0] for p in box]
+                    ys = [p[1] for p in box]
+                    cx = sum(xs) / len(xs)
+                    cy = sum(ys) / len(ys)
+                    px = win_left + int(cx / scale + 0.5)
+                    py = win_top + int(cy / scale + 0.5)
+                    logger.info("OCR 兜底定位 %r → 文本 %r @(%d,%d)",
+                                find, text[:20], px, py)
+                    return px, py, text[:40]
+        return None
+
+    def _fallback_locate(self, find: str, kwargs: dict, shot_path: str, meta: dict) -> tuple[int, int, str] | None:
+        """定位兜底链（2026-09-10）：UIA 控件树按名 → OCR 文本锚定."""
+        fb = self._uia_fallback_locate(find, kwargs)
+        if fb:
+            return fb
+        return self._ocr_fallback_locate(find, shot_path, meta)
+
+    async def _vl_enhanced_retries(self, find: str, kwargs: dict) -> tuple[int, int] | None:
+        """VL 强化重试链（2026-09-11，确定性兜底也失败后的 VL 侧最后手段）.
+
+        ① scale=1.0 原图重试：默认 0.5 降采样会丢失小目标（小图标/小按钮），
+           原图重试一次显著提升小目标命中率；
+        ② 粗→细两段：先问"目标在哪个区域"（百分比框）→ 裁剪局部 → 精确定位。
+           弱 VL 模型在局部小图上的定位成功率远高于全图直答。
+        """
+        try:
+            from scout.tools.builtin.vision import _call_vision, get_vl_config, resolve_mode
+
+            api_key, base_url, model, cfg_proxy = get_vl_config()
+            mode = resolve_mode(cfg_proxy) if cfg_proxy is not None else ("vl" if api_key and model else "none")
+            if mode != "vl" or not api_key:
+                return None
+
+            # ① scale=1.0 原图重试
+            shot = await self._do_screenshot(**{**kwargs, "scale": 1.0, "force": "true"})
+            sp = str((shot.metadata or {}).get("path") or "") if shot.success else ""
+            if sp:
+                meta = _load_shot_meta(sp) or {}
+                obs = await _call_vision(api_key, base_url, model, sp, _LOCATE_PROMPT.format(target=find))
+                if obs.success:
+                    parsed = _parse_locate_answer(obs.output)
+                    if parsed:
+                        ix, iy = parsed
+                        sw, sh = int(meta.get("shot_w") or 0), int(meta.get("shot_h") or 0)
+                        if not sw or (0 <= ix <= sw and 0 <= iy <= sh):
+                            px = int(meta.get("win_left", 0) or 0) + ix  # scale=1.0
+                            py = int(meta.get("win_top", 0) or 0) + iy
+                            logger.info("VL scale=1.0 重试命中 %r @(%d,%d)", find, px, py)
+                            return px, py
+
+                # ② 粗→细（基于 1.0 原图）
+                coarse = await _call_vision(api_key, base_url, model, sp, _COARSE_PROMPT.format(target=find))
+                if coarse.success:
+                    region = _parse_coarse_answer(coarse.output)
+                    if region:
+                        cropped = _crop_by_region(Path(sp), region)
+                        if cropped:
+                            obs2 = await _call_vision(
+                                api_key, base_url, model, str(cropped), _LOCATE_PROMPT.format(target=find)
+                            )
+                            if obs2.success:
+                                p2 = _parse_locate_answer(obs2.output)
+                                if p2:
+                                    ix, iy = p2
+                                    from PIL import Image
+
+                                    cw, ch = Image.open(cropped).size
+                                    if 0 <= ix <= cw and 0 <= iy <= ch:
+                                        # 裁剪图内坐标 → 原截图坐标 → 屏幕坐标（scale=1.0）
+                                        full = Image.open(sp).size
+                                        off_x = int(region[0] * full[0])
+                                        off_y = int(region[1] * full[1])
+                                        px = int(meta.get("win_left", 0) or 0) + off_x + ix
+                                        py = int(meta.get("win_top", 0) or 0) + off_y + iy
+                                        logger.info("VL 粗→细命中 %r @(%d,%d)", find, px, py)
+                                        return px, py
+            return None
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _locate_failed_path(
+        self, find: str, kwargs: dict, shot_path: str, meta: dict, err: Observation
+    ) -> tuple[int, int, Observation | None]:
+        """定位失败统一出口（2026-09-11）：兜底链 → VL 强化重试 → 原错误."""
+        fb = self._fallback_locate(find, kwargs, shot_path, meta)
+        if fb:
+            return fb[0], fb[1], None
+        retry = await self._vl_enhanced_retries(find, kwargs)
+        if retry:
+            return retry[0], retry[1], None
+        return -1, -1, err
+
+    def _uia_fallback_locate(self, find: str, kwargs: dict) -> tuple[int, int, str] | None:
+        """VL 定位失败后的控件树兜底：按目标关键词匹配控件名，返回屏幕中心坐标.
+
+        ★ 2026-09-10：弱 VL 模型（空返回/拒答/坐标幻觉）场景下，多数应用的
+        UIA/win32 控件树仍可用（腾讯会议实测 UIA 树完整）。"预定会议按钮"这类
+        文本目标按名命中控件中心，比像素定位可靠且零成本。返回 (x, y, 控件名)
+        或 None（无命中/窗口找不到）。
+        """
+        needles = _extract_locate_needles(find)
+        if not needles:
+            return None
+        # ★ 2026-09-11 防护：无窗口定位上下文（title/process 均空）时不做
+        # 控件树兜底——_find_wrapper 会抓任意窗口并遍历其全部控件树
+        # （复杂窗口数千控件、秒级耗时），且"随便一个窗口"上的命中大概率
+        # 不是目标窗口，坐标反而误导。此场景交由 OCR/VL 兜底。
+        if not (kwargs.get("title") or "").strip() and not (kwargs.get("process") or "").strip():
+            return None
+        try:
+            w = _find_wrapper(
+                kwargs.get("title", ""), kwargs.get("title_re", False),
+                kwargs.get("index", 0), timeout=0.0, process=kwargs.get("process", ""),
+            )
+            if w is None:
+                return None
+            for needle in needles:
+                try:
+                    ctrls = w.descendants()
+                except Exception:  # noqa: BLE001
+                    return None
+                _interactive = (
+                    "button", "edit", "listitem", "menuitem", "tabitem",
+                    "checkbox", "radiobutton", "combobox", "hyperlink",
+                )
+
+                def _prio(c) -> int:
+                    try:
+                        ct = (c.element_info.control_type or "").lower()
+                        return 0 if ct in _interactive else 1
+                    except Exception:  # noqa: BLE001
+                        return 1
+
+                best = None
+                for c in sorted(ctrls, key=_prio):
+                    try:
+                        text = (c.window_text() or "").strip()
+                        if not text or len(text) < 2:
+                            continue
+                        if (needle in text or text in needle) and _prio(c) == 0:
+                            best = c
+                            break  # 交互控件命中即用
+                        if best is None and _prio(c) == 1 and (needle in text or text in needle):
+                            best = c  # 记住非交互命中，继续找交互控件
+                    except Exception:  # noqa: BLE001
+                        continue
+                if best is not None:
+                    rect = best.rectangle()
+                    if rect.right > rect.left and rect.bottom > rect.top:
+                        cx = (rect.left + rect.right) // 2
+                        cy = (rect.top + rect.bottom) // 2
+                        if cx >= 0 and cy >= 0:
+                            logger.info("UIA 兜底定位 %r → 控件 %r @(%d,%d)",
+                                        find, (best.window_text() or "")[:30], cx, cy)
+                            return cx, cy, (best.window_text() or "")[:40]
+            return None
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _do_locate(self, find: str = "", **kw) -> Observation:
+        """自然语言定位：返回目标屏幕坐标与命中的 UIA 控件（不点击）.
+
+        与 click find= 的区别：locate 只读（拿到坐标后自行决策 click/click_control），
+        click find= 一步到位。两者共用 _locate_point（截图→VL→坐标换算）。
+        """
+        if not find:
+            return self._err(ERROR_INVALID_ARGS, "缺少 find 参数（目标描述，如 '红色提交按钮'）")
+        px, py, err = await self._locate_point(find.strip(), kw)
+        if err is not None:
+            return err
+        # 吸附预览：给出命中的 UIA 控件（T1 应用可直接 click_control 免坐标）
+        snap_line = ""
+        ctrl_name = ""
+        cx, cy = px, py
+        try:
+            w = _find_wrapper(
+                kw.get("title", ""), kw.get("title_re", False),
+                kw.get("index", 0), timeout=0.0, process=kw.get("process", ""),
+            )
+            if w is not None:
+                sx, sy, hit = self._apply_snap(w, "true", px, py)
+                if hit is not None:
+                    cx, cy = sx, sy
+                    ctrl_name = (hit.window_text() or "")[:60]
+                    snap_line = f"\nsnap 吸附: {hit.element_info.control_type or 'Control'} {ctrl_name!r} center=({sx},{sy}) → 建议 click_control"
+        except Exception:  # noqa: BLE001 — 吸附预览失败不影响坐标返回
+            pass
+        meta = {
+            "x": px, "y": py, "snap_x": cx, "snap_y": cy,
+            "control": ctrl_name,
+        }
+        return self._ok(
+            f"定位成功: {find!r} → 屏幕坐标 ({px},{py}){snap_line}\n"
+            f"下一步: click action 用 x={px} y={py}（snap 默认开启会自动吸附控件中心），"
+            "或按上面建议 click_control；确认落点可加 verify_screenshot=true。",
+            meta,
         )
 
     async def _do_screenshot(
@@ -1236,6 +2029,7 @@ class DesktopTool(ToolDefinition):
         window_only: bool = False, scale: float = 0.0, **kw,
     ) -> Observation:
         _SHOT_DIR.mkdir(parents=True, exist_ok=True)
+        _fs_warn = ""  # 全屏分支的坐标/范围警告（多显示器/DPI 自检）
         # 文件名带毫秒：防止同秒内多次截图（screenshot 与 vision 并行/verify 附带截图）
         # 互相覆盖 png/meta，造成坐标错配
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
@@ -1260,23 +2054,66 @@ class DesktopTool(ToolDefinition):
         else:
             from PIL import ImageGrab
 
+            # ★ 2026-09-11 多显示器 origin 修复：ImageGrab.grab(all_screens=True)
+            # 的图内 (0,0) = **虚拟屏左上角**（副屏在主屏左/上方时是负坐标），
+            # 此前 meta 一律写 win_left=0 → 副屏目标坐标换算整体错位。
+            # 记录虚拟屏 origin，img= 换算自动正确；同时自检尺寸防 DPI 虚拟化。
+            _fs_origin = (0, 0)
+            _fs_warn = ""
+            try:
+                import ctypes
+
+                _u32 = ctypes.windll.user32
+                _vs_l, _vs_t = _u32.GetSystemMetrics(76), _u32.GetSystemMetrics(77)
+                _vs_w, _vs_h = _u32.GetSystemMetrics(78), _u32.GetSystemMetrics(79)
+                _fs_origin = (_vs_l, _vs_t)
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 img = ImageGrab.grab(all_screens=True)
+                # 自检：截图尺寸应等于虚拟屏物理尺寸；不符 = DPI 虚拟化（进程
+                # 未成功声明感知）或混合 DPI 多屏拼接异常（PIL 已知问题）。
+                try:
+                    if (_vs_w, _vs_h) and img.size != (_vs_w, _vs_h):
+                        # ★ 逐屏抓取拼接降级（混合 DPI 正确路径）：每屏独立
+                        # bbox 抓取按物理坐标拼画布，成功则替代整屏 DC 结果。
+                        patched = _grab_per_monitor((_vs_l, _vs_t, _vs_l + _vs_w, _vs_t + _vs_h))
+                        if patched is not None and patched.size == (_vs_w, _vs_h):
+                            img = patched
+                            _fs_warn = (
+                                "[多屏提示] 已用逐屏抓取拼接替代整屏截图"
+                                "（混合缩放多屏下整屏 DC 会拉伸副屏）。"
+                            )
+                            logger.info("全屏截图走逐屏拼接路径（all_screens 尺寸异常已修正）")
+                        else:
+                            _fs_warn = (
+                                f"[坐标警告] 全屏截图 {img.size[0]}x{img.size[1]} 与虚拟屏 "
+                                f"{_vs_w}x{_vs_h} 不一致（DPI 虚拟化或混合缩放拼接失败）——"
+                                "坐标换算可能错位！建议改用窗口截图（window_only=true）。"
+                            )
+                            logger.warning(_fs_warn)
+                except NameError:
+                    pass
             except OSError:
                 try:
                     img = ImageGrab.grab()
+                    _fs_origin = (0, 0)
+                    _fs_warn = "[范围提示] all_screens 失败，已降级仅截主屏——副屏内容不在本图中。"
                 except OSError:
                     return self._err(
                         ERROR_INTERNAL,
                         "全屏截图失败：本机屏幕 DC 被系统拦截（DLP/安全软件）。"
                         "请改用窗口截图：screenshot + process=<应用名> + window_only=true。",
                     )
+        scope = (
+            f"win:{w.handle}"
+            if (window_only or title or (kw.get("process") or "").strip())
+            else "fullscreen"
+        )
         # 空屏守卫（2026-09-04）：窗口未渲染完成时 PrintWindow 会返回近乎纯色的
         # 小图（实测 3131 字节整）——vision 读它只能得到空描述，误导 agent 决策。
         # 检测：PNG 编码体积异常小 + 图像色彩单一 → 重抓一次（多数情况第二次已渲染完）。
         try:
-            import io
-
             png_size = len(_img_to_png_bytes(img))
             w_px, h_px = img.size
             colors = len(img.convert("RGB").getcolors(maxcolors=256) or []) if (w_px * h_px) else 0
@@ -1287,6 +2124,32 @@ class DesktopTool(ToolDefinition):
                     img = retry
         except Exception:  # noqa: BLE001 — 守卫失败不影响正常截图流程
             pass
+        # ── 屏幕变化检测（2026-09-08）：与同范围上一张像素 diff，几乎未变化则短路 ──
+        global _SHOT_EXPECT_CHANGE
+        expect_change = _SHOT_EXPECT_CHANGE
+        _SHOT_EXPECT_CHANGE = False
+        force = str(kw.get("force", "")).lower() in ("1", "true", "yes")
+        warn_prefix = ""
+        if _SHOT_SKIP_ENABLED and not force:
+            last = _SHOT_LAST.get(scope)
+            if last and Path(last["path"]).exists():
+                try:
+                    diff = _img_mean_diff(last["sig"], _shot_signature(img))
+                except Exception:  # noqa: BLE001 — 对比失败按"已变化"处理
+                    diff = 255.0
+                if diff < _SHOT_DIFF_TH:
+                    if expect_change:
+                        warn_prefix = (
+                            f"[变化检测] 屏幕与上一张几乎一致（平均像素差 {diff:.2f}）——"
+                            "上一步操作可能未生效；请先用 read_controls/probe 确认，勿盲目重试。\n"
+                        )
+                    else:
+                        return self._ok(
+                            f"屏幕未变化（与上一张平均像素差 {diff:.2f}，已跳过重复截图）。\n"
+                            f"读屏请直接复用上一张: vision image={last['path']}\n"
+                            f"坐标仍有效，click 同样用 img={last['path']}；确需强制新截图加 force=true。",
+                            {"unchanged": True, "path": last["path"], "img": last["path"]},
+                        )
         # 降采样（默认 0.5：vision API 对 1888x1150 级大图单次推理实测 5~60s，
         # 减半后体积/推理时间约降 60-70%，按钮级定位精度不受影响）
         try:
@@ -1304,7 +2167,9 @@ class DesktopTool(ToolDefinition):
                 wr = w.rectangle()
                 win_left, win_top = wr.left, wr.top
             else:
-                win_left = win_top = 0
+                # ★ 2026-09-11：全屏截图 origin = 虚拟屏左上角（多显示器副屏
+                # 在左/上方时为负坐标），img= 坐标换算据此自动对齐副屏。
+                win_left, win_top = _fs_origin
             meta = {
                 "path": str(path),
                 "kind": "window" if is_window else "fullscreen",
@@ -1313,6 +2178,7 @@ class DesktopTool(ToolDefinition):
                 "shot_h": img.size[1],
                 "win_left": int(win_left),
                 "win_top": int(win_top),
+                "scope": scope,  # ★ 2026-09-11 四态回读验证：操作前后同范围差分定位用
                 "created": datetime.now().isoformat(timespec="seconds"),
             }
             path.with_suffix(".meta.json").write_text(
@@ -1321,12 +2187,19 @@ class DesktopTool(ToolDefinition):
         except Exception:  # noqa: BLE001 — meta 缺失不影响截图，点击退化为原坐标
             logger.debug("截图 meta 写入失败: %s", path, exc_info=True)
         img.save(str(path))
+        if _SHOT_SKIP_ENABLED:
+            try:
+                if len(_SHOT_LAST) >= _SHOT_LAST_MAX and scope not in _SHOT_LAST:
+                    _SHOT_LAST.pop(next(iter(_SHOT_LAST)))
+                _SHOT_LAST[scope] = {"sig": _shot_signature(img), "path": str(path)}
+            except Exception:  # noqa: BLE001
+                pass
         note = (
             f"（已降采样 scale={s:.2f}，shot={img.size[0]}x{img.size[1]}）"
             if 0 < s < 1.0 else "（1:1 原始像素）"
         )
         return self._ok(
-            f"截图已保存: {path}（{img.size[0]}x{img.size[1]}）{note}\n"
+            f"{_fs_warn}{warn_prefix}截图已保存: {path}（{img.size[0]}x{img.size[1]}）{note}\n"
             f"坐标用法: 让 vision 读本图返回目标像素坐标后，把坐标和本截图路径一起传给 "
             f"desktop click 的 img=<此 path>（x/y 为该截图内坐标），工具会自动换算为屏幕坐标，"
             f"切勿手算 scale。",
@@ -1336,16 +2209,70 @@ class DesktopTool(ToolDefinition):
                 "scale": s if 0 < s <= 1.0 else 1.0,
                 "width": img.size[0],
                 "height": img.size[1],
+                # ★ 2026-09-11 四态回读验证：execute() 据此定位操作前基线签名
+                "scope": scope,
             },
         )
 
     async def _do_wait(
         self, title: str = "", title_re: bool = False, state: str = "appear",
-        timeout: int = 10, **kw,
+        timeout: int = 10, until_control: str = "", until_title_contains: str = "",
+        **kw,
     ) -> Observation:
-        if not title and not (kw.get("process") or "").strip():
-            return self._err(ERROR_INVALID_ARGS, "缺少 title 或 process 参数")
+        process = kw.get("process", "")
         t0 = time.time()
+        # ── 事件等待（2026-09-08）：文本级轮询代替"截图看加载"──
+        # UIA 查询毫秒级、零 token；截图+vision 一轮实测 16-21s + 图像 token。
+        if until_control:
+            if not title and not process:
+                return self._err(
+                    ERROR_INVALID_ARGS, "until_control 需要配合 title 或 process 定位目标窗口"
+                )
+            deadline = t0 + max(1, timeout)
+            sample: list[str] = []
+            while True:
+                w = _find_wrapper(title, title_re, timeout=0.0, process=process)
+                if w is not None:
+                    hit, sample = _poll_control_hit(w, until_control)
+                    if hit:
+                        return self._ok(
+                            f"控件已出现: {sample[0]!r}（窗口 {w.window_text()!r}，"
+                            f"耗时 {time.time()-t0:.1f}s）"
+                        )
+                if time.time() >= deadline:
+                    break
+                time.sleep(0.5)
+            hint = (
+                f"窗口内控件文本样例: {sample[:8]}"
+                if sample
+                else "未读到任何控件（可能是自绘 UI）——改用 screenshot+vision 或 rel 坐标"
+            )
+            return self._err(
+                ERROR_TIMEOUT,
+                f"等待超时（{timeout}s），未出现文本含 {until_control!r} 的控件。{hint}",
+            )
+        if until_title_contains:
+            deadline = t0 + max(1, timeout)
+            needle = until_title_contains.lower()
+            while True:
+                try:
+                    for w in _uia_desktop().windows():
+                        try:
+                            t = w.window_text() or ""
+                        except Exception:  # noqa: BLE001
+                            continue
+                        if needle in t.lower():
+                            return self._ok(f"窗口已出现: {t!r}（耗时 {time.time()-t0:.1f}s）")
+                except Exception:  # noqa: BLE001 — 枚举失败下一轮重试
+                    pass
+                if time.time() >= deadline:
+                    break
+                time.sleep(0.5)
+            return self._err(
+                ERROR_TIMEOUT, f"等待超时（{timeout}s），无窗口标题包含 {until_title_contains!r}"
+            )
+        if not title and not process:
+            return self._err(ERROR_INVALID_ARGS, "缺少 title 或 process 参数")
         if state == "vanish":
             while time.time() - t0 < timeout:
                 if _find_wrapper(title, title_re, timeout=0.0, process=kw.get("process", "")) is None:
@@ -1400,18 +2327,47 @@ class DesktopTool(ToolDefinition):
         resolved = self._resolve_target(target)
         if resolved is not None:
             os.startfile(resolved)  # noqa: S606 — 受控打开，非 shell 执行
-            return self._ok(f"已启动: {resolved}")
+            return await self._launch_result(resolved, base)
         # 解析不到（Store 应用不注册 App Paths）→ 回退 os.startfile 原样启动，
         # 由 Windows Shell 解析（支持 Store 别名 notepad/mspaint、PATH、文件关联）。
         try:
             os.startfile(target)  # noqa: S606
-            return self._ok(f"已启动: {target}（由 Windows Shell 解析）")
+            return await self._launch_result(target, base, note="（由 Windows Shell 解析）")
         except OSError as e:
             return self._err(
                 ERROR_NOT_FOUND,
                 f"无法启动 {target!r}: {e}。请提供完整路径，"
                 "或先用 shell 的 where/注册表查询安装位置。",
             )
+
+    async def _launch_result(self, shown: str, base: str, note: str = "") -> Observation:
+        """启动结果：内联等待窗口出现，避免模型再补一次 wait/activate 往返.
+
+        ★ 2026-09-14：此前 launch 立即返回「已启动」且不做任何验证 → 常见
+        「窗口尚未就绪就执行下一步」→ 模型补 wait/activate/重试，GUI 任务步数
+        成倍放大。现在启动后轮询窗口（最多 _LAUNCH_WAIT_SECONDS）：
+        - 检测到窗口 → 直接给出标题（可立即 click/type，无需再 wait）
+        - 未检测到   → 明确告知可能仍在加载（而非假装成功，让模型知道该等）
+        """
+        if base:
+            deadline = time.monotonic() + _LAUNCH_WAIT_SECONDS
+            while time.monotonic() < deadline:
+                try:
+                    w = _find_wrapper(process=base)
+                except Exception:  # noqa: BLE001
+                    w = None
+                if w is not None:
+                    try:
+                        return self._ok(f"已启动{note}: {shown}；窗口已就绪: \"{w.window_text()}\"")
+                    except Exception:  # noqa: BLE001
+                        return self._ok(f"已启动{note}: {shown}；窗口已就绪")
+                await asyncio.sleep(0.4)
+            return self._ok(
+                f"已启动{note}: {shown}；{_LAUNCH_WAIT_SECONDS:.0f}s 内未检测到窗口"
+                "（可能仍在加载或已托盘化）——请用 wait process 等待，"
+                "或激活后再操作；若长时间无窗口，改走其他路径（如对应网页版）。"
+            )
+        return self._ok(f"已启动{note}: {shown}")
 
     @staticmethod
     def _resolve_target(target: str) -> str | None:
@@ -1479,7 +2435,9 @@ class DesktopTool(ToolDefinition):
             pass
         try:
             target.click_input()
-            return self._ok(f"已点击控件: {_ctrl_line(target)}")
+            time.sleep(0.08)
+            fs = _focus_summary()
+            return self._ok(f"已点击控件: {_ctrl_line(target)}" + (f"；{fs}" if fs else ""))
         except Exception as e:  # noqa: BLE001
             # 兜底：控件中心物理坐标点击（自绘 UI/无 Click 模式时 click_input 会失败）
             try:
@@ -1488,9 +2446,11 @@ class DesktopTool(ToolDefinition):
                 r = target.rectangle()
                 cx, cy = r.left + r.width() // 2, r.top + r.height() // 2
                 mouse.click(button="left", coords=(cx, cy))
+                fs = _focus_summary()
                 return self._ok(
                     f"已点击控件（坐标兜底 {cx},{cy}）: {_ctrl_line(target)}；"
                     f"click_input 失败原因: {type(e).__name__}"
+                    + (f"；{fs}" if fs else "")
                 )
             except Exception as e2:  # noqa: BLE001
                 return self._err(
@@ -1535,7 +2495,8 @@ class DesktopTool(ToolDefinition):
             from pywinauto.keyboard import send_keys
 
             send_keys(text, with_spaces=True)
-        return self._ok(f"已输入文本到 {_ctrl_line(target)}")
+        fs = _focus_summary()
+        return self._ok(f"已输入文本到 {_ctrl_line(target)}" + (f"；{fs}" if fs else ""))
 
     async def _do_type_text(self, text: str = "", paste: bool = False, **kw) -> Observation:
         """向当前焦点控件输入文本.
@@ -1568,6 +2529,70 @@ class DesktopTool(ToolDefinition):
         send_keys(keys)
         return self._ok(f"已发送按键: {keys}")
 
+    async def _do_set_date(self, date: str = "", control: str = "", **kw) -> Observation:
+        """分段日期控件专用设置（2026-09-10，腾讯会议 QDateEdit 实测教训）.
+
+        QDateEdit / SysDateTimePick32 等分段控件：整串输入会被逐字符解析到
+        各段导致日期错乱（实测 "2026/9/11" 被改成 2/2、4/2）。本 action 按
+        年→月→日 逐段键入纯数字（段满自动跳段），从根上绕开该问题。
+        """
+        if not date:
+            return self._err(ERROR_INVALID_ARGS, "缺少 date 参数（如 2026-09-11 / 2026/9/11 / 2026年9月11日）")
+        m = re.match(r"^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?$", str(date).strip())
+        if not m:
+            return self._err(ERROR_INVALID_ARGS, f"date 无法解析: {date!r}（支持 2026-09-11 / 2026/9/11 / 2026年9月11日）")
+        y, mo, d = m.group(1), f"{int(m.group(2)):02d}", f"{int(m.group(3)):02d}"
+
+        w = _find_wrapper(
+            kw.get("title", ""), kw.get("title_re", False),
+            kw.get("index", 0), timeout=kw.get("timeout", 5) or 5,
+            process=kw.get("process", ""),
+        )
+        if w is None:
+            return self._err(ERROR_NOT_FOUND, f"未找到窗口: {kw.get('title') or kw.get('process') or '(空)'}")
+
+        # 定位日期控件：control 名优先 > 类名特征
+        _date_classes = ("qdateedit", "sysdatetimepick32", "datetimepicker",
+                         "dateedit", "radsdateedit", "calendar")
+        ctrl = None
+        try:
+            ctrls = w.descendants()
+        except Exception:  # noqa: BLE001
+            ctrls = []
+        for c in ctrls:
+            try:
+                if control and control in (c.window_text() or ""):
+                    ctrl = c
+                    break
+                if not control:
+                    cn = (getattr(c.element_info, "class_name", "") or "").lower()
+                    if any(k in cn for k in _date_classes):
+                        ctrl = c
+                        break
+            except Exception:  # noqa: BLE001
+                continue
+        if ctrl is None:
+            hint = "或传 control= 按名定位" if not control else ""
+            return self._err(
+                ERROR_NOT_FOUND,
+                f"未找到日期控件（QDateEdit/DateTimePicker 类）{hint}。"
+                "备选路径：click 控件聚焦后用 type_text 逐段输入纯数字（年 4 位、月日各 2 位）。",
+            )
+        try:
+            ctrl.set_focus()
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.15)
+        from pywinauto.keyboard import send_keys as _keys
+
+        for seg in (y, mo, d):
+            _keys(seg, with_spaces=True)
+            time.sleep(0.2)
+        return self._ok(
+            f"已向日期控件分段键入 {y}-{mo}-{d}（年→月→日逐段，段满自动跳段）。"
+            "注意：部分控件段序可能不同（美式为 月/日/年），完成后建议截图或 read_controls 确认实际值。"
+        )
+
     def _click_point_with_win(self, kwargs: dict):
         """解析点击物理点并附带目标窗口；返回 (px, py, w|None).
 
@@ -1584,19 +2609,38 @@ class DesktopTool(ToolDefinition):
             # img=<截图 path>：视觉读数是截图内坐标（截图可能被降采样），
             # 换算逻辑放代码里自动完成（读同名 .meta.json），杜绝 LLM 手算 ×2 的
             # 系统性偏移；坐标超出该截图范围则视为已是屏幕坐标，原样使用。
+            # ★ 2026-09-08：screen=true 显式声明"这是屏幕坐标"跳过换算 +
+            #   回执注明换算过程 —— 全屏+0.5 降采样截图下，左上象限的屏幕坐标
+            #   会落入截图尺寸范围被误 ×2（启发式歧义），透明化让模型可自查纠正。
+            self._img_conv_note = ""
+            _as_screen = str(kwargs.get("screen", "")).lower() in ("1", "true", "yes")
             meta = _load_shot_meta(str(kwargs.get("img") or ""))
-            if meta is not None and 0 <= px <= meta.get("shot_w", -1) and 0 <= py <= meta.get("shot_h", -1):
+            if (
+                not _as_screen
+                and meta is not None
+                and 0 <= px <= meta.get("shot_w", -1) and 0 <= py <= meta.get("shot_h", -1)
+            ):
                 scale = float(meta.get("scale") or 1.0) or 1.0
+                ox, oy = px, py
                 px = int(meta.get("win_left", 0) or 0) + int(float(px) / scale + 0.5)
                 py = int(meta.get("win_top", 0) or 0) + int(float(py) / scale + 0.5)
+                self._img_conv_note = (
+                    f"img换算: 截图坐标({ox},{oy})→屏幕({px},{py})（scale={scale:g}，"
+                    "若你给的本就是屏幕坐标请改传 screen=true 重试）"
+                )
             w = None
             if str(kwargs.get("snap", "true")).lower() not in ("0", "false", "no"):
                 try:
-                    w = _find_wrapper(
-                        kwargs.get("title", ""), kwargs.get("title_re", False),
-                        kwargs.get("index", 0), timeout=0.0,
-                        process=kwargs.get("process", ""),
-                    )
+                    if kwargs.get("title") or kwargs.get("process"):
+                        w = _find_wrapper(
+                            kwargs.get("title", ""), kwargs.get("title_re", False),
+                            kwargs.get("index", 0), timeout=0.0,
+                            process=kwargs.get("process", ""),
+                        )
+                    else:
+                        # 2026-09-08：无窗口上下文 → 取包含该点的最小可见顶层
+                        # 窗口（此前取"第一个可见窗口"会吸到无关窗口的控件）
+                        w = _window_at_point(px, py)
                 except Exception:  # noqa: BLE001 — 找不到窗口不影响纯坐标点击
                     w = None
             return px, py, w
@@ -1611,8 +2655,11 @@ class DesktopTool(ToolDefinition):
         )
         if w is None:
             return -1, -1, None
-        # 强制前台：pywinauto set_focus 对微信等自绘窗口不可靠，强行抢前台
-        _force_foreground(w.handle)
+        # 强制前台：pywinauto set_focus 对微信等自绘窗口不可靠，强行抢前台。
+        # 2026-09-08 失败防护：前台化失败时坐标点击会落到该点最上层窗口
+        # （可能是 Scout 自己），后续 type/press_key 全打进错误应用 → 直接报错
+        if not _force_foreground(w.handle):
+            return -1, -1, None
         r = w.rectangle()
         return (
             r.left + int(float(rx) * r.width()),
@@ -1675,6 +2722,8 @@ class DesktopTool(ToolDefinition):
         mouse.click(button="left", coords=(cx, cy))
         time.sleep(max(0.05, float(click_delay or 0.3)))
         parts = [f"({cx},{cy})"]
+        if getattr(self, "_img_conv_note", ""):
+            parts.append(self._img_conv_note)
         if hit is not None:
             parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
         fs = _focus_summary()
@@ -1707,10 +2756,22 @@ class DesktopTool(ToolDefinition):
         time.sleep(0.08)
         fs = _focus_summary()
         parts = [f"已左键点击 ({cx},{cy})"]
+        if getattr(self, "_img_conv_note", ""):
+            parts.append(self._img_conv_note)
         if hit is not None:
             parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
         if fs:
             parts.append(fs)
+        elif hit is None:
+            # ★ 2026-09-14：既未吸附到控件、焦点也无变化 → 很可能点在空白/自绘区，
+            # 或坐标换算有偏差。此前仍返回「已点击」的成功语义，模型无法察觉动作
+            # 未生效 → 反复点同一坐标直到看门狗介入（obs.success=True 也拦不住）。
+            # 此处给出明确的「未确认命中」提示与替代路径建议。
+            parts.append(
+                "⚠️ 未吸附到控件且焦点未变化——可能未命中可交互元素（点偏或点在空白）。"
+                "建议：改用 click control=<类名>，或 click find='目标描述'（VL 定位）；"
+                "自绘界面可先 screenshot + vision 确认坐标再点"
+            )
         return self._ok("；".join(parts))
 
     async def _do_double_click(self, x: int = -1, y: int = -1, **kw) -> Observation:
@@ -1721,9 +2782,13 @@ class DesktopTool(ToolDefinition):
 
         cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
         mouse.double_click(button="left", coords=(cx, cy))
+        time.sleep(0.08)
         parts = [f"已双击 ({cx},{cy})"]
         if hit is not None:
             parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
+        fs = _focus_summary()
+        if fs:
+            parts.append(fs)
         return self._ok("；".join(parts))
 
     async def _do_right_click(self, x: int = -1, y: int = -1, **kw) -> Observation:
@@ -1734,9 +2799,13 @@ class DesktopTool(ToolDefinition):
 
         cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
         mouse.right_click(coords=(cx, cy))
+        time.sleep(0.08)
         parts = [f"已右键点击 ({cx},{cy})"]
         if hit is not None:
             parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
+        fs = _focus_summary()
+        if fs:
+            parts.append(fs)
         return self._ok("；".join(parts))
 
     async def _do_scroll(
@@ -2023,11 +3092,15 @@ class DesktopTool(ToolDefinition):
         c = _hit_control(w, px, py)
         if c is not None:
             lines.append("[T1-UIA] 命中: " + _ctrl_line(c))
+            # 2026-09-08：吸附预告与 click 实际判定对齐 —— 此前 probe 直报命中
+            # 控件中心并承诺"click 会点这里"，但 click 走 _snap_control 多了
+            # 近整窗 0.6 面积剔除；同一坐标 probe 承诺的落点 click 并不会去
             try:
-                cr = c.rectangle()
-                cx = cr.left + (cr.right - cr.left) // 2
-                cy = cr.top + (cr.bottom - cr.top) // 2
-                lines.append(f"可吸附中心 snap=({cx},{cy}) — click 会点这里")
+                sx, sy, sc = _snap_control(w, px, py)
+                if sc is not None:
+                    lines.append(f"可吸附中心 snap=({sx},{sy}) — click 会点这里")
+                else:
+                    lines.append("命中控件近整窗（容器残留），click 不会吸附——将点击原始坐标")
             except Exception:  # noqa: BLE001
                 pass
             lines.append("策略: 控件名操作优先（click_control/type_control）；坐标点击用 rel + snap 吸附")
@@ -2116,4 +3189,8 @@ class DesktopTool(ToolDefinition):
 
 
 # 模块顶层注册（registry.discover 导入本模块时生效）
-ToolRegistry.register(DesktopTool())
+# ★ 2026-09-14 平台条件注册：非 Windows 不注册 desktop 工具（模型看不到），
+# 避免 builtin 工具发现链路在 Linux/macOS 上因 Win32 依赖异常。
+# _IS_WINDOWS 在模块顶部定义；import 本身惰性安全（pywinauto 全部函数内导入）。
+if _IS_WINDOWS:
+    ToolRegistry.register(DesktopTool())

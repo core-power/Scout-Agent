@@ -160,10 +160,21 @@ class ParallelDelegateTool(ToolDefinition):
             )
 
             try:
-                result = await asyncio.wait_for(
-                    sub_agent.run_conversation(prompt, sub_session),
-                    timeout=timeout,
+                # 2026-09-09：接线委派上下文（sub_report/shared_data 归属判定）。
+                # ContextVar 在每个 _bounded 协程内独立设置，并行子代理互不串扰。
+                from scout.multiagent.runtime import (
+                    reset_current_delegation,
+                    set_current_delegation,
                 )
+
+                _ctx_tok = set_current_delegation(delegation_id, _sub_name)
+                try:
+                    result = await asyncio.wait_for(
+                        sub_agent.run_conversation(prompt, sub_session),
+                        timeout=timeout,
+                    )
+                finally:
+                    reset_current_delegation(_ctx_tok)
                 return {
                     "label": label,
                     "success": True,
@@ -201,8 +212,16 @@ class ParallelDelegateTool(ToolDefinition):
         coros = [_bounded(i, t) for i, t in enumerate(tasks)]
         results = await asyncio.gather(*coros, return_exceptions=True)
 
+        # comm digest: mid-run sub_report messages across the batch (2026-09-07)
+        from scout.multiagent.broker import digest_reports
+        from scout.multiagent.runtime import get_broker
+
+        _digest = digest_reports(get_broker().drain(delegation_id))
+
         # 汇总结果
         output_parts = []
+        if _digest:
+            output_parts.append(_digest)
         success_count = 0
         for i, r in enumerate(results):
             if isinstance(r, Exception):

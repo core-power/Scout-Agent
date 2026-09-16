@@ -5,6 +5,7 @@
 import json
 import os
 import stat
+import sys
 import time
 
 import pytest
@@ -47,6 +48,10 @@ class TestHashFormat:
         assert auth_mod.verify_password("x", "pbkdf2$200000$", "salt") is False
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows 采用 ACL 权限模型，stat 不呈现 POSIX 权限位，0600 无法表示",
+)
 class TestFilePermissions:
     def test_credentials_0600(self, tmp_path):
         mgr = auth_mod.AuthManager()

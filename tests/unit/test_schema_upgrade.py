@@ -89,17 +89,17 @@ def test_register_migration_applies_once(conn):
 def test_unregistered_version_stops_progress(conn):
     """未注册的版本应停止推进（不标记），未来补录后自动续跑."""
     conn.executescript("CREATE TABLE IF NOT EXISTS traces (id INTEGER PRIMARY KEY);")
-    # 只注册到 v1，目标 v3 中存在 v2 缺口
-    assert run_migrations(conn, target=3) == 1
-    # 停在 v1，不标记 v2/v3
-    assert get_schema_version(conn) == 1
-    # 补录 v2 后再次运行，自动续跑 v2→v3（v3 仍缺则停在 v3 之前）
-    MIGRATIONS[2] = lambda c: None  # noqa: E731
+    # 当前已注册到 v2（2026-09-10 记忆来源归属），目标 v4 中存在 v3 缺口
+    assert run_migrations(conn, target=4) == SCHEMA_VERSION
+    # 停在 v2，不标记 v3/v4
+    assert get_schema_version(conn) == SCHEMA_VERSION
+    # 补录 v3 后再次运行，自动续跑 v3→v4（v4 仍缺则停在 v4 之前）
+    MIGRATIONS[SCHEMA_VERSION + 1] = lambda c: None  # noqa: E731
     try:
-        assert run_migrations(conn, target=3) == 1
-        assert get_schema_version(conn) == 2
+        assert run_migrations(conn, target=4) == 1
+        assert get_schema_version(conn) == SCHEMA_VERSION + 1
     finally:
-        MIGRATIONS.pop(2, None)
+        MIGRATIONS.pop(SCHEMA_VERSION + 1, None)
 
 
 def test_higher_user_version_not_downgraded(conn):

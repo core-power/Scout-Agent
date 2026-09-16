@@ -1,15 +1,11 @@
-"""图片分析工具 — 有专属视觉模型时走 VL API，否则本地 OCR 兜底.
+"""图片分析工具 — 通过多模态视觉模型（VL）分析图片.
 
-路由策略（2026-09-06 修订）：
-- resolve_mode() 决策: 显式配置了 vision_model（非空）→ "vl"，直接用该模型发
-  image_url 走 VL。
-  —— 2026-09-06 实测: qwen3.8-27b（主模型与 vision_model 同名配置）支持 image_url
-  多模态输入。此前把「vision_model == 主 model」一律判为"纯文本模型误填"→ 强制
-  降级本地 OCR，导致 agent 看不到画面、只能读文字，办公 GUI 任务空转烧 token。
-  现改为: 配了 vision_model 就尝试 VL，失败再由 "vl" 路径自动降级本地 OCR，
-  不损失可用性。
-- "vl" 路径失败（模型不支持图片 / 超时 / 4xx）→ 自动降级本地 OCR，保证有输出。
-- OCR 只能提取图中文字，无法描述画面；输出会明确标注该限制。
+路由策略（2026-09-07 简化）：
+- resolve_mode(): vision_model 非空 → "vl"；未配置 → "none"。
+- "none"（未配置视觉模型）→ 直接返回友好提示，不再走本地 OCR 兜底
+  （2026-09-07 决策：移除 RapidOCR/cv2 依赖，为项目减负约 160MB；
+  OCR 只能提取文字无法描述画面，且用户明确要求去掉该依赖）。
+- "vl" 失败（模型不支持图片/超时/4xx）→ 返回失败原因，由主模型决策。
 """
 
 from __future__ import annotations
@@ -17,9 +13,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import os
 import re
-import tempfile
 import time
 from pathlib import Path
 
@@ -29,79 +25,6 @@ from scout.core.annotations import ToolAnnotations
 from scout.core.types import Observation
 from scout.tools.base import ToolDefinition
 from scout.tools.registry import ToolRegistry
-
-# OCR 引擎惰性单例：仅在需要 OCR 时初始化（加载 onnx 模型较慢，避免拖慢启动）
-_OCR_ENGINE: object | None = None
-
-# ── 低对比度自动增强（2026-09-06）：浅色主题 GUI 截图灰字白底对比弱 ──
-# 微信/系统浅色界面里大量浅灰小字（~180 灰）落在白底（~248 白）上，VL/OCR 识别差。
-# 实测该工具面对多次"看不清文字/坐标不准"。对"浅背景(mean>180)"或"低动态范围"
-# 图做 CLAHE(L通道) + 对比度拉伸 + 轻度锐化，把灰字压深、边缘更锐。
-# 红线1：绝不改变图像尺寸（只改像素值），否则 desktop 的 scale/meta 坐标换算会错乱。
-# 红线2：深色背景(mean<100)一律不碰（避免把深色 UI 拉出噪声）。
-# 红线3：依赖缺失/读图失败 → 返回 None 原样发送，不影响可用性。
-_ENH_MEAN_LIGHT = 180.0   # 浅色背景：灰字白底，必增强
-_ENH_MEAN_DARK = 100.0    # 深色背景：白字黑底，不碰
-_ENH_SPREAD_MIN = 130.0   # 中间调：p2-p98 动态范围低于此值视为低对比
-_ENH_STD_MIN = 42.0       # 中间调：灰度标准差低于此值视为对比过弱
-
-
-def _needs_enhance(np, gray) -> bool:
-    """低对比度判定（接收 numpy 与灰度数组）. """
-    m = float(gray.mean())
-    s = float(gray.std())
-    if m > _ENH_MEAN_LIGHT:
-        return True
-    if m < _ENH_MEAN_DARK:
-        return False
-    lo, hi = np.percentile(gray, [2, 98])
-    return (hi - lo) < _ENH_SPREAD_MIN or s < _ENH_STD_MIN
-
-
-def _apply_enhance(img, np, cv2):
-    """增强链路：LAB L 通道 CLAHE → 逐通道对比度拉伸 → 轻度锐化（与 DPI 无关，不改尺寸）. """
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    l2 = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(l)
-    out = cv2.cvtColor(cv2.merge((l2, a, b)), cv2.COLOR_LAB2BGR)
-    chans = []
-    for c in cv2.split(out):
-        lo, hi = np.percentile(c, [1, 99])
-        if hi - lo < 1:
-            chans.append(c)
-            continue
-        chans.append(np.clip((c.astype(np.float32) - lo) * 255.0 / (hi - lo), 0, 255).astype(np.uint8))
-    out = cv2.merge(chans)
-    blur = cv2.GaussianBlur(out, (0, 0), 1.0)
-    return cv2.addWeighted(out, 1.4, blur, -0.4, 0)
-
-
-def _enhance_image(image: str) -> bytes | None:
-    """低对比度自动增强：低对比 → 返回增强后的 PNG bytes；无需增强/失败 → None.
-
-    注意：cv2.imread 在 Windows 上不支持含中文/特殊字符路径，统一用
-    np.fromfile + cv2.imdecode 读取以兜住中文路径。
-    """
-    try:
-        import numpy as np
-        import cv2
-    except ImportError:
-        return None
-    try:
-        data = np.fromfile(image, dtype=np.uint8)
-        if data.size == 0:
-            return None
-        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
-        if img is None:
-            return None
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        if not _needs_enhance(np, gray):
-            return None
-        out = _apply_enhance(img, np, cv2)
-        ok, buf = cv2.imencode(".png", out)
-        return bytes(buf) if ok else None
-    except Exception:  # noqa: BLE001 - 增强失败绝不应阻塞正常调用
-        return None
 
 
 async def _wait_for_file(image: str, attempts: int = 12, interval: float = 0.3) -> bool:
@@ -123,88 +46,114 @@ async def _wait_for_file(image: str, attempts: int = 12, interval: float = 0.3) 
 
 
 def resolve_mode(cfg) -> str:
-    """路由决策：返回 "vl"（视觉模型）或 "ocr"（本地识别）.
+    """路由决策：返回 "vl"（已配置视觉模型）或 "none"（未配置）.
 
-    规则（2026-09-06 修订）：
-    1. 无 API Key → OCR（本地识别不需要任何凭据）；
-    2. vision_model 非空 → VL。注意：即使 vision_model 与主 model 相同，也可能是
-       同一个多模态模型（实测 qwen3.8-27b 支持 image_url 输入），一律尝试 VL；
-       VL 失败（不支持图片/超时/4xx）会自动降级本地 OCR，不影响可用性。
-    3. vision_model 为空 → OCR。
+    规则（2026-09-07 简化）：vision_model 非空 → "vl"（即使与主 model 同名——
+    同名也可能是多模态模型，实测 qwen3.8-27b 支持 image_url 输入）；
+    否则 → "none"，由调用方返回未配置提示（不再有本地 OCR 兜底）。
     """
-    if not (getattr(cfg, "api_key", "") or "").strip():
-        return "ocr"
     vision_model = (getattr(cfg, "vision_model", "") or "").strip()
-    if vision_model:
-        return "vl"
-    return "ocr"
+    return "vl" if vision_model else "none"
 
 
-def _get_ocr_engine():
-    global _OCR_ENGINE
-    if _OCR_ENGINE is None:
-        try:
-            from rapidocr_onnxruntime import RapidOCR  # 惰性 import，降启动开销
-        except ImportError as e:
-            raise RuntimeError(
-                "本地 OCR 组件未安装，请执行 pip install rapidocr-onnxruntime"
-            ) from e
-        try:
-            _OCR_ENGINE = RapidOCR()
-        except Exception as e:  # noqa: BLE001 - 模型缺失/损坏时给出可读提示
-            raise RuntimeError(f"本地 OCR 引擎初始化失败：{e}") from e
-    return _OCR_ENGINE
-
-
-def _ocr_sync(img_path: str) -> list[str]:
-    """同步 OCR 识别（放线程池执行），返回逐行文字."""
-    engine = _get_ocr_engine()
-    result, _elapse = engine(img_path)  # result: [[box, text, score], ...] 或 None
-    if not result:
-        return []
-    return [str(item[1]) for item in result if len(item) >= 2 and str(item[1]).strip()]
-
-
-async def _run_ocr(image: str) -> list[str]:
-    """OCR 兜底：支持本地路径与 http(s) URL（URL 先下载到临时文件）.
-
-    2026-09-06：本地/下载后的图片先经 _enhance_image 低对比度增强再送 OCR
-    （浅色主题灰字白底识别差的问题）；增强产物写入独立临时文件，不覆盖原图，
-    用完即清理。增强失败不影响原流程。
-    """
-    img_path = image
-    tmp: str | None = None
+def _parse_crop(crop: str, w: int, h: int) -> tuple[int, int, int, int] | None:
+    """解析 'x,y,w,h'（支持中英文逗号/x/*分隔），并裁剪到图内合法区域."""
     try:
-        if image.startswith(("http://", "https://")):
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.get(image)
-                resp.raise_for_status()
-            ext = Path(image).suffix or ".png"
-            fd, tmp = tempfile.mkstemp(suffix=ext)
-            with os.fdopen(fd, "wb") as f:
-                f.write(resp.content)
-            img_path = tmp
-        else:
-            if not await _wait_for_file(image):
-                raise FileNotFoundError(f"文件不存在: {image}")
-            img_path = str(Path(image))
-        # 低对比度增强：增强产物写临时文件，不覆盖原图
-        enh = _enhance_image(img_path)
-        if enh is not None:
-            fd, e_tmp = tempfile.mkstemp(suffix=".png")
-            with os.fdopen(fd, "wb") as f:
-                f.write(enh)
-            if tmp:
-                Path(tmp).unlink(missing_ok=True)
-            tmp = e_tmp
-            img_path = e_tmp
-        return await asyncio.to_thread(_ocr_sync, img_path)
-    finally:
-        if tmp:
-            Path(tmp).unlink(missing_ok=True)
+        parts = [
+            int(float(v))
+            for v in re.split(r"[,，xX*]\s*", (crop or "").strip())
+            if v.strip()
+        ]
+    except (TypeError, ValueError):
+        return None
+    if len(parts) != 4:
+        return None
+    x, y, cw, ch = parts
+    x = max(0, min(x, w - 1))
+    y = max(0, min(y, h - 1))
+    cw = max(1, min(cw, w - x))
+    ch = max(1, min(ch, h - y))
+    return x, y, cw, ch
 
 
-async def _call_vision(api_key: str, base_url: str, model: str, image: str, question: str) -> Observation:
+def _crop_local_image(src: Path, crop: str) -> tuple[Path | None, str]:
+    """按 'x,y,w,h' 裁剪本地图片并落盘到源图旁（固定名便于同图同区域复用）.
+
+    同时改写副本的 .meta.json（win_left/top 加上裁剪偏移），使
+    desktop click img=<裁剪图> 的自动坐标换算依旧成立——模型无需手算。
+    返回 (裁剪图路径|None, 错误说明|空)。
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(src)
+        img.load()
+        box = _parse_crop(crop, *img.size)
+        if box is None:
+            return None, "crop 参数无效（应为 'x,y,w,h' 图片内像素坐标）"
+        x, y, cw, ch = box
+        out = src.with_name(f"{src.stem}_crop{src.suffix or '.png'}")
+        img.crop((x, y, x + cw, y + ch)).save(str(out))
+        meta_p = src.with_suffix(".meta.json")
+        if meta_p.exists():
+            try:
+                meta = json.loads(meta_p.read_text(encoding="utf-8"))
+                scale = float(meta.get("scale") or 1.0) or 1.0
+                meta2 = dict(meta)
+                meta2["path"] = str(out)
+                meta2["shot_w"], meta2["shot_h"] = cw, ch
+                meta2["win_left"] = int(meta.get("win_left", 0) or 0) + int(x / scale + 0.5)
+                meta2["win_top"] = int(meta.get("win_top", 0) or 0) + int(y / scale + 0.5)
+                out.with_suffix(".meta.json").write_text(
+                    json.dumps(meta2, ensure_ascii=False), encoding="utf-8"
+                )
+            except Exception:  # noqa: BLE001 — meta 缺失只影响坐标换算，不影响读图
+                pass
+        return out, ""
+    except Exception as e:  # noqa: BLE001
+        return None, str(e)
+
+
+def get_vl_config() -> tuple[str, str, str, object]:
+    """读取 VL 调用配置，返回 (api_key, base_url, model, cfg_proxy).
+
+    2026-09-08 从 _execute_raw 抽出：desktop 的 locate/find 定位链路复用同一套
+    配置来源（配置文件 > 环境变量 > 默认），避免两处漂移。
+    """
+    api_key = ""
+    base_url = ""
+    model = ""
+    cfg_proxy = None
+    try:
+        from scout.config import ConfigManager
+        cm = ConfigManager()
+        cfg = cm.load()
+        cfg_proxy = cfg
+        api_key = cfg.api_key or ""
+        base_url = cfg.base_url or ""
+        model = (cfg.vision_model or cfg.model or "").strip()
+        # 视觉模型独立厂商：设置了 vision_provider 且与主厂商不同时，
+        # 使用该厂商已保存的 api_key/base_url
+        if cfg.vision_provider and cfg.vision_provider != cfg.provider:
+            pkey, purl = cm.get_provider_credentials(cfg.vision_provider)
+            if pkey:
+                api_key = pkey
+            if purl:
+                base_url = purl
+    except Exception:  # noqa: BLE001 — 配置读取失败走环境变量兜底
+        pass
+    if not api_key:
+        api_key = os.getenv("OPENAI_API_KEY", "")
+    if not base_url:
+        base_url = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+    if not model:
+        model = os.getenv("VISION_MODEL", "gpt-4o-mini")
+    return api_key, base_url, model, cfg_proxy
+
+
+async def _call_vision(
+    api_key: str, base_url: str, model: str, image: str, question: str, crop: str = ""
+) -> Observation:
     """VL 路径：OpenAI 兼容 /chat/completions 发 image_url.
 
     2026-09-06 追加空输出自动重试：实测 15%+ 的 VL 调用返回 HTTP 200 但
@@ -212,26 +161,42 @@ async def _call_vision(api_key: str, base_url: str, model: str, image: str, ques
     空结果上抛会触发主模型换问法反复重试同图（10-14s/次 × 多轮）。
     故 content 为空时用补强指令自动重试一次；仍空则返回 failure，由上层
     _execute_raw 自动降级 OCR——绝不让空结果直接上抛给主模型。
+    2026-09-08 追加 crop：VL 图像 token 按分辨率（patch 数）计费，只裁剪目标
+    局部区域可使 token 与推理时延近似线性下降。
     """
     try:
+        crop_note = ""
+        if crop and image.startswith(("http://", "https://")):
+            crop_note = "\n[vision crop] crop 仅支持本地图片，URL 输入已忽略该参数。"
         if image.startswith("http"):
             image_url = image
         else:
             if not await _wait_for_file(image):
                 return Observation(tool_name="vision", success=False, output=f"文件不存在: {image}")
             p = Path(image)
-            # 低对比度(浅色主题)自动增强：增强后以 PNG bytes 发送，不覆盖原图
-            enh = _enhance_image(str(p))
-            if enh is not None:
-                b64 = base64.b64encode(enh).decode()
-                mime = "image/png"
-            else:
-                b64 = base64.b64encode(p.read_bytes()).decode()
-                ext = p.suffix.lower().lstrip(".")
-                mime = {
-                    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-                    "gif": "image/gif", "webp": "image/webp",
-                }.get(ext, "image/png")
+            if crop:
+                out_p, err = _crop_local_image(p, crop)
+                if out_p is not None:
+                    p = out_p
+                    crop_note = (
+                        f"\n[vision crop] 已裁剪保存: {out_p}；desktop click 请用 img={out_p}，"
+                        "VL 返回的坐标可直接使用（工具自动换算）。"
+                        if out_p.with_suffix(".meta.json").exists()
+                        else f"\n[vision crop] 已裁剪保存: {out_p}；"
+                        "源图无坐标元数据，返回坐标为该裁剪图内像素。"
+                    )
+                else:
+                    crop_note = f"\n[vision crop] 裁剪失败（{err}），已按原图完整分析。"
+            # ★ VL 路径不做低对比度增强（2026-09-07）：多模态大模型在海量
+            #   自然图像+截图上训练，对浅色低对比度 UI 本身鲁棒；CLAHE 拉伸
+            #   会放大噪声、改变色彩分布，反而使图偏离 VL 的训练分布（负优化）。
+            #   增强只保留在 OCR 路径（传统检测+识别模型确实吃对比度）。
+            b64 = base64.b64encode(p.read_bytes()).decode()
+            ext = p.suffix.lower().lstrip(".")
+            mime = {
+                "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                "gif": "image/gif", "webp": "image/webp",
+            }.get(ext, "image/png")
             image_url = f"data:{mime};base64,{b64}"
 
         async def _post(text: str) -> str | None:
@@ -270,8 +235,10 @@ async def _call_vision(api_key: str, base_url: str, model: str, image: str, ques
         if answer is None:
             return Observation(
                 tool_name="vision", success=False,
-                output="视觉模型连续两次返回空内容（HTTP 200 但 content 为空），交由 OCR 降级路径处理",
+                output="视觉模型连续两次返回空内容（HTTP 200 但 content 为空），请改用其他方式获取该信息或更换问题再试",
             )
+        if crop_note:
+            answer = answer + crop_note
         return Observation(tool_name="vision", success=True, output=answer)
     except Exception as e:  # noqa: BLE001
         return Observation(tool_name="vision", success=False, output=str(e))
@@ -349,35 +316,64 @@ def _dedup_shortcircuit(fp: str, q_norm: str) -> bool:
 
 
 class VisionTool(ToolDefinition):
-    """图片分析工具 — 识别内容、提取文字、描述场景.
+    """图片分析工具 — 通过视觉模型（VL）描述画面/提取信息.
 
-    路由：配置了视觉模型（vision_model 非空）→ 直接调视觉模型（VL，支持多模态
-    描述画面/元素坐标）；VL 失败自动降级本地 OCR；完全未配置 → 本地 OCR
-    （只能提取图中文字，无法描述画面）。
+    路由：配置了视觉模型（vision_model 非空）→ 调视觉模型（多模态，支持
+    描述画面/元素坐标/读文字）；未配置 → 返回"无法读取图片"的提示（无本地
+    OCR 兜底，2026-09-07 移除该依赖）。
     支持本地图片路径和图片URL。
     """
 
     name = "vision"
     pure_read = True
-    description = "分析图片内容。可以描述图片、提取文字(OCR)、识别物体、颜色等。支持本地图片路径和图片URL。配合 desktop 工具时：把 desktop screenshot 返回的图片路径（含 .meta.json，记录了 scale 与窗口偏移）传入，并在 question 中要求返回目标元素的该图片内像素坐标（如\"搜索输入框中心在图片内的坐标\"）；随后把坐标与截图路径一起传给 desktop click 的 x/y + img=<截图 path>，desktop 会按 meta 自动换算为屏幕坐标——截图可能被降采样，切勿手算缩放（若点击时省略 img，坐标将被当作屏幕绝对坐标）。"
+    description = "分析图片内容。可以描述图片、读取图中文字、识别物体、颜色等（需已配置视觉模型）。支持本地图片路径和图片URL。支持 crop='x,y,w,h' 局部读图（只裁剪目标区域，token 与耗时大幅下降；定位类问题优先用）。配合 desktop 工具时：把 desktop screenshot 返回的图片路径（含 .meta.json，记录了 scale 与窗口偏移）传入，并在 question 中要求返回目标元素的该图片内像素坐标（如\"搜索输入框中心在图片内的坐标\"）；随后把坐标与截图路径一起传给 desktop click 的 x/y + img=<截图 path>，desktop 会按 meta 自动换算为屏幕坐标——截图可能被降采样，切勿手算缩放（若点击时省略 img，坐标将被当作屏幕绝对坐标；用了 crop 则必须用回执里的裁剪图路径作 img=）。★ 看界面时请**直接调用本工具并省略 image**（内部自动截屏），不要先 desktop screenshot 再传路径——那会多一次工具往返与一次决策轮次（GUI 长任务步数直接翻倍）。"
     parameters = {
         "type": "object",
         "properties": {
-            "image": {"type": "string", "description": "本地图片路径或图片URL"},
+            "image": {
+                "type": "string",
+                "description": "本地图片路径或图片URL。★ 留空则自动截屏当前屏幕（或按 window/process 限定的窗口）——"
+                "GUI 任务看界面时首选留空，省去先调 desktop screenshot 的一次往返。",
+            },
             "question": {"type": "string", "description": "关于图片的问题（如: 描述这张图片 / 提取文字 / 图中有什么）"},
+            "window": {"type": "string", "description": "可选：自动截屏时限定窗口标题（精确匹配，需与 process 二选一或同用）"},
+            "process": {"type": "string", "description": "可选：自动截屏时限定进程名子串（如 Weixin/Feishu/WeMeet，比标题更稳）"},
+            "crop": {
+                "type": "string",
+                "description": "可选 'x,y,w,h'（该图片内像素坐标）：只分析该局部区域（按钮/弹窗/列表行等），"
+                "token 与推理耗时大幅下降。定位类问题优先裁剪目标区域再读。返回坐标为裁剪图内坐标——"
+                "desktop click 请用回执中的裁剪图路径作 img= 自动换算，勿手算。",
+            },
         },
-        "required": ["image", "question"],
+        # ★ 2026-09-15：image 不再必填 —— 留空即自动截屏（一次调用完成"看界面"）
+        "required": ["question"],
     }
     annotations = ToolAnnotations(read_only=True, open_world=True)
 
-    async def execute(self, image: str, question: str) -> Observation:
-        """同图指纹去重包装层（2026-09-06）.
+    async def execute(
+        self,
+        image: str = "",
+        question: str = "",
+        crop: str = "",
+        window: str = "",
+        process: str = "",
+    ) -> Observation:
+        """同图指纹去重包装层（2026-09-06）+ 自动截屏（2026-09-15）.
 
         仅在"同一图片内容、TTL 内、同一问题、未被警告过"这一种可证明安全的
         场景短路；其余（跨问题/跨时间窗/URL 图/指纹不可得/上次失败/已警告过）
         一律放行真实分析，保证模型永远能拿到最新真实答案。
         缓存仅在真实分析成功且输出非空时写入（失败/空输出不缓存 → 下次必放行）。
+
+        ★ 2026-09-15：``image`` 留空时**自动截屏**（复用 desktop 工具），把
+        GUI 任务里的「screenshot → vision」两次工具调用压缩为一次——此前每次
+        "看界面"都要多一次 LLM 往返，且模型常忘记跟进读图（截图路径被浪费）。
         """
+        if not image:
+            image, _err = await self._auto_capture(window=window, process=process)
+            if not image:
+                return Observation(tool_name="vision", success=False, output=_err)
+
         fp = None
         q_norm = None
         if _DEDUP_ENABLED:
@@ -385,84 +381,77 @@ class VisionTool(ToolDefinition):
             q_norm = _norm_question(question)
             if fp and _dedup_shortcircuit(fp, q_norm):
                 return Observation(tool_name="vision", success=True, output=_DEDUP_HINT)
-        obs = await self._execute_raw(image, question)
+        obs = await self._execute_raw(image, question, crop)
         if _DEDUP_ENABLED and fp and q_norm is not None and obs.success and obs.output:
             _IMG_CACHE[fp] = {"q_norm": q_norm, "ts": time.monotonic(), "warned": False}
         return obs
 
-    async def _execute_raw(self, image: str, question: str) -> Observation:
-        # ── 配置来源优先级：配置文件 > 环境变量 > 默认 ──
-        # 修复(2026-08-17)：此前只读环境变量导致界面配置的 vision_model 不生效，
-        # 视觉工具一直用默认 gpt-4o-mini 调用，与界面配置不一致。
-        api_key = ""
-        base_url = ""
-        model = ""
-        cfg_proxy = None
-        try:
-            from scout.config import ConfigManager
-            cm = ConfigManager()
-            cfg = cm.load()
-            cfg_proxy = cfg
-            api_key = cfg.api_key or ""
-            base_url = cfg.base_url or ""
-            model = (cfg.vision_model or cfg.model or "").strip()
-            # 视觉模型独立厂商：设置了 vision_provider 且与主厂商不同时，
-            # 使用该厂商已保存的 api_key/base_url
-            if cfg.vision_provider and cfg.vision_provider != cfg.provider:
-                pkey, purl = cm.get_provider_credentials(cfg.vision_provider)
-                if pkey:
-                    api_key = pkey
-                if purl:
-                    base_url = purl
-        except Exception:
-            pass
-        if not api_key:
-            api_key = os.getenv("OPENAI_API_KEY", "")
-        if not base_url:
-            base_url = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-        if not model:
-            model = os.getenv("VISION_MODEL", "gpt-4o-mini")
+    @staticmethod
+    async def _auto_capture(window: str = "", process: str = "") -> tuple[str, str]:
+        """自动截屏（复用 desktop 工具），返回 (图片路径, 错误说明).
 
-        # ── 路由决策：有专属视觉模型 → VL；否则本地 OCR 兜底 ──
-        mode = resolve_mode(cfg_proxy) if cfg_proxy is not None else ("vl" if api_key else "ocr")
-        if mode == "vl":
-            if not api_key:
-                from scout.config.paths import DATA_DIR
-                cfg_hint = str(DATA_DIR / "config.json")
-                return Observation(tool_name="vision", success=False, output=f"未配置 API Key（请检查 {cfg_hint} 或 OPENAI_API_KEY/DASHSCOPE_API_KEY）")
-            obs = await _call_vision(api_key, base_url, model, image, question)
-            if obs.success:
-                return obs
-            # VL 失败 → 自动降级本地 OCR（模型不支持图片/网络/超时等）
-            try:
-                texts = await _run_ocr(image)
-            except Exception as e:  # noqa: BLE001
-                return Observation(
-                    tool_name="vision", success=False,
-                    output=f"视觉模型调用失败：{obs.output}\n本地 OCR 兜底也失败：{e}",
-                )
-            if not texts:
-                return Observation(tool_name="vision", success=True, output="视觉模型调用失败（见上方原因），本地 OCR 未识别到文字（图片可能不含文字）。")
-            brief = obs.output[:200]
-            return Observation(
-                tool_name="vision", success=True,
-                output=f"（视觉模型调用失败：{brief}，已回退本地 OCR 提取文字）\n识别到的文字：\n" + "\n".join(texts),
+        从 desktop 截图回执中取图片路径：优先 metadata（path/img/图片路径字段），
+        兜底用正则从输出文本提取 .png/.jpg 路径。desktop 不可用（非 Windows /
+        未启用）时返回明确指引，让模型改用其它方式（或自行提供 image）。
+        """
+        import re as _re
+
+        from scout.tools.registry import ToolRegistry
+
+        tool = ToolRegistry.get_tool("desktop")
+        if tool is None:
+            return "", (
+                "未提供 image 且当前环境没有 desktop 工具（非 Windows 或未启用），无法自动截屏。"
+                "请传入已有的图片路径/URL，或改用 desktop 的 read_controls 获取界面信息。"
             )
-
-        # OCR 路径：无需 API Key / 网络
+        kw: dict = {"action": "screenshot"}
+        if window:
+            kw["title"] = window
+        if process:
+            kw["process"] = process
         try:
-            texts = await _run_ocr(image)
+            obs = await tool.execute(**kw)
+        except TypeError:
+            obs = await tool.execute(action="screenshot")
         except Exception as e:  # noqa: BLE001
-            return Observation(tool_name="vision", success=False, output=str(e))
-        if not texts:
+            return "", f"自动截屏失败: {type(e).__name__}: {e}"
+
+        if not getattr(obs, "success", False):
+            return "", f"自动截屏失败: {(getattr(obs, 'output', '') or '')[:200]}"
+
+        meta = getattr(obs, "metadata", None) or {}
+        for k in ("path", "img", "image", "file", "shot"):
+            v = meta.get(k)
+            if isinstance(v, str) and v:
+                return v, ""
+        m = _re.search(r"([A-Za-z]:\\[^\s\"'`]+\.(?:png|jpg|jpeg|webp)|/[^\s\"'`]+\.(?:png|jpg|jpeg|webp))",
+                       getattr(obs, "output", "") or "", _re.I)
+        if m:
+            return m.group(1), ""
+        return "", f"自动截屏成功但未找到图片路径，回执: {(getattr(obs, 'output', '') or '')[:200]}"
+
+    async def _execute_raw(self, image: str, question: str, crop: str = "") -> Observation:
+        # ── 配置来源优先级：配置文件 > 环境变量 > 默认（get_vl_config 统一读取，
+        # desktop locate/find 定位链路复用同一函数，避免两处漂移）──
+        api_key, base_url, model, cfg_proxy = get_vl_config()
+
+        # ── 路由决策：已配置 vision_model → VL；未配置 → 友好提示（无 OCR 兜底）──
+        mode = resolve_mode(cfg_proxy) if cfg_proxy is not None else ("vl" if api_key and model else "none")
+        if mode == "none":
             return Observation(
-                tool_name="vision", success=True,
-                output="图片中未识别到文字（可能是不含文字的图片/照片）。注意：未配置专属视觉模型，当前用本地 OCR 只能提取文字，无法描述画面内容；如需描述请配置视觉模型。",
+                tool_name="vision", success=False,
+                output="当前未配置视觉模型，无法读取图片。请在「设置 → 模型配置」中填写视觉模型（vision_model）后重试；"
+                "未配置前此工具不可用，请改用其他方式获取信息（如 desktop 的 read_controls）。",
             )
-        return Observation(
-            tool_name="vision", success=True,
-            output="（未配置专属视觉模型，使用本地 OCR 提取图中文字，无法描述画面）\n识别到的文字：\n" + "\n".join(texts),
-        )
+        if not api_key:
+            from scout.config.paths import DATA_DIR
+            cfg_hint = str(DATA_DIR / "config.json")
+            return Observation(tool_name="vision", success=False, output=f"未配置 API Key（请检查 {cfg_hint} 或 OPENAI_API_KEY/DASHSCOPE_API_KEY）")
+        obs = await _call_vision(api_key, base_url, model, image, question, crop)
+        if obs.success:
+            return obs
+        # VL 失败：无 OCR 兜底（2026-09-07），直接如实返回失败原因，由主模型决策下一步
+        return obs
 
 
 ToolRegistry.register(VisionTool())

@@ -78,9 +78,10 @@ class ReflexionLoop:
         self,
         llm: Any,  # LLMClient — 用 executor_llm（便宜快）
         enable_deep_reflect: bool = True,
-        failure_threshold: int = 2,   # 连续失败几次触发深度反思
+        failure_threshold: int = 3,   # 2026-09-09：2→3 —— GUI 任务常态性试错自纠（窗口未找到/
+        #                                坐标偏差重试），连败 2 次就反思过于频繁，纯烧 token
         progress_interval: int = 10,  # 每几步做一次进度检查
-        min_reflect_interval: int = 3,  # 两次反思间的最小步数间隔（节流，防连败后每步都反思）
+        min_reflect_interval: int = 5,  # 2026-09-09：3→5 —— 节流加强
     ):
         self.llm = llm
         self.enable_deep_reflect = enable_deep_reflect
@@ -106,6 +107,14 @@ class ReflexionLoop:
                 state.consecutive_failures += 1
             else:
                 state.consecutive_failures = 0
+            # ★ 2026-09-15（实测修复）：节流只能限制「进度检查」这类**可选**反思，
+            # 不能吞掉「连续失败已达阈值」这种**必须**的纠偏。
+            # 原实现无条件 return False，导致：只要此前反思过一次，之后
+            # min_reflect_interval(5) 步内的连败全部被静默丢弃 —— 实测出现
+            # 同一工具连续失败 6 次也从未反思，最终把一个 3 步的简单任务
+            # 拖到 420s 仍未完成（模型陷入无纠偏的重试死循环）。
+            if state.consecutive_failures >= self.failure_threshold:
+                return True
             return False
 
         # 连续失败达到阈值 → 必须反思（纠偏）
@@ -116,8 +125,13 @@ class ReflexionLoop:
         else:
             state.consecutive_failures = 0
 
-        # 进度检查：放宽到 progress_interval（默认5→由调用方设），且仅当步数足够多时
-        if state.total_steps >= 10 and state.total_steps % self.progress_interval == 0:
+        # 进度检查（2026-09-09 加成功率门槛）：一切顺利的长任务不需要花钱"确认顺利"，
+        # 只有成功率明显偏低时才值得一次进度反思
+        if (
+            state.total_steps >= 10
+            and state.total_steps % self.progress_interval == 0
+            and state.success_rate < 0.6
+        ):
             return True
 
         return False
@@ -183,7 +197,10 @@ class ReflexionLoop:
                 _role="executor",
                 extra_body={"enable_thinking": False},
             )
-            reflection = self._parse_reflection(resp.content or "", step, tool_name, tool_success)
+            reflection = self._parse_reflection(
+                resp.content or "", step, tool_name, tool_success,
+                consecutive_failures=state.consecutive_failures,
+            )
             if reflection:
                 # 记录反思发生步数，供 _should_reflect 节流判断
                 state.last_adjustment_step = step
@@ -205,7 +222,8 @@ class ReflexionLoop:
         ) + (
             f"历史成功率: {state.success_rate:.0%}\n" if state.reflections else ""
         ) + (
-            "\n请用 1-2 句中文评估当前方向，如果有问题指出怎么调整。不要编号、不要前缀。"
+            "\n注意：命令成功但无输出通常只是脚本没有打印内容，不代表运行环境不可用。\n"
+            "请用 1-2 句中文评估当前方向，如果有问题指出怎么调整。不要编号、不要前缀。"
         )
 
     def _build_deep_prompt(
@@ -228,6 +246,9 @@ class ReflexionLoop:
             f"刚执行: {tool_name}({args_brief})\n"
             f"结果: {'✅ 成功' if success else '❌ 失败'}\n"
             f"输出摘要: {output[:400]}\n\n"
+            "注意：'成功但无输出'通常只是脚本没有打印内容，不代表运行环境不可用；"
+            "Windows 下 bare python 可能是商店占位程序（静默空输出），"
+            "判断环境问题前建议先用可验证的小命令（如 python -c \"print('ok')\"）实测。\n\n"
             "请输出：\n"
             "1. 一句话评估当前状态\n"
             "2. 一句策略调整建议（如：换一种搜索关键词/先检查文件是否存在/回退到上一步等）\n\n"
@@ -235,7 +256,8 @@ class ReflexionLoop:
         )
 
     def _parse_reflection(
-        self, text: str, step: int, tool_name: str, success: bool
+        self, text: str, step: int, tool_name: str, success: bool,
+        consecutive_failures: int = 0,
     ) -> Reflection:
         """解析 LLM 的反思输出."""
         text = text.strip()
@@ -261,8 +283,12 @@ class ReflexionLoop:
             reflection.strategy_adjustment = adjust_match.group(1).strip()
 
         # 判断是否陷入困境
-        stuck_keywords = ["死循环", "无法", "失败", "错误", "偏离", "不对", "换一种", "回退", "放弃"]
-        if any(kw in text for kw in stuck_keywords):
+        # ★ 2026-09-08 判定收紧：原关键词表含"失败""错误""换一种"这类高频词，
+        #   而深度反思 prompt 本身就要求输出"策略调整建议（如：换一种…）"——
+        #   LLM 照做后必被误判 is_stuck → ⚠️ 几乎每次深度反思都附加，失去信号意义。
+        #   改为：强信号关键词 OR 连续失败 ≥3 次。
+        strong_stuck = ["死循环", "放弃", "无望", "无法解决", "此路不通", "回退到", "完全偏离"]
+        if any(kw in text for kw in strong_stuck) or self._consecutive_failures >= 3:
             reflection.is_stuck = True
             reflection.confidence = 0.2
         else:

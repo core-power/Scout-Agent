@@ -1,6 +1,8 @@
 ﻿<div align="center">
 
-# 🧭 Scout Agent
+<img src="scout/web/static/favicon.svg" width="96" alt="Scout Agent logo">
+
+# Scout Agent
 
 **The self-evolving AI agent that grows with you**
 
@@ -8,7 +10,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0.0-orange.svg)](VERSION)
+[![Version](https://img.shields.io/badge/Version-1.0.0.3-orange.svg)](VERSION)
 
 *Persistent Memory · Tool Calling · Multi-Channel · Security-First*
 

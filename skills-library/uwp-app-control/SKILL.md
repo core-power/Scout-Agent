@@ -8,7 +8,7 @@ author: scout-self-distilled
 
 # UWP 应用通用操控（2026-09-03 实测沉淀）
 
-> 通用方法论见 `windows-gui-control`。UWP 应用（Windows 计算器/Settings/Win11 画图）有**双窗口结构**，必须组合定位才能用 UIA 读控件。
+> 通用方法论见 `cua-computer-use`。UWP 应用（Windows 计算器/Settings/Win11 画图）有**双窗口结构**，必须组合定位才能用 UIA 读控件。
 
 ## 双窗口结构（关键）
 

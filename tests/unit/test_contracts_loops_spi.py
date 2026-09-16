@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 
 import pytest
 
@@ -137,6 +138,10 @@ def test_dag_loop_topological_execution():
 # ── 持久 shell 会话 ──────────────────────────────────────
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="用例使用 POSIX shell 语义（cd /tmp、export VAR=1），Windows cmd/pwsh 不适用",
+)
 async def test_persistent_shell_session_state():
     from scout.tools.builtin.shell.session import ShellSession
 

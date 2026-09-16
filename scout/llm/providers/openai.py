@@ -142,10 +142,18 @@ class OpenAIProvider(LLMClient):
                 continue
             try:
                 args = json.loads(fn.arguments) if fn.arguments else {}
-            except Exception:
-                args = {}
+            except Exception as _e:
+                # ★ 2026-09-14：不再静默降级为空参数。以空参执行会让模型把
+                # 「传输截断 / JSON 不合法」误判为「自己参数写法错误」，从而
+                # 反复重试同一无效调用（步数虚耗、任务假性卡死）。保留原始
+                # 文本交给执行侧，由 _guard_arg_integrity 给出明确可操作反馈。
+                logger.warning(
+                    "工具调用参数 JSON 解析失败 name=%s err=%s raw=%.200s",
+                    fn.name, _e, fn.arguments or "",
+                )
+                args = {"_parse_error": str(_e), "_raw": (fn.arguments or "")[:2000]}
             if not isinstance(args, dict):
-                args = {"_raw": args}
+                args = {"_parse_error": "arguments 不是 JSON 对象", "_raw": str(args)[:2000]}
             out.append(ToolCall(name=fn.name or "", arguments=args))
         return out
 
@@ -301,10 +309,16 @@ class OpenAIProvider(LLMClient):
             slot = tool_acc[_idx]
             try:
                 args = json.loads(slot["arguments"]) if slot["arguments"] else {}
-            except Exception:
-                args = {}
+            except Exception as _e:
+                # ★ 2026-09-14：流式场景更易出现「参数被截断」（分片未完整到达），
+                # 同非流式——保留原因而非静默空参，交由 _guard_arg_integrity 反馈。
+                logger.warning(
+                    "流式工具调用参数 JSON 解析失败 name=%s err=%s raw=%.200s",
+                    slot["name"], _e, slot["arguments"] or "",
+                )
+                args = {"_parse_error": str(_e), "_raw": (slot["arguments"] or "")[:2000]}
             if not isinstance(args, dict):
-                args = {"_raw": args}
+                args = {"_parse_error": "arguments 不是 JSON 对象", "_raw": str(args)[:2000]}
             out.append(ToolCall(name=slot["name"] or "", arguments=args))
         return out
 

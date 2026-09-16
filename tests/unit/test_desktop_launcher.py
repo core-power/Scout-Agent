@@ -21,13 +21,18 @@ def test_pick_port_returns_available_port():
 
 
 def test_pick_port_skips_occupied():
+    # ★ 2026-09-11 修复 flaky：旧断言硬编码 occupied+1——若该端口恰被真实
+    # 服务占用（如本机 8848 的 ScoutAgent）即失败。改为断言语义：不返回被占
+    # 端口、且返回的端口真实可绑定。
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         s.listen(1)
         occupied = s.getsockname()[1]
-        port = launcher.pick_port(preferred=occupied, tries=3)
-        # 首个被占用，应返回 +1 的可用端口
-        assert port == occupied + 1
+        port = launcher.pick_port(preferred=occupied, tries=10)
+        assert port != occupied
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", port))
+            # 能绑定即未被占用
 
 
 def test_load_env_files_only_fills_missing(monkeypatch, tmp_path: Path):

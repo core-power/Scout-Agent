@@ -140,7 +140,7 @@ class ScoutReportTool(ToolDefinition):
     def _section_skills(self, lines: list) -> None:
         got = False
         try:
-            from scout.engine.skill_store import VectorSkillStore
+            from scout.engine.skills.store import VectorSkillStore
             sstats = VectorSkillStore().stats()
             lines.append("**技能库**")
             lines.append(

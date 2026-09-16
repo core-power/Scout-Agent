@@ -35,10 +35,23 @@ if _SRC_ROOT not in sys.path:
 #       故项目根文件需加 ../ 前缀（2026-08-29 修复）。
 datas = [
     ("../scout/web/static", "scout/web/static"),   # Web UI + PWA 资源
+    ("../scout/skills_builtin", "scout/skills_builtin"),  # 随包内置默认技能（CUA 等，2026-09-10）
     ("../.env.example", "."),                       # 配置模板（随包携带）
     ("../VERSION", "."),                            # 版本号（更新检查/版本显示用，2026-08-30）
     ("scout.ico", "."),                             # exe 图标（相对 spec 目录）
 ]
+
+# ── 本地 OCR 引擎（2026-09-11 启用进包）────────────────────
+# desktop find= 的 OCR 文本锚定兜底（T3 自绘应用定位）。
+# 2026-09-07 曾移除（当时是 vision 读图场景 + cv2 全家桶 160MB）；
+# 现在只收 rapidocr_onnxruntime 自身（onnxruntime 已在依赖树中，det/rec
+# 模型约 15MB），定位场景是刚需（微信 4.x 实测命中）。
+try:
+    import rapidocr_onnxruntime as _rapidocr  # noqa: F401
+    datas += collect_data_files("rapidocr_onnxruntime")
+    _ocr_hiddenimports = collect_submodules("rapidocr_onnxruntime")
+except Exception:
+    _ocr_hiddenimports = []
 
 # ── WebView2 程序集（原生窗口方案，2026-08-29） ────────────
 # launcher.py 直接 AddReference 加载，须放到 _internal 根目录；
@@ -115,11 +128,6 @@ if _conda_lib_bin:
 else:
     print("[spec][warn] 未探测到 conda Library\\bin，跳过 conda 系统库收集(可能仍有 _ssl 崩溃风险)")
 
-# RapidOCR 本地引擎（vision 工具 OCR 兜底，2026-09-04）：
-# 模型 onnx（det/rec/cls 约 15MB）+ config.yaml 必须随包分发，否则打包版 exe
-# OCR 初始化时找不到模型文件直接报错。依赖已在 requirements 记录，此处仅收数据。
-datas += collect_data_files("rapidocr_onnxruntime")
-
 # ── 隐式导入（动态 import / 反射加载的模块） ─────────────
 hiddenimports = [
     # 核心硬依赖（requirements 已含）
@@ -149,6 +157,13 @@ hiddenimports = [
     "scout.llm.tracker",
     "scout.llm.prompt_cache",
     "scout.engine.agent",
+    # engine 拆分新模块（2026-09-14 A1/A2/A3）：共享护栏 / 工具执行域 / 注入链
+    "scout.engine.loop_common",
+    "scout.engine.tool_executor",
+    "scout.engine.context_inject",
+    # 技能域包（2026-09-14 A4）：store/retriever 等为函数级惰性导入
+    # （避免 numpy/向量库在 import 期加载），静态分析抓不全 → 显式收集
+    *collect_submodules("scout.engine.skills"),
     "scout.context.manager",
     "scout.context.memory_extract",
     "scout.context.context_assembler",
@@ -173,10 +188,12 @@ hiddenimports = [
     "playwright.async_api",
     "playwright.sync_api",
     "playwright._impl._driver",
-    # vision 工具本地 OCR（2026-09-04）：RapidOCR 在工具内为函数级惰性导入，
-    # PyInstaller 静态分析抓不到 → 必须显式收集，否则打包版 exe 缺库，
-    # OCR 路径报 ModuleNotFoundError（VL 路径仍可用）。
-    *collect_submodules("rapidocr_onnxruntime"),
+    # 本地 OCR 引擎（2026-09-11）：desktop find= 文本锚定兜底，
+    # 工具内动态导入（importlib），静态分析抓不到 → 显式收集
+    *_ocr_hiddenimports,
+    # web 适配器包（2026-09-14 W1 拆分）：模块 → 包，路由 mixin 按域分文件，
+    # 显式收集保证打包不漏子模块
+    *collect_submodules("scout.adapters.web"),
 ]
 
 # ── 打包配置 ─────────────────────────────────────────────
@@ -214,6 +231,26 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
+
+# ── OpenSSL DLL 配套修复（2026-09-07）──────────────────────────
+# 现象: exe 启动即崩 "ImportError: DLL load failed while importing _ssl:
+#       找不到指定的程序"。
+# 根因: PyInstaller 依赖收集时，从环境（PATH 上的其他工具链）抓到了
+#       旧版 OpenSSL (3.0.14) 的 libcrypto-3-x64.dll / libssl-3-x64.dll，
+#       而 _ssl.pyd 由 CPython 3.14.3 runtime 针对其配套 OpenSSL 3.5.5
+#       编译——导出函数对不上，GetProcAddress 失败。
+# 修复: 打包机 sys.base_prefix 即 .workbuddy runtime 3.14.3 根目录，
+#       其 DLLs/ 下的 libcrypto/libssl 与 _ssl.pyd 严格配套；
+#       在 binaries 收集完成后强制替换为该版本，杜绝错版混入。
+# 效果: 9/7 实测覆盖后 exe 正常启动（HTTP 200），固化至此。
+_ssl_dll_dir = os.path.join(sys.base_prefix, "DLLs")
+for _name in ("libcrypto-3-x64.dll", "libssl-3-x64.dll"):
+    _src = os.path.join(_ssl_dll_dir, _name)
+    if not os.path.isfile(_src):
+        continue  # 非 Windows/runtime 变化时静默跳过
+    _fixed = [(_n, _s, _t) for (_n, _s, _t) in a.binaries if _n.lower() != _name.lower()]
+    _fixed.append((_name, _src, "BINARY"))
+    a.binaries = _fixed
 
 exe = EXE(
     pyz,

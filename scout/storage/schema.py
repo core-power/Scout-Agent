@@ -29,7 +29,7 @@ from collections.abc import Callable
 logger = logging.getLogger(__name__)
 
 # 当前所有数据库文件的 schema 版本（每有结构变更 +1）
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # 版本号 -> 迁移函数（幂等）
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {}
@@ -130,3 +130,25 @@ def _migrate_v1(conn: sqlite3.Connection) -> None:
             )
         except sqlite3.OperationalError:
             pass
+
+
+# ────────────────────────────────────────────────────────────────────────
+# v2 迁移（2026-09-10 记忆来源归属）
+# ────────────────────────────────────────────────────────────────────────
+@register_migration(2)
+def _migrate_v2(conn: sqlite3.Connection) -> None:
+    """v2：memories 加来源归属列（source_session / source_msg_count）.
+
+    背景：编辑消息/重新生成时需要清理"被截断对话产生的记忆"，但记忆抽取器
+    产出的是改写后的结论（不含原文），按内容 LIKE 匹配几乎必然失效。
+    加归属后可精准删除：source_session=会话 且 抽取时覆盖消息数 > 截断点。
+    """
+    for col, ddl in (
+        ("source_session", "ALTER TABLE memories ADD COLUMN source_session TEXT DEFAULT ''"),
+        ("source_msg_count", "ALTER TABLE memories ADD COLUMN source_msg_count INTEGER DEFAULT 0"),
+    ):
+        if not column_exists(conn, "memories", col):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass

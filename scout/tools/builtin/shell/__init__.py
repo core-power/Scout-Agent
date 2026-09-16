@@ -38,6 +38,7 @@ import os
 import re
 import shlex
 import subprocess  # noqa: F401 - DETACHED_PROCESS 用于 start 命令分离启动
+import sys
 import time
 from typing import Any
 
@@ -122,6 +123,49 @@ def _win_split_args(command: str) -> list[str]:
     return tokens
 
 
+# ── 系统 python 可用性探测（2026-09-08）──
+# 背景：普通用户 Windows 机器大多没装 Python，或 `python` 指向 Microsoft Store
+# 占位程序（静默无输出 exit 0）。python 族命令探测失败时，shell 自动改用本应用
+# 自带解释器在进程内执行脚本（见 ShellTool._run_python_inprocess）。
+_PY_FAMILY = {"python", "python3", "py", "python.exe", "python3.exe", "py.exe"}
+
+# ★ 2026-09-14 路径遍历判定（段语义）：
+#   匹配 `..` 作为独立路径段 —— 前后为路径分隔符或 token 边界。
+#   "..."（省略号）、"a.../b"、"arr[1:3]" 等不含独立 .. 段 → 放行；
+#   "../etc"、"a/../b"、"path/.." → 拦截。
+_PATH_TRAVERSAL_RE = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
+_py_ok_cache: bool | None = None
+
+
+def _is_python_cmd(cmd0: str) -> bool:
+    return os.path.basename((cmd0 or "").strip().strip('"').lower()) in _PY_FAMILY
+
+
+def _probe_system_python() -> bool:
+    """探测系统是否有可用的真 python（结果进程内缓存）.
+
+    探测标准：`python -c "print(1)"` / `py -c "print(1)"` 能在 20s 内
+    返回 exit 0 且 stdout 含输出 —— 商店占位程序会静默返回空，未安装则抛异常。
+    """
+    global _py_ok_cache
+    if _py_ok_cache is not None:
+        return _py_ok_cache
+    for cand in ("python", "py"):
+        try:
+            r = subprocess.run(
+                [cand, "-c", "print(1)"],
+                capture_output=True, timeout=20,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                _py_ok_cache = True
+                return True
+        except Exception:  # noqa: BLE001 — 未安装/超时/权限 → 试下一个
+            continue
+    _py_ok_cache = False
+    return False
+
+
 def _needs_detached(cmd_list: list[str]) -> bool:
     """★ 2026-09-01 Windows：经 cmd.exe 执行 `start <程序>` 时需要 DETACHED。
 
@@ -187,8 +231,25 @@ def _build_proc_cmd(cmd_list: list[str]) -> list[str]:
         single = cmd_list[0].strip()
         if not single:
             return cmd_list
-        if _meta.search(single) or re.search(r'\s', single):
-            # 整串命令（含元字符或空格参数）：原样交给 shell 解析，不额外加引号
+        if _meta.search(single):
+            # 含元字符（| && > <）→ 必须交给 shell 解析以保留语义
+            if IS_WINDOWS:
+                return ["cmd.exe", "/d", "/s", "/c", single]
+            return ["bash", "-c", single]
+        if re.search(r'\s', single):
+            # ★ 2026-09-15 修复「带引号的绝对路径报非法字符」：
+            # 无元字符但**含引号**的整串命令绝不能走 cmd /d /s /c —— Python
+            # subprocess 会用 list2cmdline 对该参数二次转义，内部引号变成 \"，
+            # 而 cmd 不把 \" 当转义，于是 PowerShell 收到带反斜杠的路径，报
+            # 「路径中具有非法字符」（实测 powershell -File "D:\.scout\outputs\x.ps1"
+            # 必须去掉引号才能跑通）。改为引号感知拆分后直接 exec，绕开 cmd 解析。
+            if '"' in single or "'" in single:
+                _parts = _win_split_args(single) if IS_WINDOWS else shlex.split(single)
+                if len(_parts) > 1 and not (
+                    IS_WINDOWS and os.path.basename(_parts[0]).lower() in WIN_BUILTIN_CMDS
+                ):
+                    return _parts
+            # 其余含空格整串（如 "where python"，或上一步拆不动的）保持原行为
             if IS_WINDOWS:
                 return ["cmd.exe", "/d", "/s", "/c", single]
             return ["bash", "-c", single]
@@ -204,6 +265,41 @@ def _build_proc_cmd(cmd_list: list[str]) -> list[str]:
     if IS_WINDOWS and os.path.basename(cmd_list[0]).lower() in WIN_BUILTIN_CMDS:
         return ["cmd.exe", "/d", "/s", "/c", " ".join(_win_quote(a) for a in cmd_list)]
     return cmd_list
+
+
+def _spawn_spec(proc_cmd: list[str]) -> tuple[bool, object]:
+    """把 _build_proc_cmd 的结果转成 spawn 规格：``(是否 shell 模式, 目标)``.
+
+    ★ 2026-09-15 修复「含空格的引号路径报错」：
+    _build_proc_cmd 在 cmd/bash 包装场景返回
+    ``["cmd.exe", "/d", "/s", "/c", <命令串>]``（命令串常含引号，例如
+    一条 ``dir "<含空格的目录>"`` 或 ``powershell -File "<带引号的脚本路径>"``）。
+    若用 ``create_subprocess_exec`` 启动，Python 会按 list2cmdline 规则对每个
+    参数**二次加引号并转义内部引号**（``"x"`` → ``\"x\"``）；而 cmd/bash 在
+    ``/c`` 语义下并不把 ``\"`` 当转义，路径因此被破坏，表现为
+    「路径中具有非法字符」或「指定的路径无效」（实测去掉引号才跑通）。
+
+    这些参数本质上是**一条完整命令行**，必须用 shell 模式原样交给系统 shell：
+    Windows → ``cmd.exe /c <串>``，POSIX → ``/bin/sh -c <串>``。
+    """
+    # 仅 Windows 的 cmd.exe 包装需要 shell 模式：POSIX 下 create_subprocess_exec
+    # 直接 execve，参数原样传递，不存在二次转义问题（改走 /bin/sh 反而会丢失
+    # bash 语义，如 pipefail、进程替换）。
+    if (
+        IS_WINDOWS
+        and len(proc_cmd) >= 5
+        and os.path.basename(proc_cmd[0]).lower() in ("cmd.exe", "cmd")
+    ):
+        return True, proc_cmd[-1]
+    return False, proc_cmd
+
+
+async def _spawn(proc_cmd: list[str], **kwargs: object) -> object:
+    """按 _build_proc_cmd 的形态选择 exec / shell 模式启动子进程（见 _spawn_spec）."""
+    use_shell, target = _spawn_spec(proc_cmd)
+    if use_shell:
+        return await asyncio.create_subprocess_shell(target, **kwargs)  # type: ignore[arg-type]
+    return await asyncio.create_subprocess_exec(*target, **kwargs)  # type: ignore[arg-type]
 
 
 # ── 跨平台解码 ──────────────────────────────────────────────
@@ -792,7 +888,16 @@ _APP_DIR_ENV = (
     ("{USERPROFILE}", lambda: os.environ.get("USERPROFILE") or ""),
 )
 
-_KNOWN_APP_CANDIDATE_CACHE: dict[str, list[str]] = {}
+_KNOWN_APP_CANDIDATE_CACHE: dict[str, tuple[float, list[str]]] = {}
+_CANDIDATE_CACHE_TTL = 600.0  # 2026-09-09：缓存 10min 过期——用户修复/重装应用后
+#                              mtime 变化能被重新感知（此前进程内永不过期）
+
+# 通用文件名（无品牌辨识度）：全盘兜底极易误命中任意目录里的同名 exe
+# （et.exe/wpp.exe 是 WPS 组件但名字无辨识度，notepad/calc 系统自带不需要兜底）
+_GENERIC_EXE_NAMES = frozenset({
+    "et.exe", "wpp.exe", "wps.exe", "notepad.exe", "calc.exe",
+    "write.exe", "cmd.exe", "powershell.exe",
+})
 
 
 def _app_drives() -> list[str]:
@@ -891,7 +996,10 @@ def _resolve_known_app_candidates(exe_name: str) -> list[str]:
     if not key or not key.endswith(".exe"):
         return []
     if key in _KNOWN_APP_CANDIDATE_CACHE:
-        return list(_KNOWN_APP_CANDIDATE_CACHE[key])
+        _ts, _paths = _KNOWN_APP_CANDIDATE_CACHE[key]
+        if time.monotonic() - _ts < _CANDIDATE_CACHE_TTL:
+            return list(_paths)
+        _KNOWN_APP_CANDIDATE_CACHE.pop(key, None)  # 过期 → 重新解析
 
     result: list[str] = []
     entry = KNOWN_APP_PATHS.get(key)
@@ -901,11 +1009,20 @@ def _resolve_known_app_candidates(exe_name: str) -> list[str]:
             cand = os.path.join(d, exe_name)
             if os.path.isfile(cand):
                 result.append(cand)
+        # ★ 2026-09-08：候选按 exe 修改时间【新→旧】排序 ——
+        # 损坏/陈旧安装（真实案例：D:\tencent_meeting\WeMeet）文件 mtime 旧，
+        # 新安装（修复重装后）排前，减少"先打坏安装再回退"的等待与弹窗。
+        try:
+            result.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        except OSError:
+            pass  # 个别路径 stat 失败 → 保持模板序
     if not result:
-        found = _search_common_roots(exe_name)
-        if found:
-            result.append(found)
-    _KNOWN_APP_CANDIDATE_CACHE[key] = list(result)
+        # 2026-09-09：通用名跳过全盘兜底（et.exe 等会误命中任意目录的同名 exe）
+        if key not in _GENERIC_EXE_NAMES:
+            found = _search_common_roots(exe_name)
+            if found:
+                result.append(found)
+    _KNOWN_APP_CANDIDATE_CACHE[key] = (time.monotonic(), list(result))
     return result
 
 
@@ -1008,14 +1125,38 @@ def _win_close_window(hwnd: int) -> None:
 
     ★ 2026-09-02：候选路径自动回退时，先关掉损坏安装弹出的错误框，
     避免界面残留错误框、也避免其干扰后续候选的窗口/进程快照判断。
+    ★ 2026-09-08：Post 后验证关闭（自绘错误框可能不响应一次 WM_CLOSE），
+    未关掉补发一次；仍不关也不再阻塞（残留交给下次快照的句柄差集兜住）。
     """
     if not hwnd:
         return
     import ctypes
+    u32 = ctypes.windll.user32
+    for _ in range(2):
+        try:
+            u32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)
+        except Exception:  # noqa: BLE001
+            return
+        time.sleep(0.3)
+        try:
+            if not u32.IsWindow(ctypes.c_void_p(hwnd)):
+                return
+        except Exception:  # noqa: BLE001
+            return
+
+
+def _win_is_small_window(hwnd: int) -> bool:
+    """对话框尺寸判定（<600x400）：限定子文本补读范围，避免大窗口全树扫描."""
+    import ctypes
+    from ctypes import wintypes
+
+    rect = wintypes.RECT()
     try:
-        ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)
+        if ctypes.windll.user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rect)):
+            return (rect.right - rect.left) < 600 and (rect.bottom - rect.top) < 400
     except Exception:  # noqa: BLE001
         pass
+    return False
 
 
 # 错误对话框关键词（标题或静态文本命中即视为启动异常）
@@ -1026,7 +1167,7 @@ _ERR_DIALOG_KEYWORDS = (
 )
 
 
-def _launch_app_windows(path: str, app_display: str = "", wait: float = 8.0) -> tuple[bool, str]:
+def _launch_app_windows(path: str, app_display: str = "", wait: float = 12.0) -> tuple[bool, str]:
     """用 Windows ShellExecuteW 启动本地应用 + 启动后健康检查（★ 2026-09-02）.
 
     ★ 2026-09-01 实测结论: 无控制台/打包 exe 环境下, `cmd /c start` 启动 GUI
@@ -1042,6 +1183,17 @@ def _launch_app_windows(path: str, app_display: str = "", wait: float = 8.0) -> 
       3) 超时但出现新进程 → 降级成功（进程已起，主窗口稍慢）；
       4) 超时无新进程无窗口 → 失败。
 
+    ★ 2026-09-08 漏检修复（用户实测"找不到网络路径"弹窗仍残留）：
+      - 新窗口按【句柄】差集判定（原标题差集会把"上一候选未关掉的同标题错误框"
+        误判为旧窗口而漏检），且不再过滤空标题窗口（空标题 #32770 也是错误框）；
+      - 非 #32770 的自绘错误框（Chromium/Qt 应用）——对话框尺寸的小窗口补读
+        子 Static 文本，防"网络路径"弹窗因类名不是 #32770 而漏检；
+      - 轮询 8s→12s（不可达 UNC 路径的解析重试常超过 8s 才弹窗）；
+      - "已在运行"判定由标题子串收紧为标题前缀（防"微信群运营方案.docx - Word"
+        误判 wechat 已在运行 → 假成功且无任何动作）；
+      - 新进程全部退出的场景由"降级成功"改判失败（launcher 短暂存活即弹错
+        退出是损坏安装的典型形态，此前被 got_new_proc 掩盖）。
+
     Returns:
         (ok, detail) — ok=True 应用已运行；detail 为人类可读诊断/错误文本。
     """
@@ -1049,10 +1201,11 @@ def _launch_app_windows(path: str, app_display: str = "", wait: float = 8.0) -> 
         return True, ""
     import ctypes
 
-    before_titles = {t for _, t, _ in _win_enum_windows()}
+    before_wins = _win_enum_windows()
+    before_hwnds = {h for h, _, _ in before_wins}
     before_procs = _win_enum_procs()
     # 应用已在运行（主窗口已存在）：ShellExecuteW 只会前置激活，直接判健康
-    if app_display and any(app_display in t for t in before_titles):
+    if app_display and any(t.startswith(app_display) for _, t, _ in before_wins):
         return True, "应用已在运行，已前置激活"
 
     try:
@@ -1066,11 +1219,11 @@ def _launch_app_windows(path: str, app_display: str = "", wait: float = 8.0) -> 
 
     deadline = time.monotonic() + wait
     err_hint = ""
-    got_new_proc = False
+    new_procs_cum: set[str] = set()
     while time.monotonic() < deadline:
         time.sleep(0.5)
         wins = _win_enum_windows()
-        new_wins = [(h, t, c) for h, t, c in wins if t and t not in before_titles]
+        new_wins = [(h, t, c) for h, t, c in wins if h not in before_hwnds]
         # 1) 主窗口出现 → 健康
         if app_display:
             for _, t, _ in new_wins:
@@ -1084,16 +1237,25 @@ def _launch_app_windows(path: str, app_display: str = "", wait: float = 8.0) -> 
                 if any(k.lower() in (t + " " + body).lower() for k in _ERR_DIALOG_KEYWORDS):
                     _win_close_window(h)
                     return False, f"检测到错误对话框: 标题={t!r} 内容={body!r}"
-            elif any(k.lower() in t.lower() for k in _ERR_DIALOG_KEYWORDS):
-                _win_close_window(h)
-                err_hint = err_hint or f"检测到错误窗口: {t!r}"
-        # 3) 新进程出现（launcher 拉起子进程）
-        if _win_enum_procs() - before_procs:
-            got_new_proc = True
+            else:
+                # 自绘错误框（Chromium/Qt）：小窗口补读子文本再判关键词
+                text = t
+                if _win_is_small_window(h):
+                    body = _win_dialog_text(h)
+                    if body:
+                        text = (t + " " + body).strip()
+                if any(k.lower() in text.lower() for k in _ERR_DIALOG_KEYWORDS):
+                    _win_close_window(h)
+                    err_hint = err_hint or f"检测到错误窗口: {text[:200]!r}"
+        # 3) 新进程出现（launcher 拉起子进程；累计集合供结束时存活判定）
+        new_procs_cum |= _win_enum_procs() - before_procs
 
     if err_hint:
         return False, err_hint
-    if got_new_proc:
+    if new_procs_cum:
+        # launcher 曾启动但已全部退出（弹错自退的典型形态）→ 失败而非降级成功
+        if not (new_procs_cum & _win_enum_procs()):
+            return False, "进程曾启动但已全部退出（疑似损坏安装或路径指向无效目标）"
         return True, "进程已启动（主窗口暂未检测到）"
     return False, "启动后等待期内未检测到新进程或窗口，应用可能未正常启动"
 
@@ -1202,9 +1364,16 @@ def _validate_command(command: str, args: list[str] | None = None, allow_app_lau
             if re.search(pattern, token):
                 return False, "安全拦截: 参数包含可疑的注入模式"
 
-        # 检查路径遍历
-        if ".." in token and ("/" in token or "\\" in token):
-            return False, "安全拦截: 参数包含路径遍历 (..)"
+        # 检查路径遍历（★ 2026-09-14 修复误杀：改为路径段语义）
+        # 旧判定 `".." in token and "/" in token` 会误杀一切"省略号+斜杠"
+        # 共存的 token（如 "v1.2.../next"、说明文本、Python 切片示例）。
+        # 真正的路径遍历是 `..` 作为独立路径段：../..、a/../b、path/..，
+        # 用正则锚定段边界（前后是分隔符或 token 边界）精准判定。
+        if _PATH_TRAVERSAL_RE.search(token):
+            return False, (
+                "安全拦截: 参数包含路径遍历 (..) —— 如需访问上级目录请改用绝对路径，"
+                "或在说明文字中避免 ../ 写法"
+            )
 
         # 检查绝对路径中的敏感目录
         if token.startswith("/"):
@@ -1293,6 +1462,112 @@ class ShellTool(ToolDefinition):
         destructive=False,
     )
 
+    async def _run_python_inprocess(
+        self, cmd_list: list[str], timeout: int, work_dir: str
+    ) -> Observation | None:
+        """用本应用自带解释器在进程内执行 python 命令（系统无 python 时的兜底）.
+
+        支持 `python script.py [args...]` 与 `python -c "code"`；
+        其余形式（-m pip 等）返回 None 落回原进程路径拿真实报错。
+        安全级别与 shell 工具等价（shell 本就可执行任意命令）；
+        线程内执行 + SystemExit 捕获 + stdout/stderr 重定向 + cwd/argv 还原。
+        """
+        import contextlib
+        import io as _io
+        try:
+            import runpy
+        except ImportError:  # PyInstaller 静态分析可能漏收函数内 import → 降级直接 exec 源码
+            runpy = None
+
+        script: str | None = None
+        script_idx = -1
+        code: str | None = None
+        for i, a in enumerate(cmd_list):
+            if i == 0:
+                continue
+            if a in ("-c", "/c") and i + 1 < len(cmd_list):
+                code = cmd_list[i + 1]
+                break
+            if a.startswith("-"):
+                continue
+            if a.lower().endswith(".py"):
+                script = a
+                script_idx = i
+                break
+            break  # 第一个非 flag 参数不是 .py（如 -m 的模块名）→ 不接
+
+        if code is None and script is None:
+            return None
+
+        prefix = (
+            "[内置解释器] 系统 python 不可用（未安装或为商店占位程序），"
+            f"已改用本应用自带解释器执行（Python {sys.version.split()[0]}，含打包依赖）。\n"
+        )
+
+        if code is None:
+            script_path = script if os.path.isabs(script) else os.path.abspath(
+                os.path.join(work_dir if os.path.isdir(work_dir) else ".", script)
+            )
+            if not os.path.isfile(script_path):
+                return Observation(
+                    tool_name=self.name, success=False,
+                    output=prefix + f"脚本不存在: {script_path}",
+                )
+            argv_tail = cmd_list[script_idx + 1:]
+        else:
+            script_path = "<python -c>"
+            argv_tail = []
+
+        def _run() -> tuple[str, int]:
+            out, err = _io.StringIO(), _io.StringIO()
+            old_argv, old_cwd = sys.argv, os.getcwd()
+            rc = 0
+            try:
+                if os.path.isdir(work_dir):
+                    os.chdir(work_dir)
+                sys.argv = ([script_path] if script else ["-c"]) + argv_tail
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    if code is not None:
+                        exec(compile(code, "<python -c>", "exec"), {"__name__": "__main__"})
+                    elif runpy is not None:
+                        runpy.run_path(script_path, run_name="__main__")
+                    else:
+                        with open(script_path, encoding="utf-8") as _f:
+                            _src = _f.read()
+                        exec(
+                            compile(_src, script_path, "exec"),
+                            {"__name__": "__main__", "__file__": script_path},
+                        )
+            except SystemExit as e:
+                rc = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+            except BaseException:  # noqa: BLE001 — 脚本任意异常都不能带崩宿主
+                rc = 1
+                import traceback as _tb
+
+                _tb.print_exc(file=err)
+            finally:
+                sys.argv = old_argv
+                os.chdir(old_cwd)
+            text = out.getvalue()
+            if err.getvalue():
+                text += ("\n" if text else "") + err.getvalue()
+            return text, rc
+
+        try:
+            text, rc = await asyncio.wait_for(asyncio.to_thread(_run), timeout=timeout)
+        except TimeoutError:
+            return Observation(
+                tool_name=self.name, success=False,
+                output=prefix + f"脚本超过 {timeout}s 未结束（进程内线程无法强杀，可能仍在后台运行）。"
+                "长时间任务建议拆分或改写为分步执行。",
+            )
+        body = text.strip() or f"(无输出, exit={rc})"
+        return Observation(
+            tool_name=self.name, success=rc == 0,
+            output=prefix + body,
+            metadata={"inprocess_python": True, "exit_code": rc},
+        )
+
     def adapt_schema(self, schema: dict) -> dict:
         """平台自适应（2026-08-30）：按运行系统调整给 LLM 的命令示例与参数说明.
 
@@ -1340,7 +1615,14 @@ class ShellTool(ToolDefinition):
                 "prefer the desktop tool or ask the user; screenshots black/denied on corporate "
                 "machines → desktop tool's screenshot already falls back to PrintWindow (works "
                 "where screen DC is blocked); UAC prompts can NOT be automated — ask the user "
-                "to approve."
+                "to approve.\n"
+                "PYTHON STUB TRAP (Windows): the bare `python` command may be the Microsoft "
+                "Store placeholder — it runs SILENTLY with NO output and exit 0. This tool "
+                "AUTO-DETECTS unusable system python (missing or stub) and re-runs python-family "
+                "commands with this app's BUILT-IN interpreter (in-process, with PIL etc. "
+                "bundled) — no user Python installation required; you'll see an [内置解释器] "
+                "prefix in the output when that happens. "
+                "For Python tasks you can also call execute_code directly. "
             )
             cmd = props.get("command")
             if cmd:
@@ -1421,7 +1703,11 @@ class ShellTool(ToolDefinition):
                 # 错误框、尝试下一个候选（如 D:\tengxunhuiyi\WeMeet），全部失败才返回。
                 _errs: list[str] = []
                 for _cand in _cands:
-                    _ok, _detail = _launch_app_windows(_cand, app_display=_display)
+                    # 2026-09-08：线程化 —— 健康检查含多轮 0.5s sleep（每候选最长
+                    # 12s），同步调用会阻塞整个事件循环（WebSocket 心跳/流式输出全卡）
+                    _ok, _detail = await asyncio.to_thread(
+                        _launch_app_windows, _cand, _display
+                    )
                     if _ok:
                         return Observation(
                             tool_name=self.name,
@@ -1480,7 +1766,7 @@ class ShellTool(ToolDefinition):
             return Observation(
                 tool_name=self.name,
                 success=code == 0,
-                output=output or "(无输出)",
+                output=output or f"(无输出, exit={code})",
                 metadata={"persistent": True, "session_key": session_key or "default", "exit_code": code},
             )
 
@@ -1597,6 +1883,16 @@ class ShellTool(ToolDefinition):
                 )
 
         try:
+            # ★ 2026-09-08：系统无可用 python（未安装/商店占位程序）→ 自动重定向 ──
+            # 普通用户 Windows 机器大多没有 Python 环境；python 族命令探测失败时，
+            # 改用本应用自带解释器在进程内执行（安全级别与 shell 等价——shell 本就
+            # 可执行任意命令；带 SystemExit 捕获 / 输出重定向 / 超时 / cwd 还原）。
+            if IS_WINDOWS and cmd_list and _is_python_cmd(cmd_list[0]):
+                if not await asyncio.to_thread(_probe_system_python):
+                    obs = await self._run_python_inprocess(cmd_list, timeout, work_dir)
+                    if obs is not None:
+                        return obs
+                    # 解析不出脚本/-c（如 -m pip）→ 落回原进程路径拿到真实报错
             # ── 跨平台执行构造（2026-08-30 Windows 适配）──
             # 元字符（| > ; & <）→ Linux/macOS 用 bash -c、Windows 用 cmd.exe /c；
             # Windows 的 cmd 内建命令（dir/type 等无 .exe）同样经 cmd /c。
@@ -1608,8 +1904,50 @@ class ShellTool(ToolDefinition):
             #    （实测矩阵：DETACHED+PIPE → 程序死；DETACHED+DEVNULL → 程序活）。
             #    start 是 fire-and-forget 语义,输出本就无意义。
             if IS_WINDOWS and _needs_detached(_proc_cmd):
-                _p = await asyncio.create_subprocess_exec(
-                    *_proc_cmd,
+                # ★ 2026-09-08：start 启动【已知应用】时改走健康检查通道 ——
+                # 此前 fire-and-forget 无条件 success=True，损坏安装弹的"找不到
+                # 网络路径"错误框既不检测也不回退（假成功 + 弹窗残留）。
+                _start_target = ""
+                for _a in cmd_list[1:]:
+                    if not _a or _a.startswith("-"):
+                        continue
+                    _base = os.path.basename(_a.strip('"')).lower()
+                    if _base in KNOWN_APP_PATHS:
+                        _start_target = _base
+                        break
+                    if _base.endswith(".exe"):
+                        _start_target = _a.strip('"')
+                        break
+                if _start_target:
+                    _sname = os.path.basename(_start_target)
+                    _sentry = KNOWN_APP_PATHS.get(_sname.lower())
+                    _sdisplay = _sentry[0] if _sentry else os.path.splitext(_sname)[0]
+                    _scands = (
+                        _resolve_known_app_candidates(_sname)
+                        if _sentry
+                        else ([_start_target] if os.path.isfile(_start_target) else [])
+                    )
+                    if _scands:
+                        _serrs: list[str] = []
+                        for _scand in _scands:
+                            _sok, _sdetail = await asyncio.to_thread(
+                                _launch_app_windows, _scand, _sdisplay
+                            )
+                            if _sok:
+                                return Observation(
+                                    tool_name=self.name, success=True,
+                                    output=f"已启动 {_sdisplay}: {_scand}\n{_sdetail}",
+                                )
+                            _serrs.append(f"✗ {_scand}: {_sdetail}")
+                        return Observation(
+                            tool_name=self.name, success=False,
+                            output=(
+                                f"启动 {_sdisplay} 失败：已尝试 {len(_scands)} 个候选路径，"
+                                f"可能均为损坏/不完整安装:\n" + "\n".join(_serrs)
+                            ),
+                        )
+                _p = await _spawn(
+                    _proc_cmd,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                     cwd=work_dir,
@@ -1625,8 +1963,8 @@ class ShellTool(ToolDefinition):
                     output="",
                 )
             _spawn_kwargs = no_window_kwargs()
-            process = await asyncio.create_subprocess_exec(
-                *_proc_cmd,
+            process = await _spawn(
+                _proc_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=work_dir,
@@ -1670,6 +2008,20 @@ class ShellTool(ToolDefinition):
                 _base = os.path.basename(cmd_list[0].strip().lower()).strip('"')
                 if _base in ("explorer", "explorer.exe", "start") or _base.endswith(".msc"):
                     _ok = True
+
+            # ★ 2026-09-08：空输出标注 —— 空输出≠失败（脚本可能只是没打印），
+            #   但直接返回空串时，反思层只能瞎猜"运行环境不可用"。
+            #   补一行退出码事实；Windows 下 bare python 常命中商店占位程序
+            #   （静默无输出 exit 0），给出明确换路指引。
+            if not full_output.strip():
+                full_output = f"(命令已执行，无输出，exit={_rc})"
+                if IS_WINDOWS and _ok:
+                    _exe = os.path.basename(cmd_list[0].strip().strip('"').lower())
+                    if _exe.split(".")[0] in ("python", "python3"):
+                        full_output += (
+                            "\n[提示] 该 python 可能是 Microsoft Store 占位程序（静默无输出）。"
+                            "改用 py 或解释器完整路径重试；可先 python -c \"print('ok')\" 验证解释器可用。"
+                        )
 
             return Observation(
                 tool_name=self.name,
@@ -1799,8 +2151,8 @@ class ShellTool(ToolDefinition):
                 return Observation(tool_name=self.name, success=False, output="命令为空")
             _proc_cmd = _build_proc_cmd(cmd_list)
             if IS_WINDOWS and _needs_detached(_proc_cmd):
-                _p = await asyncio.create_subprocess_exec(
-                    *_proc_cmd,
+                _p = await _spawn(
+                    _proc_cmd,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                     cwd=work_dir,
@@ -1812,8 +2164,8 @@ class ShellTool(ToolDefinition):
                     pass
                 return Observation(tool_name=self.name, success=True, output="")
             _spawn_kwargs = no_window_kwargs()
-            process = await asyncio.create_subprocess_exec(
-                *_proc_cmd,
+            process = await _spawn(
+                _proc_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=work_dir,

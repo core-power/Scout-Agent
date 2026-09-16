@@ -61,7 +61,7 @@ desktop/
 ├── launcher.py            # 启动器（便携数据目录 / 内嵌服务 / 窗口）
 ├── build.bat              # Windows 一键构建（PyInstaller exe）
 ├── scout_desktop.spec     # PyInstaller 打包配置
-├── scout.ico              # exe 图标（tools/gen_win_icon.py 生成）
+├── scout.ico              # exe 图标（经典罗盘；tools/gen_win_icon.py 封装 gen_pwa_icons.py 产物）
 ├── requirements-desktop.txt  # 桌面最小依赖集（纯 ASCII）
 ├── Dockerfile.win         # （备选）Wine 交叉打包镜像，网络可用时可用
 └── README.md

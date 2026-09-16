@@ -130,7 +130,15 @@ class SkillManager:
         """返回 [(scope, dir)]，按加载优先级排序（后加载覆盖先加载 = 就近优先）."""
         dirs: list[tuple[str, Path]] = []
 
-        # ADMIN（机器级，最先加载 = 最低优先级）
+        # BUILTIN（随包内置默认技能，最先加载 = 最低优先级，用户/项目可覆盖）
+        # ★ 2026-09-10：CUA 等平台级默认技能不应依赖用户数据目录（.scout），
+        # 随安装包分发、开箱即用；定位方式与 web/static 一致（__file__ 相对，
+        # dev 与 PyInstaller frozen 双兼容）。
+        builtin = Path(__file__).parent.parent / "skills_builtin"
+        if builtin.exists():
+            dirs.append(("builtin", builtin))
+
+        # ADMIN（机器级）
         if self._enable_admin_scope:
             admin = Path("/etc/scout/skills")
             if admin.exists():

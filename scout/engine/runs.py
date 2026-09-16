@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -53,10 +54,22 @@ class RunStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextlib.contextmanager
+    def _conn(self):
+        """事务化连接（退出时必定关闭）.
+
+        ★ 2026-09-14 修复连接泄漏：原实现返回裸连接，`with self._conn()` 只
+        提交/回滚事务、**不关闭**连接（sqlite3.Connection 的上下文协议语义），
+        每次调用泄漏一个文件句柄 → 长跑进程句柄耗尽、Windows 下 db 文件被占用
+        无法删除。改为 contextmanager 后调用处语法不变。
+        """
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:  # 提交/回滚事务
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         try:

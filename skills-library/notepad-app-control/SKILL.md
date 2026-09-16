@@ -8,7 +8,7 @@ author: scout-self-distilled
 
 # 记事本操控（标准 Win32 应用样板，2026-09-03 实测全通）
 
-> 记事本属于标准 Win32 应用：**控件树完整**，用控件名操作（click_control/type_control），比坐标稳。是验证 desktop 工具链路的标准样板。通用方法论见 `windows-gui-control`。
+> 记事本属于标准 Win32 应用：**控件树完整**，用控件名操作（click_control/type_control），比坐标稳。是验证 desktop 工具链路的标准样板。通用方法论见 `cua-computer-use`。
 
 ## 配方
 

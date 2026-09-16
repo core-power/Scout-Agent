@@ -38,8 +38,8 @@ class TestSessionApiContract:
         missing = [m for m in self.REQUIRED_METHODS if not hasattr(SessionStore, m)]
         assert not missing, f"SessionStore 缺失方法: {missing}"
 
-    def test_default_path_points_to_appdata_scout(self, monkeypatch):
-        """默认库路径必须指向 %APPDATA%\\Scout\\sessions.db（2026-08-31 主目录优先）."""
+    def test_default_path_points_to_drive_root_scout(self, monkeypatch):
+        """默认库路径必须指向 <盘符>\\.scout\\sessions.db（2026-09-07 工作目录约定）."""
         import os
         from pathlib import Path
 
@@ -49,15 +49,14 @@ class TestSessionApiContract:
         monkeypatch.delenv("SCOUT_SQLITE_PATH", raising=False)
         expected = str(get_data_dir() / "sessions.db")
         if os.name == "nt":
+            # Windows 首选 <盘符根>\.scout（用户指定工作目录）；盘符根不可写才回退 %APPDATA%\Scout
+            anchor = Path(PROJECT_ROOT.anchor)
+            drive_root = str(anchor / ".scout" / "sessions.db")
             appdata = os.environ.get("APPDATA")
-            if appdata:
-                # Windows 首选 %APPDATA%\Scout（修复"更新丢配置"），而非盘符根 .scout
-                assert expected == str(Path(appdata) / "Scout" / "sessions.db"), (
-                    f"默认 SQLite 路径应为 %APPDATA%\\Scout\\sessions.db, 实际 {expected}"
-                )
-            else:
-                # 无 APPDATA 时回退 <盘符>\.scout
-                assert expected == str(Path(PROJECT_ROOT.anchor) / ".scout" / "sessions.db")
+            appdata_path = str(Path(appdata) / "Scout" / "sessions.db") if appdata else None
+            assert expected in (drive_root, appdata_path), (
+                f"默认 SQLite 路径应为盘符根 .scout 或 APPDATA 回退, 实际 {expected}"
+            )
         else:
             assert ".scout" in expected, f"默认路径必须包含 .scout: {expected}"
         # 通过 factory 的默认逻辑验证

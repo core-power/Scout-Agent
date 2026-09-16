@@ -131,6 +131,19 @@ def create_web_app(agent=None) -> FastAPI:
                 except (asyncio.CancelledError, Exception):
                     pass
 
+            # ★ 2026-09-14：退出兜底落盘 —— 把内存中的活跃会话写盘。此前只在
+            # 回合收尾落盘（且工具中途不落库），正常关闭时「未收尾回合」或
+            # 「距上次节流落盘 <5s 的增量」会丢失（用户反馈「重启后最新对话
+            # 消息丢失」）。走线程池执行，避免同步全量重写阻塞关闭流程。
+            try:
+                from scout.session.store import get_session_store
+
+                _saved = await asyncio.to_thread(get_session_store().flush_active)
+                if _saved:
+                    logging.getLogger(__name__).info("退出前已落盘 %d 个活跃会话", _saved)
+            except Exception:
+                logging.getLogger(__name__).warning("退出 flush 失败（不影响关闭）", exc_info=True)
+
     # 交互式 API 文档默认关闭（避免泄露 API 结构），可通过配置 web_docs
     # 或环境变量 SCOUT_ENABLE_DOCS=1 开启。
     _docs_enabled = os.environ.get("SCOUT_ENABLE_DOCS", "").lower() in ("1", "true", "yes")
@@ -142,7 +155,7 @@ def create_web_app(agent=None) -> FastAPI:
             logging.getLogger(__name__).debug("读取 web_docs 配置失败: %s", e)
     app = FastAPI(
         title="Scout Agent",
-        version="1.0.0.2",
+        version="1.0.0.3",
         lifespan=_lifespan,
         docs_url="/docs" if _docs_enabled else None,
         redoc_url="/redoc" if _docs_enabled else None,
@@ -382,6 +395,6 @@ def create_web_app(agent=None) -> FastAPI:
     # 健康检查端点（用于 Docker）
     @app.get("/health")
     async def health_check():
-        return {"status": "healthy", "version": "1.0.0.2"}
+        return {"status": "healthy", "version": "1.0.0.3"}
 
     return app

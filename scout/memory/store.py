@@ -9,6 +9,7 @@ v2: 集成向量嵌入，支持混合检索（FTS5 文本 + 向量语义）。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import sqlite3
@@ -37,6 +38,11 @@ class MemoryEntry:
         created_at: datetime | None = None,
         last_accessed: datetime | None = None,
         access_count: int = 0,
+        fact_key: str = "",
+        status: str = "active",
+        confidence: float = 0.5,
+        evidence: str = "",
+        valid_to: str = "",
     ):
         self.id = id
         self.content = content
@@ -45,6 +51,15 @@ class MemoryEntry:
         self.created_at = created_at or datetime.now()
         self.last_accessed = last_accessed or datetime.now()
         self.access_count = access_count
+        # ── 结构化事实字段（2026-09-15，分层记忆：语义层）──────────────
+        # fact_key: 事实键（如 "user:lives_in"），同键新值会令旧值失效
+        # status:   active | deprecated（失效事实保留可追溯，但不再召回）
+        # confidence/evidence: 置信度与证据原文（抗幻觉：必须能指回原话）
+        self.fact_key = fact_key
+        self.status = status or "active"
+        self.confidence = confidence
+        self.evidence = evidence
+        self.valid_to = valid_to
 
     def decay_score(self) -> float:
         """时间衰减分数 — 越久未访问越低."""
@@ -98,6 +113,7 @@ class MemoryStore:
         self._vector_lock = threading.RLock()
 
         self._init_db()
+        self._migrate_schema()
         self._load_vector_index()
 
     def set_embedding_provider(self, provider: Any) -> None:
@@ -120,6 +136,24 @@ class MemoryStore:
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
         return self._local.conn
+
+    def close(self) -> None:
+        """关闭当前线程的数据库连接，释放文件句柄.
+
+        ★ 2026-09-14 新增：连接为线程本地常驻（性能考虑），此前无释放接口 →
+        测试/短生命周期场景下 tmp 目录内的 db 文件被占用（Windows 报
+        ``WinError 32``），无法清理。长驻服务无需调用（进程退出即释放）。
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:  # 已关闭/线程状态异常时不影响调用方
+            logger.debug("MemoryStore.close 忽略异常", exc_info=True)
+        finally:
+            with contextlib.suppress(AttributeError):
+                del self._local.conn
 
     def _init_db(self) -> None:
         conn = self._get_conn()
@@ -206,7 +240,8 @@ class MemoryStore:
         try:
             # 尝试异步调用（如果在事件循环中）
             try:
-                loop = asyncio.get_running_loop()
+                # 仅用于探测「当前是否处于事件循环」——抛 RuntimeError 即走同步分支
+                asyncio.get_running_loop()
                 # 在事件循环中，创建新线程执行异步函数
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -246,12 +281,72 @@ class MemoryStore:
             logger.warning(f"Embedding 生成失败: {e}")
             return None
 
+    @staticmethod
+    def _entry_from_row(row: Any) -> "MemoryEntry":
+        """从 SQLite 行构造 MemoryEntry（兼容旧库：新增列不存在时取默认值）."""
+        try:
+            keys = set(row.keys())
+        except Exception:  # noqa: BLE001
+            keys = set()
+
+        def _g(name: str, default: Any) -> Any:
+            return (row[name] if name in keys else default)
+
+        return MemoryEntry(
+            id=row["id"],
+            content=row["content"],
+            category=row["category"],
+            importance=row["importance"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            last_accessed=datetime.fromisoformat(row["last_accessed"]),
+            access_count=row["access_count"],
+            fact_key=_g("fact_key", "") or "",
+            status=_g("status", "active") or "active",
+            confidence=_g("confidence", 0.5),
+            evidence=_g("evidence", "") or "",
+            valid_to=_g("valid_to", "") or "",
+        )
+
+    def _migrate_schema(self) -> None:
+        """Schema 迁移（幂等，2026-09-15）—— 补充分层记忆所需的结构化事实列.
+
+        分层记忆要求"事实可更新、冲突可失效"：新增 fact_key / status / valid_to /
+        confidence / evidence 五列。旧库升级时按列存在性逐个 ALTER，重复执行安全。
+        """
+        try:
+            conn = self._get_conn()
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(memories)")}
+            for _ddl in (
+                "ALTER TABLE memories ADD COLUMN fact_key TEXT DEFAULT ''",
+                "ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'",
+                "ALTER TABLE memories ADD COLUMN valid_to TEXT DEFAULT ''",
+                "ALTER TABLE memories ADD COLUMN confidence REAL DEFAULT 0.5",
+                "ALTER TABLE memories ADD COLUMN evidence TEXT DEFAULT ''",
+            ):
+                _col = _ddl.split("ADD COLUMN ")[1].split()[0]
+                if _col not in cols:
+                    conn.execute(_ddl)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_factkey ON memories(fact_key)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)"
+            )
+            conn.commit()
+        except Exception:  # noqa: BLE001 — 迁移失败不应阻塞启动
+            pass
+
     def add(
         self,
         content: str,
         category: str = "general",
         importance: float = 0.5,
         embedding: np.ndarray | None = None,
+        source_session: str = "",
+        source_msg_count: int = 0,
+        fact_key: str = "",
+        confidence: float = 0.5,
+        evidence: str = "",
     ) -> int:
         """添加一条记忆.
 
@@ -288,15 +383,35 @@ class MemoryStore:
         conn = self._get_conn()
         now = datetime.now().isoformat()
 
+        # ★ 2026-09-15（分层记忆 · 语义层冲突处理）：
+        # 同一事实键（如 user:lives_in）出现**新值**时，把旧记录标记为
+        # deprecated 并记录 valid_to，而不是让两条矛盾事实并存 ——
+        # 否则用户说"我搬到深圳了"之后，旧的"住在北京"仍会被检索出来污染回答。
+        # 注意：不物理删除（保留可追溯，符合"矛盾事实不要直接删除"的原则）。
+        if fact_key:
+            try:
+                conn.execute(
+                    "UPDATE memories SET status = 'deprecated', valid_to = ? "
+                    "WHERE fact_key = ? AND status = 'active' AND content <> ?",
+                    (now, fact_key, content),
+                )
+                conn.commit()
+            except Exception:  # noqa: BLE001 — 旧库无该列时忽略
+                pass
+
         # 序列化 embedding
         embedding_blob = None
         if embedding is not None:
             embedding_blob = embedding.astype(np.float32).tobytes()
 
         cur = conn.execute(
-            """INSERT INTO memories (content, category, importance, created_at, last_accessed, access_count, embedding)
-               VALUES (?, ?, ?, ?, ?, 0, ?)""",
-            (content, category, importance, now, now, embedding_blob),
+            """INSERT INTO memories (content, category, importance, created_at, last_accessed, access_count, embedding, source_session, source_msg_count, fact_key, status, confidence, evidence)
+               VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                content, category, importance, now, now, embedding_blob,
+                source_session, source_msg_count,
+                fact_key, "active", float(confidence), evidence,
+            ),
         )
         conn.commit()
         mem_id = cur.lastrowid
@@ -321,10 +436,16 @@ class MemoryStore:
         content: str,
         category: str = "general",
         importance: float = 0.5,
+        source_session: str = "",
+        source_msg_count: int = 0,
+        fact_key: str = "",
+        confidence: float = 0.5,
+        evidence: str = "",
     ) -> int:
         """异步添加记忆 — 自动生成 embedding."""
         embedding = await self._embed_text(content)
-        return self.add(content, category, importance, embedding=embedding)
+        return self.add(content, category, importance, embedding=embedding,
+                        source_session=source_session, source_msg_count=source_msg_count)
 
     def search(self, query: str, limit: int = 10) -> list[MemoryEntry]:
         """搜索记忆 — 混合检索（向量语义 + FTS5 + LIKE）.
@@ -347,6 +468,10 @@ class MemoryStore:
             results = text_results[:limit]
         else:
             return []
+
+        # ★ 2026-09-15（分层记忆 · 语义层）：被取代/失效的事实不再参与召回。
+        # 旧值仍留在库里可追溯（前端/审计可查），但不会污染当前回答。
+        results = [e for e in results if getattr(e, "status", "active") != "deprecated"]
 
         # 访问计数：每次搜索对最终结果统一计一次
         self._bump_access_count(results)
@@ -440,16 +565,7 @@ class MemoryStore:
                     "SELECT * FROM memories WHERE id = ?", (mem_id,)
                 ).fetchone()
                 if row:
-                    entry = MemoryEntry(
-                        id=row["id"],
-                        content=row["content"],
-                        category=row["category"],
-                        importance=row["importance"],
-                        created_at=datetime.fromisoformat(row["created_at"]),
-                        last_accessed=datetime.fromisoformat(row["last_accessed"]),
-                        access_count=row["access_count"],
-                    )
-                    results.append(entry)
+                    results.append(self._entry_from_row(row))
 
             return results
 
@@ -557,16 +673,7 @@ class MemoryStore:
             if r["id"] in seen_ids:
                 continue
             seen_ids.add(r["id"])
-            entry = MemoryEntry(
-                id=r["id"],
-                content=r["content"],
-                category=r["category"],
-                importance=r["importance"],
-                created_at=datetime.fromisoformat(r["created_at"]),
-                last_accessed=datetime.fromisoformat(r["last_accessed"]),
-                access_count=r["access_count"],
-            )
-            results.append(entry)
+            results.append(self._entry_from_row(r))
 
         # 访问计数统一在 search/search_async 入口执行（避免与 RRF 融合重复累加）
         return results
@@ -631,18 +738,7 @@ class MemoryStore:
                 "SELECT * FROM memories ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
 
-        return [
-            MemoryEntry(
-                id=r["id"],
-                content=r["content"],
-                category=r["category"],
-                importance=r["importance"],
-                created_at=datetime.fromisoformat(r["created_at"]),
-                last_accessed=datetime.fromisoformat(r["last_accessed"]),
-                access_count=r["access_count"],
-            )
-            for r in rows
-        ]
+        return [self._entry_from_row(r) for r in rows]
 
     def count(self) -> int:
         """记忆总条数（自省模块用）."""
@@ -656,18 +752,7 @@ class MemoryStore:
         rows = conn.execute(
             "SELECT * FROM memories ORDER BY created_at ASC LIMIT ?", (limit,)
         ).fetchall()
-        return [
-            MemoryEntry(
-                id=r["id"],
-                content=r["content"],
-                category=r["category"],
-                importance=r["importance"],
-                created_at=datetime.fromisoformat(r["created_at"]),
-                last_accessed=datetime.fromisoformat(r["last_accessed"]),
-                access_count=r["access_count"],
-            )
-            for r in rows
-        ]
+        return [self._entry_from_row(r) for r in rows]
 
     def decay_cleanup(self, min_score: float = 0.05) -> int:
         """清理衰减过度的记忆 — 分数低于 min_score 的删除.
@@ -763,9 +848,13 @@ class MemoryStore:
     def delete_by_content(self, content: str) -> int:
         """按内容模糊匹配删除记忆，返回删除条数."""
         # 限制搜索长度，避免 LIKE pattern too complex
-        if len(content) > 100:
+        # ★ 2026-09-10：超长内容此前直接放弃（return 0）→ 长消息的记忆从不清理。
+        #   改为截取前 80 字符做 LIKE 匹配（既防 pattern 过长，又保住清理能力）。
+        if not content:
             return 0
-        
+        if len(content) > 80:
+            content = content[:80]
+
         conn = self._get_conn()
         try:
             cur = conn.execute("DELETE FROM memories WHERE content LIKE ?", (f"%{content}%",))
@@ -778,6 +867,30 @@ class MemoryStore:
             self._load_vector_index()
 
         return cur.rowcount
+
+    def delete_by_source(self, session_id: str, msg_count_gt: int) -> int:
+        """按会话归属删除记忆：删 source_session=会话 且 source_msg_count > msg_count_gt 的条目.
+
+        ★ 2026-09-10：编辑消息/重新生成时，对话被截断到 edit_from —— 凡抽取时
+        覆盖消息数 > edit_from 的记忆，都可能包含被截断内容 → 删除。
+        抽取范围未触及截断点的记忆（来自更早轮次）保留。
+        （此前的按内容 LIKE 清理对改写后的记忆几乎必然失效。）
+        """
+        if not session_id:
+            return 0
+        try:
+            conn = self._get_conn()
+            cur = conn.execute(
+                "DELETE FROM memories WHERE source_session = ? AND source_msg_count > ?",
+                (session_id, int(msg_count_gt)),
+            )
+            conn.commit()
+            n = cur.rowcount
+            if n > 0:
+                self._load_vector_index()
+            return n
+        except Exception:
+            return 0
 
     def stats(self) -> dict:
         """存储统计."""

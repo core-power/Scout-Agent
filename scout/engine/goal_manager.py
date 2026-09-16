@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -98,6 +99,25 @@ class GoalManager:
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
         return self._local.conn
+
+
+    def close(self) -> None:
+        """关闭当前线程的数据库连接，释放文件句柄.
+
+        ★ 2026-09-14 新增：连接为线程本地常驻（性能考虑），此前无释放接口 →
+        测试/短生命周期场景下临时目录内的 db 文件被占用（Windows 报
+        ``WinError 32``），无法清理。长驻服务无需调用（进程退出即释放）。
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:  # 已关闭/线程状态异常时不影响调用方
+            logger.debug("%s.close 忽略异常", type(self).__name__, exc_info=True)
+        finally:
+            with contextlib.suppress(AttributeError):
+                del self._local.conn
 
     def _init_db(self) -> None:
         conn = self._get_conn()

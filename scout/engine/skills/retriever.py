@@ -14,7 +14,7 @@ import time
 from typing import Any
 
 # VectorSkillStore imported lazily
-from scout.engine.skill_types import SkillStatus, SynthesizedSkill
+from scout.engine.skills.types import SkillStatus, SynthesizedSkill
 # Reranker imported lazily to avoid threading/numpy dependency chain
 
 logger = logging.getLogger(__name__)

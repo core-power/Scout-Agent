@@ -8,7 +8,7 @@ author: scout-self-distilled
 
 # 飞书 PC 版操控（2026-09-03 实测沉淀）
 
-> 通用方法论见 `windows-gui-control`。飞书是 Electron 应用：控件树部分可用，坐标路线为主，**Enter 发送有效**（与微信 4.x 不同）。
+> 通用方法论见 `cua-computer-use`。飞书是 Electron 应用：控件树部分可用，坐标路线为主，**Enter 发送有效**（与微信 4.x 不同）。
 
 ## 核心配方：Ctrl+K 全局搜索 + SendInput 中文（实测验证）
 

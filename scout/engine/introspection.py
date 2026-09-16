@@ -132,7 +132,7 @@ class IntrospectionLoop:
                 # 补充：僵尸技能（长期未用 + 低使用次数）→ 直接弃用
                 now = time.time()
                 try:
-                    from scout.engine.skill_types import SkillStatus
+                    from scout.engine.skills.types import SkillStatus
                     for s in self.skill_store.list_skills(status=SkillStatus.ACTIVE):
                         unused_days = (now - s.last_used_at) / 86400 if s.last_used_at else 999
                         if unused_days > SKILL_UNUSED_DAYS and s.usage_count < 3:

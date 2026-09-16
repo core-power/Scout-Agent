@@ -17,7 +17,7 @@ import uuid
 from typing import Any
 
 # VectorSkillStore imported lazily to avoid numpy dependency chain
-from scout.engine.skill_types import SkillOrigin, SkillStatus, SynthesizedSkill
+from scout.engine.skills.types import SkillOrigin, SkillStatus, SynthesizedSkill
 
 logger = logging.getLogger(__name__)
 

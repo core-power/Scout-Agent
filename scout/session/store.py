@@ -16,6 +16,8 @@ import json
 import logging
 import os
 import threading
+import time
+import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -108,6 +110,12 @@ class SessionStore:
         # 串行化对共享后端连接的写入（多线程 + 多事件循环下均安全），
         # 避免全量重写（DELETE+INSERT）并发交错导致消息丢失
         self._lock = threading.Lock()
+        # 活跃会话弱引用表（退出 flush 用）★ 2026-09-14
+        self._active_refs: dict[str, Any] = {}
+        # 活跃回合标记：sid → 最近一次"回合进行中"的时间戳 ★ 2026-09-15。
+        # 用于阻止前端在 agent 运行中删除/编辑消息（否则回合结束时的保存会把
+        # 已删消息带回来 —— "删了又回来了"）。
+        self._active_turns: dict[str, float] = {}
         self._is_sqlite = False
         self._db_path = db_path
 
@@ -127,9 +135,14 @@ class SessionStore:
         from scout.storage.factory import get_cache_backend, get_storage_backend
 
         if self._db_path:
-            # 显式指定 db_path → 独立 SQLite 实例（测试/临时库）
+            # 显式指定 db_path → 独立 SQLite 实例（测试/临时库）。
+            # 注：此处 backend="sqlite" 不是硬编码旁路——db_path 语义就是
+            # "给我一个独立的 sqlite 文件"（factory 对 db_path 同样强制
+            # SQLite）；生产可插拔路径走下面的无参分支（读
+            # SCOUT_STORAGE_BACKEND，支持 postgres）。
             self._storage = get_storage_backend(backend="sqlite", db_path=str(self._db_path))
         else:
+            # 生产路径：SPI 工厂按配置解析（sqlite/postgres）
             self._storage = get_storage_backend()
         if self._cache is None:
             self._cache = get_cache_backend()
@@ -767,7 +780,7 @@ class SessionStore:
     # 这些方法是 agent.py / web.py / starlight.py 的既有调用契约。
     # save_session: 全量重写消息（agent 在内存中维护 session.messages，保存时整体落库）
 
-    async def async_save_session(self, session: Any) -> None:
+    async def async_save_session(self, session: Any, force: bool = False) -> None:
         """全量保存会话（消息全量重写，seq 按列表顺序重排）."""
         with self._lock:
             db = await self._ensure_storage()
@@ -827,6 +840,23 @@ class SessionStore:
                     m.content or "", m.sender or "", m.source or "",
                     m.reasoning or "", meta_json, ts, seq,
                 ))
+
+            # ★ 2026-09-15（数据安全）：防「过期快照整段覆盖」。
+            # save_session 是全量替换语义（DELETE + INSERT），而调用方可能持有
+            # **较短的旧快照**——典型场景：agent 正在跑（内存快照 B 持续增长）时，
+            # 前端/另一请求基于较旧的磁盘态完成了一次保存，其后再来一次 agent 的
+            # 早期快照保存，就会把较新的消息整段抹掉（表现为"消息回退/发完就没了"）。
+            # 除非显式 force（编辑截断、删除消息等**故意变短**的操作），否则当磁盘
+            # 消息数多于本次内存快照时跳过保存，保证"更新的磁盘态"不被推翻。
+            if not force:
+                _disk_n = len(old_rows)
+                _mem_n = len(session.messages)
+                if _disk_n > _mem_n:
+                    logger.warning(
+                        "跳过过期快照保存：磁盘 %d 条 > 内存 %d 条（session=%s）",
+                        _disk_n, _mem_n, session.id,
+                    )
+                    return
 
             async with db.transaction():
                 await db.execute("DELETE FROM messages WHERE session_id = $1", (session.id,))
@@ -1039,9 +1069,83 @@ class SessionStore:
     # ========== 同步兼容层 ==========
     # 为保持向后兼容，提供同步方法（内部使用 asyncio）
 
-    def save_session(self, session: Any) -> None:
-        """全量保存会话（同步）."""
-        self._run_async(self.async_save_session(session))
+    def save_session(self, session: Any, force: bool = False) -> None:
+        """全量保存会话（同步）.
+
+        Args:
+            force: True 表示**允许快照变短**（编辑截断 / 删除消息等显式操作）；
+                默认 False 时会拒绝用"比磁盘更短"的旧快照覆盖磁盘（见
+                ``async_save_session`` 内的过期快照防护）。
+        """
+        self._register_active(session)
+        self._run_async(self.async_save_session(session, force=force))
+
+    # ========== 活跃回合标记（2026-09-15）==========
+
+    def mark_turn_active(self, session_id: str) -> None:
+        """标记该会话有回合正在运行（由 agent 每步续期）."""
+        try:
+            with self._lock:
+                self._active_turns[str(session_id)] = time.time()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def is_turn_active(self, session_id: str, ttl: float = 20.0) -> bool:
+        """该会话是否有正在运行的回合.
+
+        TTL 语义：agent 每步都会 ``mark_turn_active`` 续期，因此运行期间始终新鲜；
+        回合结束或进程异常后最迟 ``ttl`` 秒自动失效（2026-09-16：120s→20s，过长的窗口会让用户刚跑完任务就删不掉消息） —— 不需要显式清理，也不会
+        出现"永久活跃导致前端再也删不掉消息"。
+        """
+        try:
+            with self._lock:
+                ts = self._active_turns.get(str(session_id))
+            return bool(ts and (time.time() - ts) < ttl)
+        except Exception:  # noqa: BLE001
+            return False
+
+    # ========== 退出 flush（2026-09-14）==========
+
+    def _register_active(self, session: Any) -> None:
+        """登记活跃会话（弱引用），供进程退出时兜底落盘."""
+        try:
+            sid = getattr(session, "id", None)
+            if not sid:
+                return
+            with self._lock:
+                self._active_refs[str(sid)] = weakref.ref(session)
+                # 上限保护：仅影响「退出兜底覆盖面」，不引入内存泄漏
+                while len(self._active_refs) > 50:
+                    self._active_refs.pop(next(iter(self._active_refs)))
+        except Exception:  # noqa: BLE001 — 登记失败不影响正常保存
+            pass
+
+    def flush_active(self) -> int:
+        """退出前把内存中的活跃会话全部落盘（尽力而为），返回成功数.
+
+        ★ 2026-09-14：GUI 正常关闭时由 lifespan 调用，弥补两类丢失窗口：
+        1) 回合未收尾（消息只在内存）；
+        2) 距上次节流落盘 < 5s 的增量。
+        进程被强杀（任务管理器结束）无法拦截，由 Agent._persist_progress 兜底。
+        """
+        try:
+            with self._lock:
+                refs = list(self._active_refs.values())
+        except Exception:  # noqa: BLE001
+            return 0
+        saved = 0
+        for ref in refs:
+            try:
+                s = ref()
+                if s is None:
+                    continue
+                self._run_async(self.async_save_session(s, force=True))
+                saved += 1
+            except Exception:  # noqa: BLE001 — 尽力而为，单个失败不阻断
+                logger.warning("退出 flush 失败（跳过该会话）", exc_info=True)
+        if saved:
+            logger.info("退出 flush：已落盘 %d 个活跃会话", saved)
+        return saved
 
     def load_session(self, session_id: str) -> Any | None:
         """加载会话（同步）."""

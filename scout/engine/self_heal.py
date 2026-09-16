@@ -97,8 +97,12 @@ class VerifyPipeline:
         """运行 pytest 进行单元测试."""
         start_time = asyncio.get_event_loop().time()
         try:
+            # ★ 2026-09-14：Windows 无 python3（或为商店占位），统一走
+            # platform.get_python_cmd()（Windows→python / POSIX→python3）。
+            from scout.core.platform import get_python_cmd
+
             proc = await asyncio.create_subprocess_exec(
-                "python3", "-m", "pytest", target, "-v", "--tb=short",
+                get_python_cmd(), "-m", "pytest", target, "-v", "--tb=short",
                 cwd=self.work_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

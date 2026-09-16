@@ -199,7 +199,14 @@ def _safe_exec(code: str, timeout: int = 10) -> tuple[bool, str]:
         root = name.split(".")[0]
 
         if root in BLOCKED_MODULES:
-            raise ImportError(f"安全拦截: 禁止导入模块 '{name}'")
+            # ★ 2026-09-14：拦截报错加分流引导——此前裸报错让 agent 反复换写法
+            # 重试（每次浪费一轮），明确告知正确的工具路径直接止损。
+            raise ImportError(
+                f"安全拦截: 禁止导入模块 '{name}'（execute_code 是受限沙箱）。"
+                "分流指引：执行系统命令/子进程 → 改用 shell 工具；"
+                "网络请求 → 用 httpx/urllib（白名单内）或 web_fetch 工具；"
+                "读文件 → file 工具。不要重试本模块。"
+            )
 
         result = original_import(name, globals, locals, fromlist, level)
 
@@ -260,9 +267,12 @@ class ExecuteCodeTool(ToolDefinition):
 
     name = "execute_code"
     description = (
-        "在安全沙箱中执行 Python 代码。"
-        "支持常用标准库 (json, math, pathlib, re, os 等)。"
-        "禁止系统调用、子进程及危险模块。"
+        "在安全沙箱中执行 Python 代码（运行在本应用自带的 Python 解释器内——"
+        "用户机器无需安装 Python，且已内置 PIL/Pillow 等打包依赖）。"
+        "需要跑 Python 的任务优先用本工具而非 shell 的 python 命令。"
+        "支持常用标准库 (json, math, pathlib, re 等) 与文件读写。"
+        "要运行 .py 脚本文件时：先读出文件内容，再作为 code 传入即可。"
+        "禁止系统调用、子进程及危险模块（subprocess/socket/ctypes 等）。"
         "执行后自动进行语法校验，失败时提供结构化错误信息。"
     )
     parameters = {
@@ -294,8 +304,12 @@ class ExecuteCodeTool(ToolDefinition):
                     metadata={"error_type": "syntax", "fixable": True},
                 )
         try:
+            # ★ 2026-09-14：Windows 无 python3（或为商店占位），统一走
+            # platform.get_python_cmd()。
+            from scout.core.platform import get_python_cmd
+
             stdout, stderr, rc = await sandbox.execute(
-                "python3", ["-c", code], timeout=10
+                get_python_cmd(), ["-c", code], timeout=10
             )
             output = stdout
             if stderr:

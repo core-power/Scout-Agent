@@ -6,7 +6,19 @@ import asyncio
 
 import pytest
 
-from scout.tools.builtin.shell.pty_session import PtyShellSession, PtyShellSessionManager
+from scout.tools.builtin.shell.pty_session import (
+    PTY_SUPPORTED,
+    PtyShellSession,
+    PtyShellSessionManager,
+)
+
+# ★ 2026-09-14：PTY 依赖 fcntl/termios/pty（Unix 专属模块）。实现层已用
+# PTY_SUPPORTED 做平台保护（Windows 上调用抛明确 RuntimeError），测试须随之
+# 跳过——否则 8 个用例在 Windows 必然失败，被误读为功能回归。
+pytestmark = pytest.mark.skipif(
+    not PTY_SUPPORTED,
+    reason="PTY 交互式终端依赖 fcntl/termios/pty（Unix 专属），Windows 请用 persistent 会话",
+)
 
 
 @pytest.mark.asyncio

@@ -69,3 +69,6 @@ run_test.sh
 # 根目录下划线前缀的一次性脚本 / 扫描产物（用完即删，如 _fix_paths.py、_scout_refs.txt）
 /_*.py
 /_*.txt
+
+# 遗留的旧版页面快照（运行时产物，不入库）
+_served_index.html

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 import httpx
 
-logger = logging.getLogger("scout.engine.skill_search")
+logger = logging.getLogger("scout.engine.skills.search")
 
 # 高价值技能仓库域名/路径特征
 SKILL_REPO_MARKERS = [

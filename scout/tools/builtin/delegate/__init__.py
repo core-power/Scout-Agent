@@ -16,6 +16,7 @@ Agent 可以将子任务委派给隔离子代理执行，获取结果后继续�
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -69,6 +70,17 @@ def build_sub_agent(
     )
     if task_context:
         sub_system_prompt += f"\nAdditional context:\n{task_context}\n"
+    # comm tools hint (2026-09-07): sub_report / shared_data
+    sub_system_prompt += (
+        "\nCommunication tools available to you:\n"
+        "- sub_report(kind, content): report progress/finding/blocker to the "
+        "main agent mid-run (1-4 per task, key findings only - your full "
+        "transcript is discarded, but reports are kept).\n"
+        "- shared_data(action, key, value): exchange data with sibling "
+        "subagents of this delegation batch.\n"
+        "Use sub_report before finishing if you discovered something the "
+        "main agent needs; use shared_data for sibling handoff.\n"
+    )
 
     _delegation_id = delegation_id or f"dl_{uuid.uuid4().hex[:8]}"
     _router_id = f"{_ROUTER_PREFIX}{_delegation_id}"
@@ -83,7 +95,6 @@ def build_sub_agent(
         deep_thinking=False,  # 子代理不需要深度思考
         enable_persistence=False,
         enable_memory=False,
-        # ── 安全继承：与主 Agent 一致，子代理危险操作同样经过 HITL 用户确认 ──
         enable_security=agent.enable_security,
         auto_approve=agent.security.auto_approve if agent.security else False,
         enable_hitl=agent.enable_hitl,
@@ -99,7 +110,6 @@ def build_sub_agent(
             agent_name=sub_name,
             delegation_id=_delegation_id,
         ),
-        # ── 委派控制 ──
         delegate_depth=current_depth + 1,
         max_delegate_depth=max_depth,
         exclude_tools=DELEGATE_TOOLS,
@@ -156,7 +166,6 @@ class DelegateTaskTool(ToolDefinition):
                 output="无法委派：主 Agent 未注册",
             )
 
-        # ── 深度限制检查 ──
         current_depth = getattr(agent, "delegate_depth", 0)
         max_depth = getattr(agent, "max_delegate_depth", 2)
         if current_depth >= max_depth:
@@ -195,7 +204,24 @@ class DelegateTaskTool(ToolDefinition):
             )
 
             try:
-                result = await sub_agent.run_conversation(prompt, sub_session)
+                # 2026-09-09：接线委派上下文（sub_report/shared_data 归属判定）
+                from scout.multiagent.runtime import (
+                    reset_current_delegation,
+                    set_current_delegation,
+                )
+
+                _ctx_tok = set_current_delegation(_delegation_id, _sub_name)
+                try:
+                    result = await sub_agent.run_conversation(prompt, sub_session)
+                finally:
+                    reset_current_delegation(_ctx_tok)
+                # comm digest: mid-run sub_report messages (2026-09-07)
+                from scout.multiagent.broker import digest_reports
+                from scout.multiagent.runtime import get_broker
+
+                _dg = digest_reports(get_broker().drain(_delegation_id))
+                if _dg:
+                    result["response"] = _dg + "\n\n" + result["response"]
                 return Observation(
                     tool_name="delegate_task",
                     success=True,
@@ -223,3 +249,177 @@ def _register_collaborate() -> None:
 
 
 _register_collaborate()
+
+
+# ── subagent comm tools (2026-09-07): effective only inside delegated subagents
+
+
+
+_KINDS = ("progress", "finding", "blocker")
+
+def _delegation_context():
+    """(delegation_id, sub_name) of the calling sub-agent.
+
+    ★ 2026-09-09：改读 ContextVar —— 此前读 ToolRegistry._main_agent_holder
+    （全代码库从未赋值）→ sub_report/shared_data 恒被判"不在子代理内"，
+    子代理内部通讯整链路死亡。ContextVar 任务级隔离，并行委派互不串扰。
+    """
+    try:
+        from scout.multiagent.runtime import current_delegation
+
+        cur = current_delegation()
+        if cur:
+            return cur
+    except Exception:  # noqa: BLE001
+        pass
+    # 兼容旧 holder 路径（如有外部接线）
+    holder = getattr(ToolRegistry, "_main_agent_holder", None)
+    agent = getattr(holder, "agent", None) if holder else None
+    cb = getattr(agent, "callbacks", None)
+    return (
+        getattr(cb, "delegation_id", None),
+        getattr(cb, "agent_name", None) or "sub",
+    )
+
+
+class SubReportTool(ToolDefinition):
+    """Report mid-run status to the main agent (broker buffered)."""
+
+    name = "sub_report"
+    pure_read = True
+    description = (
+        "Report mid-run status to the main agent. kind=progress (stage done), "
+        "finding (key fact the main agent WILL see even though your full "
+        "transcript is discarded after the task), blocker (need a decision or "
+        "missing input). Use sparingly: 1-4 per task."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["progress", "finding", "blocker"],
+            },
+            "content": {
+                "type": "string",
+                "description": "One line. Max 160 chars kept.",
+            },
+        },
+        "required": ["kind", "content"],
+    }
+    annotations = ToolAnnotations(read_only_hint=True)
+
+    async def execute(self, kind: str = "progress", content: str = "") -> Observation:
+        from scout.multiagent.broker import SubReport
+        from scout.multiagent.runtime import get_broker
+
+        delegation_id, sub_name = _delegation_context()
+        if not delegation_id:
+            return Observation(
+                tool_name=self.name,
+                success=False,
+                output="sub_report is only available inside delegated subagents",
+            )
+        content = (content or "").strip()
+        if not content:
+            return Observation(tool_name=self.name, success=False, output="content is required")
+        if kind not in _KINDS:
+            kind = "progress"
+        get_broker().publish(
+            SubReport(delegation_id=delegation_id, sender=sub_name, kind=kind, content=content)
+        )
+        return Observation(
+            tool_name=self.name,
+            success=True,
+            output=f"reported {kind}: {content[:80]}",
+        )
+
+
+ToolRegistry.register(SubReportTool())
+
+
+class SharedDataTool(ToolDefinition):
+    """KV exchange between sibling subagents of the SAME delegation batch."""
+
+    name = "shared_data"
+    pure_read = False
+    description = (
+        "Exchange data with SIBLING subagents of the same delegation batch "
+        "(parallel_delegate gives all its subagents one shared namespace). "
+        "actions: set/get/list/delete. Use: a research subagent stores findings "
+        "under a key; a sibling subagent reads them without a main-agent roundtrip."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["set", "get", "list", "delete"],
+            },
+            "key": {
+                "type": "string",
+            },
+            "value": {
+                "type": "string",
+                "description": "set: value to store (string, preferably JSON; keep it small).",
+            },
+        },
+        "required": ["action"],
+    }
+    annotations = ToolAnnotations(read_only_hint=False)
+
+    async def execute(self, action: str = "list", key: str = "", value: str = "") -> Observation:
+        from scout.multiagent.runtime import get_shared_state
+
+        delegation_id, _sub = _delegation_context()
+        if not delegation_id:
+            return Observation(
+                tool_name=self.name,
+                success=False,
+                output="shared_data is only available inside delegated subagents",
+            )
+        ns = "shared:delegation:" + delegation_id
+        sm = get_shared_state()
+
+        if action == "set":
+            if not key:
+                return Observation(tool_name=self.name, success=False, output="key is required")
+            payload = value
+            try:
+                payload = json.dumps(json.loads(value), ensure_ascii=False)
+            except Exception:
+                pass
+            # SharedStateManager 是扁平键空间：用前缀约定实现委派组命名空间
+            await sm.set(f"{ns}:{key}", payload, owner=_delegation_context()[1])
+            return Observation(
+                tool_name=self.name,
+                success=True,
+                output=f"stored {ns} :: {key}",
+            )
+
+        if action == "get":
+            if not key:
+                return Observation(tool_name=self.name, success=False, output="key is required")
+            data = await sm.get(f"{ns}:{key}")
+            if data is None:
+                return Observation(
+                    tool_name=self.name,
+                    success=False,
+                    output=f"key not found: {key}",
+                )
+            return Observation(tool_name=self.name, success=True, output=f"{key} = {data}")
+
+        if action == "delete":
+            await sm.delete(f"{ns}:{key}")
+            return Observation(tool_name=self.name, success=True, output=f"deleted {key}")
+
+        raw_keys = await sm.list_keys(ns + ":")
+        keys = [k[len(ns) + 1:] for k in raw_keys]
+        return Observation(
+            tool_name=self.name,
+            success=True,
+            output="shared keys: " + (", ".join(keys) if keys else "(empty)"),
+        )
+
+
+ToolRegistry.register(SharedDataTool())

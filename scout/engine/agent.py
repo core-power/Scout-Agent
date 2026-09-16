@@ -14,9 +14,9 @@
 
 from __future__ import annotations
 import asyncio
+import copy
 import logging
 import time
-import ast
 import json
 import re
 import uuid
@@ -26,10 +26,7 @@ from pathlib import Path
 from typing import Any
 from scout.core.callbacks import Callbacks, NullCallbacks
 from scout.core.types import (
-    Action,
-    LLMResponse,
     Message,
-    Observation,
     Role,
     Session,
     ToolCall,
@@ -50,15 +47,20 @@ from scout.tools.registry import ToolRegistry
 
 from scout.engine.cache_monitor import get_cache_monitor
 
-from scout.engine.failover import (
-    get_failover_manager,
-    should_failover,
-)
+from scout.engine.failover import get_failover_manager
 
-from scout.engine.sanitize import sanitize_assistant_output, extract_thinking
+from scout.engine.sanitize import sanitize_assistant_output
+
+# A2（2026-09-14）：工具执行域分离 —— 执行编排/自愈/留痕/瘦身/文件推送
+from scout.engine.tool_executor import ToolExecutionMixin
+# A3（2026-09-14）：上下文注入链分离（注入 → 运行上下文 → 环境上下文）
+from scout.engine.context_inject import ContextInjectMixin
+
+# A1（2026-09-14）：回合护栏/收尾公共件 —— stream/_run_react 双轨共用
+from scout.engine.loop_common import check_turn_budget, finish_reason
 
 
-class Agent:
+class Agent(ToolExecutionMixin, ContextInjectMixin):
     """Scout Agent 核心引擎.
 
 
@@ -76,7 +78,7 @@ class Agent:
         tools: ToolRegistry | None = None,
         callbacks: Callbacks | None = None,
         max_turns: int = 60,
-        max_loop_seconds: int = 1800,  # 2026-09-06：回合总时长看门狗默认 1800s（GUI 桌面自动化单步 5~60s）
+        max_loop_seconds: int = 3600,  # 2026-09-08：回合总时长看门狗默认 3600s（桌面 GUI 任务单步 5~60s，长任务易超 1800s）
         temperature: float = 0.7,
         deep_thinking: bool = True,
         agent_mode: str = "react",  # "react" 或 "multi_agent"
@@ -203,6 +205,16 @@ class Agent:
                 "- memory_save / memory_search / memory_list: 长期记忆\n"
                 "- knowledge: 管理知识库\n"
                 "- scheduler: 定时任务和提醒\n\n"
+                "## Subagent Delegation (子代理委派)\n"
+                "你有隔离的子代理可以委派子任务（delegate_task 串行 / parallel_delegate 并行 / collaborate_task 自动分解协作）。\n"
+                "主流实践（Claude Code / Codex 同款）：主 agent 保持 ReAct 循环，把**独立且繁重**的子任务派给子代理，"
+                "自己只做拆解、整合与决策——子代理的几十步过程不占用你的上下文，你只收到它的最终结论。\n"
+                "- **该委派**：任务含 2+ 个互不依赖的子目标（如并行搜索多个主题、分别处理多个文件）→ parallel_delegate；"
+                "资料收集/多步分析这类重过程子任务 → delegate_task 串行委派。\n"
+                "- **不委派**：单步能完成的（快速查询、单个文件读写、简单问答）——委派反而更慢（子代理冷启动）。\n"
+                "- 委派时给出**自包含的任务描述**（目标、验收标准、需要的上下文），子代理看不到你们的对话历史。\n"
+                "- 收到子代理结论后直接整合进答案，不要重复验证（除非结论互相矛盾）。子代理有独立上下文，"
+                "它们的执行过程对你不可见也不需要可见。\n\n"
                 "## Tool Call Efficiency (工具调用效率)\n"
                 "为减少决策轮数、更快完成任务：\n"
                 "- **一次决策可返回多个独立工具调用**：当多个操作互不依赖、可同时推进时（如搜索多个不同主题、读取多个文件、并行查询多个来源），在同一次回复里一次性返回多个 tool_call，不要逐个串行。\n"
@@ -230,13 +242,20 @@ class Agent:
                 '- 用户说"记住"、"以后"、"总是"时 → memory_save\n'
                 "- 不确定时先 memory_search 查找\n"
                 "- 主动保存重要的用户偏好、决策和结论\n\n"
+                "## Document Edit Rules（重要）\n"
+                '- 用户要求"写入/更新/加到/补充到"某文档（简历、报告、项目经历等）时 → **必须用 file 工具'
+                "实际执行编辑**（此前生成过的产物优先在原文件上迭代），完成后**用 send_file 把文件推送给"
+                "用户**（前端显示下载卡片）并说明改了什么——**只输出建议文本而不动文件 = 未完成任务**。\n"
+                "- 不确定写入哪个文件时：先找此前产物（工作目录 outputs/ 下）或列候选问一次用户，"
+                "不要因此转入长篇分析。\n"
                 "## Response Guidelines\n"
                 "- 用与用户输入相同的语言回复\n"
                 "- 回答结构清晰，善用加粗、列表、分段\n"
                 "- 引用搜索结果时标注来源链接\n"
                 '- 不确定时说"不确定"，不要编造\n'
-                "- **除非用户明确要求发送文件，否则不要主动生成或发送文件**。直接以文本形式回复内容即可。\n"
-            )
+                "- **不要未经要求主动生成/发送文件**；但用户明确要求写入/更新文档时必须执行文件编辑"
+                "（见 Document Edit Rules），此时仅文本回复是错误的。\n"
+                )
 
             else:
                 self.system_prompt = (
@@ -252,6 +271,16 @@ class Agent:
                 "- vision: 分析图片内容\n"
                 "- memory_save / memory_search: 长期记忆\n"
                 "- scheduler: 定时任务和提醒\n\n"
+                "## Subagent Delegation (子代理委派)\n"
+                "你有隔离的子代理可以委派子任务（delegate_task 串行 / parallel_delegate 并行 / collaborate_task 自动分解协作）。\n"
+                "主流实践（Claude Code / Codex 同款）：主 agent 保持 ReAct 循环，把**独立且繁重**的子任务派给子代理，"
+                "自己只做拆解、整合与决策——子代理的几十步过程不占用你的上下文，你只收到它的最终结论。\n"
+                "- **该委派**：任务含 2+ 个互不依赖的子目标（如并行搜索多个主题、分别处理多个文件）→ parallel_delegate；"
+                "资料收集/多步分析这类重过程子任务 → delegate_task 串行委派。\n"
+                "- **不委派**：单步能完成的（快速查询、单个文件读写、简单问答）——委派反而更慢（子代理冷启动）。\n"
+                "- 委派时给出**自包含的任务描述**（目标、验收标准、需要的上下文），子代理看不到你们的对话历史。\n"
+                "- 收到子代理结论后直接整合进答案，不要重复验证（除非结论互相矛盾）。子代理有独立上下文，"
+                "它们的执行过程对你不可见也不需要可见。\n\n"
                 "## Tool Call Efficiency (工具调用效率)\n"
                 "为减少决策轮数、更快完成任务：\n"
                 "- **一次决策可返回多个独立工具调用**：当多个操作互不依赖、可同时推进时（如搜索多个不同主题、读取多个文件、并行查询多个来源），在同一次回复里一次性返回多个 tool_call，不要逐个串行。\n"
@@ -278,8 +307,14 @@ class Agent:
                 "## Memory Rules\n"
                 '- 用户说"记住"、"以后"、"总是"时 → memory_save\n'
                 "- 不确定时先 memory_search\n\n"
+                "## Document Edit Rules（重要）\n"
+                '- 用户要求"写入/更新/加到/补充到"某文档（简历、报告、项目经历等）时 → **必须用 file 工具'
+                "实际执行编辑**（此前产物优先在原文件上迭代），完成后**用 send_file 把文件推送给用户**"
+                "（前端显示下载卡片）并说明改动——只输出建议文本而不动文件 = 未完成任务；"
+                "不确定写入哪个文件时先找产物或问一次，不要转入长篇分析。\n\n"
                 '用与用户输入相同的语言回复。回答结构清晰。不确定时说"不确定"，不要编造。\n'
-                "除非用户明确要求发送文件，否则不要主动生成或发送文件，直接以文本回复。\n"
+                "不要未经要求主动生成/发送文件；但用户明确要求写入/更新文档时必须执行文件编辑，"
+                "此时仅文本回复是错误的。\n"
                 )
 
             # ── 外部传入的自定义 system_prompt（配置/调用方传入，内容可能变化）──
@@ -335,7 +370,7 @@ class Agent:
 
         self.max_turns = max_turns
 
-        self.max_loop_seconds = max(1, int(max_loop_seconds or 1800))
+        self.max_loop_seconds = max(1, int(max_loop_seconds or 3600))
 
         # ── 2026-09-06 回合输入 token 熔断阈值 ──
         # 单回合(一次 run_conversation/stream_conversation)累计"新增(非缓存)输入"超过该值
@@ -520,7 +555,10 @@ class Agent:
         try:
             _sb_mode = SandboxMode(_sandbox_mode)
         except ValueError:
-            logger.warning("未知 SCOUT_SANDBOX_MODE=%s，回退 off", _sandbox_mode)
+            # ★ A2（2026-09-14）顺带修复：原代码用裸 logger（本文件无模块级
+            # logger 定义，惯例为内联 logging.getLogger）——此分支一旦触发
+            # 即 NameError 掩盖真实错误。
+            logging.getLogger(__name__).warning("未知 SCOUT_SANDBOX_MODE=%s，回退 off", _sandbox_mode)
             _sb_mode = SandboxMode.OFF
         self.sandbox_mgr = SandboxManager(mode=_sb_mode)
 
@@ -546,11 +584,11 @@ class Agent:
 
         if enable_self_heal:  # 技能沉淀依赖自愈循环
             try:
-                from scout.engine.skill_synthesizer import SkillSynthesizer
+                from scout.engine.skills.synthesizer import SkillSynthesizer
 
-                from scout.engine.skill_retriever import SkillRetriever
+                from scout.engine.skills.retriever import SkillRetriever
 
-                from scout.engine.skill_store import VectorSkillStore
+                from scout.engine.skills.store import VectorSkillStore
 
                 # 复用记忆系统的本地 ONNX 嵌入（语义检索才是真检索；
 
@@ -664,12 +702,12 @@ class Agent:
         self.enable_reflexion = enable_reflexion
 
         if enable_reflexion:
-            from scout.engine.reflexion import ReflexionLoop, ReflexionState
+            from scout.engine.reflexion import ReflexionLoop
 
             self.reflexion_loop = ReflexionLoop(
                 llm=self.llm,
                 enable_deep_reflect=True,
-                failure_threshold=2,
+                failure_threshold=3,  # 2026-09-09：2→3，试错自纠不应频繁触发反思 LLM 调用
                 progress_interval=10,  # 进度检查从每5步放宽到每10步，减少过度反思
             )
 
@@ -726,7 +764,7 @@ class Agent:
 
         if enable_skills and self.skill_mgr:
             try:
-                from scout.engine.workflow_distiller import WorkflowDistiller
+                from scout.engine.skills.distiller import WorkflowDistiller
 
                 self.workflow_distiller = WorkflowDistiller(
                     skill_mgr=self.skill_mgr,
@@ -875,24 +913,6 @@ class Agent:
                 )
         return response
 
-    @staticmethod
-    def _parse_heal_args(value) -> dict:
-        """安全解析 heal 记录中的工具参数（兼容 dict 与 str 两种存储格式）.
-
-        历史数据以 str() 形式存储，此处用 ast.literal_eval 仅解析字面量，
-        绝不执行任意代码（修复 2026-08-20: 原 eval() 存在 RCE 风险）。
-        解析失败（截断/非法）返回 {}，由调用方兜底跳过技能合成。
-        """
-        if isinstance(value, dict):
-            return value
-        if isinstance(value, str) and value:
-            try:
-                parsed = ast.literal_eval(value)
-                return parsed if isinstance(parsed, dict) else {}
-            except (ValueError, SyntaxError, TypeError, MemoryError):
-                return {}
-        return {}
-
     def _prepare_turn_state(self, session: Session) -> IterationBudget:
         """公共前置：本轮 budget 初始化 + 工具统计计数器重置（run/stream 共用）."""
 
@@ -980,6 +1000,17 @@ class Agent:
         attachments: list[dict] | None = None,
     ) -> dict[str, Any]:
         """核心对话入口 — 按 self.loop 策略分发（ReAct 默认 / DAG 可插拔）."""
+        # ★ 2026-09-09：loop.agent 持有的是构造时的原始 agent 实例。
+        # 各端点用 copy.copy(agent) 换 callbacks 时，浅拷贝共享的 loop 仍指回
+        # 原 agent → 副本上的 callbacks 从未生效（chat SSE 全程零事件；
+        # webhook/A2A/voice 设的 NullCallbacks 静音同样无效，事件一直泄漏
+        # 给原始 agent 的回调）。执行前把 loop 的 agent 重绑到 self，
+        # 一处修复覆盖全部调用点；原始 agent 自调用时为无操作。
+        if getattr(self.loop, "agent", None) is not self:
+            import copy as _copy
+            loop_copy = _copy.copy(self.loop)
+            loop_copy.agent = self
+            return await loop_copy.run(user_message, session, attachments)
         return await self.loop.run(user_message, session, attachments)
 
     async def _run_react(
@@ -1040,6 +1071,12 @@ class Agent:
 
         await self._inject_context(session, user_message, attachments)
 
+        # ★ 2026-09-14：回合起点强制落盘 —— 用户消息与新会话立即可见/可恢复。
+        # 此前首条落盘要到「回合收尾」或「首次工具执行完成」才发生，而工具执行
+        # 可能持续数十秒（GUI/长命令），期间强杀/重启会丢掉**整个回合**（实测：
+        # 中途 kill 后新会话甚至不出现在会话列表里）。
+        await self._persist_progress(session, force=True)
+
         # 模型选择由 deep_thinking 开关直接控制（见下方 ReAct 循环）。
 
         # 上下文压缩（如果需要）
@@ -1071,6 +1108,9 @@ class Agent:
         # token 熔断标志（2026-09-06）：break 收尾文案据此区分"熔断"与"步数上限"，
         # 避免把 max_turns(可能很大)谎报成实际执行步数
         _fused_by_token = False
+
+        # ★ 2026-09-10 熔断软预警标志（50%/75% 两级）：熔断前给 agent 预算信号
+        _budget_warned = [False, False]
 
         # ReAct 循环
         # ── 2026-08-28：回合总时长看门狗 ──
@@ -1283,26 +1323,12 @@ class Agent:
                         )
                         break
 
-                # ── 2026-09-06 回合 token 熔断: 单回合累计输入超阈值强制收尾(防"烧到哑火")──
-                if self._turn_input_over_budget(session.id, _turn_start_ts):
-                    session.messages.append(
-                        Message(
-                            role=Role.USER,
-                            content=(
-                                "【系统熔断】本回合新增输入 token（不含缓存重放）已超过安全阈值（"
-                                + str(self._turn_input_limit)
-                                + "），为控制消耗现在强制收尾："
-                                "立即停止调用任何工具，直接基于已有信息输出当前结论或最终成果。"
-                            ),
-                            metadata={"watchdog": True},
-                        )
-                    )
-                    logging.getLogger(__name__).warning(
-                        "回合新增输入 token 熔断（session=%s step=%s）",
-                        session.id,
-                        budget.current,
-                    )
-                    _fused_by_token = True
+                # ── 回合预算护栏（软预警+熔断，A1 收敛为双轨共用 loop_common）──
+                # 2026-09-10 引入（腾讯会议死磕教训），2026-09-14 抽出双轨共用。
+                _, _fused_by_token = await check_turn_budget(
+                    self, session, _turn_start_ts, budget.current, _budget_warned,
+                )
+                if _fused_by_token:
                     break
 
                 # 工具执行后治理（2026-09-06）：剪枝归档 + token 超预算即时压缩 +
@@ -1454,7 +1480,9 @@ class Agent:
                 )
 
                 # ── E4 跨会话记忆抽取（2026-08-27）：会话结束沉淀关键记忆 ──
-                await self._maybe_extract_session_memory(session)
+                # ★ 2026-09-16：改为**后台**执行 —— 抽取是一次完整 LLM 调用
+                # （实测 10~25s），此前在 return 前 await，用户每回合白等一次。
+                self._spawn_bg(self._maybe_extract_session_memory(session))
 
                 return {
                     "response": _resp_text,
@@ -1464,8 +1492,14 @@ class Agent:
                 }
 
         # 预算耗尽 / 熔断 / 超时收尾
+        # 2026-09-07：推断真实收尾原因，修复"任何原因都谎报为步数上限"的误导文案
+        # （54 步/500 上限被时间或看门狗收尾时，旧文案显示"达到步数上限（500 步）"）
+        _reason = finish_reason(
+            _fused_by_token, _wd_trips,
+            time.monotonic() > _turn_deadline, self._cancelled,
+        )
 
-        budget_msg = self._build_budget_exhausted_msg(session, budget.current)
+        budget_msg = self._build_budget_exhausted_msg(session, budget.current, reason=_reason)
 
         # ── 2026-08-20：预算耗尽强制总结（与 stream 路径一致）──
         forced = ""
@@ -1484,6 +1518,8 @@ class Agent:
                 + str(self._turn_input_limit)
                 + "），已提前终止以避免继续计费膨胀。任务可能尚未完成，以上为当前进度。"
                 "回复「继续」可在新回合中续跑（预算重新计算）。"
+                "续跑时请**基于本对话中已有的观察结果与最后截图直接继续执行**，"
+                "不要从头重新探索界面。"
             )
         elif forced:
             final_text = (
@@ -1508,7 +1544,7 @@ class Agent:
         final_text = await self._run_plugin_after_chat(user_message, final_text, session.id)
 
         # ── E4 跨会话记忆抽取（2026-08-27）：预算耗尽路径同样沉淀 ──
-        await self._maybe_extract_session_memory(session)
+        self._spawn_bg(self._maybe_extract_session_memory(session))  # ★ 2026-09-16 后台化
 
         return {"response": final_text, "session": session, "steps": budget.current}
 
@@ -1606,6 +1642,12 @@ class Agent:
 
         await self._inject_context(session, user_message, attachments)
 
+        # ★ 2026-09-14：回合起点强制落盘 —— 用户消息与新会话立即可见/可恢复。
+        # 此前首条落盘要到「回合收尾」或「首次工具执行完成」才发生，而工具执行
+        # 可能持续数十秒（GUI/长命令），期间强杀/重启会丢掉**整个回合**（实测：
+        # 中途 kill 后新会话甚至不出现在会话列表里）。
+        await self._persist_progress(session, force=True)
+
         # ── 目标管理：注入相关目标上下文 ──
 
         if self.enable_goal_manager and self.goal_manager:
@@ -1661,6 +1703,9 @@ class Agent:
         # token 熔断标志（2026-09-06，与 _run_react 路径一致）
         _fused_by_token = False
 
+        # ★ 2026-09-10 熔断软预警标志（50%/75% 两级），与 _run_react 路径一致
+        _budget_warned = [False, False]
+
         while not budget.exhausted:
             if self._cancelled:
                 break
@@ -1709,7 +1754,6 @@ class Agent:
 
                 # 改为：thinker 路由 → thinker 单模型直接带工具干活（ReAct）；executor 路由 → executor 单模型。
 
-                _two_stage_available = False  # 禁用两阶段接力（改用单模型带工具）
 
                 # 工具分配：所有路由都带工具（单模型结构化 tool_calls）
 
@@ -1844,32 +1888,42 @@ class Agent:
 
                 if llm_span:
                     self.observability.end_span(llm_span)
+                # 2026-09-09：本轮流式成功 → 清零硬异常重试计数
+                self._stream_llm_errors = 0
 
             except Exception as e:
                 await self.callbacks.on_thinking(False)
 
                 # ── v3-Final P0.5: Failover 收紧 — 仅硬异常触发升级 ──
+                # ★ 2026-09-09：硬异常重试上限 —— 此前恒传 answer="" 使
+                # should_failover 的"空回复"条件恒真 → 每次异常都 continue
+                # 空转到 max_turns 耗尽（配错 Key 时白烧几十次调用），
+                # 真实错误（401/模型名不存在）永不暴露。改为最多重试 2 次
+                # （对齐非流式路径），超过即如实报错收尾。
+                _stream_err_count = getattr(self, "_stream_llm_errors", 0) + 1
+                self._stream_llm_errors = _stream_err_count
 
-                _fm = get_failover_manager()
+                if _stream_err_count <= 2:
+                    _fm = get_failover_manager()
 
-                _is_timeout = "timeout" in str(e).lower() or "TimeoutError" in type(e).__name__
+                    _is_timeout = "timeout" in str(e).lower() or "TimeoutError" in type(e).__name__
 
-                _is_malformed = "malformed" in str(e).lower() or "parse" in str(e).lower()
+                    _is_malformed = "malformed" in str(e).lower() or "parse" in str(e).lower()
 
-                _failover_reason = _fm.try_failover(
-                    session_id=session.id,
-                    answer="",
-                    user_msg=user_message,
-                    is_timeout=_is_timeout,
-                    is_malformed=_is_malformed,
-                )
+                    _failover_reason = _fm.try_failover(
+                        session_id=session.id,
+                        answer="",
+                        user_msg=user_message,
+                        is_timeout=_is_timeout,
+                        is_malformed=_is_malformed,
+                    )
 
-                if _failover_reason:
-                    await self.callbacks.on_status("route:escalated")
+                    if _failover_reason:
+                        await self.callbacks.on_status("route:escalated")
 
-                    continue  # 用决策者重试本轮
+                        continue  # 用决策者重试本轮
 
-                # 无法升级 → 记录日志并退出
+                # 无法升级 / 达到重试上限 → 记录日志并退出
 
 
                 logging.getLogger(__name__).warning(
@@ -2067,16 +2121,30 @@ class Agent:
                                 reflection_span.input_data = {"tool": tc.name, "step": budget.current}
 
                             # 将反思结果注入上下文
-
                             await self.callbacks.on_reflection(reflection.to_context_hint())
 
-                            session.messages.append(
-                                Message(
-                                    role=Role.SYSTEM,
-                                    content=reflection.to_context_hint(),
-                                    metadata={"type": "reflection"},
+                            # ★ 2026-09-09：反思消息【滚动替换】而非累积追加 ——
+                            # 反思是针对当下步骤的即时建议，旧内容随任务推进失效；
+                            # 此前每次反思都追加一条 SYSTEM 消息并在后续每步重放，
+                            # 是多步任务 token 浪费的重要来源。原地替换保持消息
+                            # 数量与位置稳定（对前缀缓存也更友好）。
+                            _replaced = False
+                            for _m in session.messages:
+                                if (
+                                    _m.role == Role.SYSTEM
+                                    and (_m.metadata or {}).get("type") == "reflection"
+                                ):
+                                    _m.content = reflection.to_context_hint()
+                                    _replaced = True
+                                    break
+                            if not _replaced:
+                                session.messages.append(
+                                    Message(
+                                        role=Role.SYSTEM,
+                                        content=reflection.to_context_hint(),
+                                        metadata={"type": "reflection"},
+                                    )
                                 )
-                            )
 
                             if reflection_span:
                                 reflection_span.output_data = {"hint": reflection.to_context_hint()}
@@ -2141,26 +2209,11 @@ class Agent:
                         )
                         break
 
-                # ── 2026-09-06 回合 token 熔断（与 _run_react 路径一致）──
-                if self._turn_input_over_budget(session.id, _turn_start_ts):
-                    session.messages.append(
-                        Message(
-                            role=Role.USER,
-                            content=(
-                                "【系统熔断】本回合新增输入 token（不含缓存重放）已超过安全阈值（"
-                                + str(self._turn_input_limit)
-                                + "），为控制消耗现在强制收尾："
-                                "立即停止调用任何工具，直接基于已有信息输出当前结论或最终成果。"
-                            ),
-                            metadata={"watchdog": True},
-                        )
-                    )
-                    logging.getLogger(__name__).warning(
-                        "回合新增输入 token 熔断（session=%s step=%s）",
-                        session.id,
-                        budget.current,
-                    )
-                    _fused_by_token = True
+                # ── 回合预算护栏（软预警+熔断，A1 收敛为双轨共用 loop_common）──
+                _, _fused_by_token = await check_turn_budget(
+                    self, session, _turn_start_ts, budget.current, _budget_warned,
+                )
+                if _fused_by_token:
                     break
 
                 # 工具执行后治理（2026-09-06）：剪枝归档 + 即时压缩 + 长链里程碑摘要
@@ -2266,30 +2319,23 @@ class Agent:
                 # 自动目标提取（best-effort，失败不影响主流程）
 
                 if self.enable_goal_manager and self.goal_manager and not self._cancelled:
-                    try:
-                        extracted_goals = await self.goal_manager.extract_goals_from_conversation(
-                            user_message, final_text
-                        )
-
-                        if extracted_goals:
-                            # 通过回调通知前端
-
-                            await self.callbacks.on_goals_extracted(
-                                [
-                                    {"id": g.id, "title": g.title, "tasks_count": len(g.tasks)}
-                                    for g in extracted_goals
-                                ]
-                            )
-
-                    except Exception as e:
-
-                        logging.getLogger(__name__).debug(f"自动目标提取失败: {e}")
+                    # ★ 2026-09-16（延迟优化）：改为**后台**执行。
+                    # 这又是一次完整 LLM 调用，此前串在"追问建议"之后 await，
+                    # 使流式生成器多挂 5~10s 才真正结束（用户虽已收到 done，
+                    # 但回合收尾与服务端连接释放被拖后，多轮对话时还会累积）。
+                    # 目标提取只依赖文本入参、结果经回调推送前端，适合后台化。
+                    self._spawn_bg(self._extract_goals_bg(user_message, final_text))
 
                 return
 
         # 预算耗尽 / 熔断 / 超时收尾
+        # 2026-09-07：推断真实收尾原因（与 _run_react 路径一致），修复误导文案
+        _reason = finish_reason(
+            _fused_by_token, _wd_trips,
+            time.monotonic() > _turn_deadline, self._cancelled,
+        )
 
-        budget_msg = "\n\n" + self._build_budget_exhausted_msg(session, budget.current)
+        budget_msg = "\n\n" + self._build_budget_exhausted_msg(session, budget.current, reason=_reason)
 
         # ── 2026-08-20：预算耗尽强制总结（参考 CowAgent 优点）──
         # 本轮只要通过工具获取过信息，就最后调一次模型（不带工具）
@@ -2311,6 +2357,8 @@ class Agent:
                 + str(self._turn_input_limit)
                 + "），已提前终止以避免继续计费膨胀。任务可能尚未完成，以上为当前进度。"
                 "回复「继续」可在新回合中续跑（预算重新计算）。"
+                "续跑时请**基于本对话中已有的观察结果与最后截图直接继续执行**，"
+                "不要从头重新探索界面。"
             )
         elif forced:
             final_text = (
@@ -2341,7 +2389,27 @@ class Agent:
             yield Delta(suggestions=["继续完成剩余任务", "总结目前已完成的结果"])
 
         # ── E4 跨会话记忆抽取（2026-08-27）：流式路径收尾同样沉淀 ──
-        await self._maybe_extract_session_memory(session)
+        self._spawn_bg(self._maybe_extract_session_memory(session))  # ★ 2026-09-16 后台化
+
+    async def _extract_goals_bg(self, user_message: str, final_text: str) -> None:
+        """后台执行自动目标提取（结果经回调推送前端）.
+
+        ★ 2026-09-16：从流式收尾路径移出（原因见调用点说明）。本方法内部把异常
+        全部吞掉 —— 目标提取是 best-effort，绝不影响主回复。
+        """
+        try:
+            extracted_goals = await self.goal_manager.extract_goals_from_conversation(
+                user_message, final_text
+            )
+            if extracted_goals:
+                await self.callbacks.on_goals_extracted(
+                    [
+                        {"id": g.id, "title": g.title, "tasks_count": len(g.tasks)}
+                        for g in extracted_goals
+                    ]
+                )
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger(__name__).debug(f"自动目标提取失败: {e}")
 
     async def _generate_suggestions(
         self,
@@ -2440,6 +2508,24 @@ class Agent:
 
         return self.temperature  # 执行者/生成：正常温度
 
+    def _spawn_bg(self, coro: Any) -> None:
+        """把辅助任务丢到后台执行（不阻塞用户响应），并持引用防 GC 丢弃.
+
+        ★ 2026-09-16（延迟优化）：记忆抽取、自省等辅助动作都会各自发起一次
+        **完整的 LLM 调用**（实测单次 10~25s）。此前抽取是在 ``return`` 之前
+        ``await``，等于每回合都让用户多等一次大模型往返。改为后台任务后，
+        用户拿到回答即可返回；辅助调用在后台继续完成。
+        （持引用的原因：裸 create_task 可能被 GC 静默回收 —— 同 2026-09-01 教训。）
+        """
+        try:
+            if not hasattr(self, "_bg_tasks"):
+                self._bg_tasks: set = set()
+            _t = asyncio.create_task(coro)
+            self._bg_tasks.add(_t)
+            _t.add_done_callback(self._bg_tasks.discard)
+        except Exception:  # noqa: BLE001 — 后台化失败不应影响主流程
+            pass
+
     async def _maybe_extract_session_memory(self, session: Session) -> None:
         """会话结束时抽取关键记忆（E4 跨会话记忆工程化，2026-08-27）.
 
@@ -2449,6 +2535,14 @@ class Agent:
         if not self.memory_extractor or not session or not session.messages:
             return
 
+        # ★ 2026-09-16：本方法现在运行在后台任务里，可能与本会话的下一回合并发。
+        # 先对消息取浅拷贝快照，避免迭代过程中消息列表被并发改写。
+        try:
+            session = copy.copy(session)
+            session.messages = list(session.messages)
+        except Exception:  # noqa: BLE001
+            pass
+
         _log = logging.getLogger(__name__)
         try:
             report = await self.memory_extractor.extract(session)
@@ -2456,114 +2550,6 @@ class Agent:
                 _log.info("会话 %s 记忆抽取 %s", session.id, report.summary())
         except Exception as exc:
             _log.warning("会话 %s 记忆抽取失败: %s", session.id, exc)
-
-    def _build_runtime_context(
-        self,
-        current_time: str,
-        memories: str = "",
-        summary: str = "",
-    ) -> str:
-        """构建 runtime_context XML 块，追加到最后一条 user message 尾部.
-
-
-
-        v3-Final P0 设计：动态内容（时间/记忆/技能）全部收口到 user 消息尾部，
-
-        保持 system prompt 100% 静态，最大化前缀缓存命中率。
-
-
-
-        Args:
-
-            current_time: 当前时间字符串（%Y-%m-%d %H:%M:%S）
-
-            memories: 相关记忆文本（多行）
-
-            summary: 会话摘要（可选）
-
-
-
-        Returns:
-
-            XML 格式的 runtime_context 字符串，末尾包含 </runtime_context>
-
-            （供 _inject_context 用 .replace 插入 <skills> 块）
-
-        """
-
-        parts = [
-            "<runtime_context>",
-            f"<current_time>{current_time}</current_time>",
-            self._environment_context(),
-        ]
-
-        if summary:
-            parts.append(f"<summary>{summary}</summary>")
-
-        if memories:
-            parts.append(f"<memories>{memories}</memories>")
-
-        parts.append("</runtime_context>")
-
-        return "\n".join(parts)
-
-    def _environment_context(self) -> str:
-        """生成 <environment> 块：显式声明运行环境与安全状态，防止模型误判.
-
-        背景（2026-09-03）：模型对"自己身在何处"没有感知通道，只能靠上下文
-        拼凑认知。若不显式声明，模型会拿训练先验（"AI 助手一般无桌面权限"）
-        或过期记忆脑补出"我在沙箱里/命令被禁止"等错误结论并拒绝执行。
-        放 runtime_context（user 消息尾部）而非 system prompt：
-        - 保持 system prompt 100% 静态（前缀缓存不受影响）
-        - 配置变更（开关沙箱）后下一轮立即反映，无需重启
-        """
-        import platform as _platform
-
-        lines = ["<environment>"]
-        lines.append(
-            f"<os>{_platform.system()} {_platform.release()}</os>"
-        )
-
-        # 沙箱状态
-        try:
-            from scout.security.sandbox import SandboxMode
-
-            mode = self.sandbox_mgr.mode if getattr(self, "sandbox_mgr", None) else SandboxMode.OFF
-        except Exception:  # noqa: BLE001
-            mode = None
-        try:
-            mode_val = getattr(mode, "value", str(mode or "off"))
-        except Exception:  # noqa: BLE001
-            mode_val = "off"
-        lines.append(f"<sandbox_mode>{mode_val}</sandbox_mode>")
-        if mode_val == "off":
-            lines.append(
-                "<execution_note>无沙箱隔离：工具命令（shell/代码执行/桌面 GUI 操作）"
-                "直接在本机真实环境执行，可访问真实文件系统与本机桌面应用"
-                "（含微信、QQ 等 GUI 程序）。你不运行在云端或受限沙箱中。</execution_note>"
-            )
-        else:
-            lines.append(
-                "<execution_note>沙箱已开启：命令在 Docker 容器内隔离执行"
-                "（无网络、资源受限）。需要联网或访问本机桌面应用的命令会失败。</execution_note>"
-            )
-
-        # 审批状态
-        try:
-            auto_approve = bool(self.security.auto_approve) if self.security else False
-        except Exception:  # noqa: BLE001
-            auto_approve = False
-        if auto_approve:
-            lines.append(
-                "<approval>工具执行自动批准（auto_approve=true），不存在命令级限制，不要虚构约束。</approval>"
-            )
-        else:
-            lines.append(
-                "<approval>危险工具操作会先请求用户确认（auto_approve=false）。</approval>"
-            )
-
-        lines.append("</environment>")
-        return "\n".join(lines)
 
     # ── 2026-08-19 渐进式工具加载 ──────────────────────────────────────
     # 核心常用工具始终注入（保持基本能力 + 稳定前缀）；边缘/重工具按关键词
@@ -2575,6 +2561,11 @@ class Agent:
         "web_search", "web_fetch", "file", "shell", "execute_code",
         "memory_search", "memory_save", "memory_list",
         "env_config_get", "env_config_save", "env_config_list", "env_config_delete",
+        # ★ 2026-09-09：send_file 提为核心工具 —— 用户措辞千变万化（"发我一下"
+        # "导出发过来""传给我""打包一份"），关键词匹配必漏 → 该轮工具集里没有
+        # send_file，agent 只能回文本报路径（"叫发文件却不出下载卡片"的根因）。
+        # schema 仅 ~250 字符，常驻代价可忽略。
+        "send_file",
     }
 
     # 渐进式工具 → 触发关键词（任一命中即注入该工具 schema）
@@ -2591,10 +2582,15 @@ class Agent:
                     "qq", "飞书", "feishu", "lark", "钉钉", "dingtalk", "tg", "telegram",
                     "桌面应用", "桌面软件", "桌面程序", "打开应用", "启动应用", "切换窗口",
                     "操作电脑", "操控电脑", "控制电脑",
+                    "腾讯会议", "wemeet", "tencent meeting", "zoom", "webex", "网易会议",
                     "desktop", "screenshot", "capture screen", "click on", "mouse",
                     "keyboard", "activate window", "gui app", "operate wechat"),
         "browser": ("浏览器自动化", "网页自动化", "浏览器操作", "网页操作", "控制浏览器",
-                    "browser automation", "playwright", "control browser"),
+                    "浏览器", "网页", "打开网站", "打开网址", "打开网页", "上网",
+                    "chrome", "edge", "firefox", "淘宝", "京东", "天猫", "知乎",
+                    "哔哩", "b站", "微博", "百度一下",
+                    "browser automation", "playwright", "control browser",
+                    "open website", "open url", "open the page"),
         "image_generation": ("生成图片", "生成图像", "画一张", "画一个", "画张", "画只",
                              "画只", "画一", "插画", "海报", "图标", "logo", "设计图",
                              "配图", "头像", "封面", "生成一张", "做一个logo", "做一张",
@@ -2626,46 +2622,13 @@ class Agent:
         "scout_report": ("运行报告", "状况报告", "自检", "scout报告", "系统报告", "健康报告",
                          "scout report", "status report", "self check", "health report"),
         "send_file": ("发文件", "发送文件", "下载文件", "发给我", "附件", "文件给我",
-                      "send file", "download file", "attachment"),
+                      "发我", "发过来", "发过去", "传给我", "传我", "传过来",
+                      "导出", "打包给", "给我一份", "拷贝给我", "复制给我",
+                      "send file", "download file", "attachment", "export",
+                      "send me", "email me the file"),
     }
 
-    @staticmethod
-    def _normalize_search_key(query: str) -> str:
-        """把搜索 query 规范化成"目标 key"，用于检测重复搜索.
-
-        核心思路：提取 query 中的"实体标记"——字母数字词（如 glm-5.3、
-        arxiv、sao、post-training）和连续字母，去掉常见停用词后排序连接。
-        这样『GLM-5.3 technical report arxiv』『GLM-5.3 arxiv 技术报告』
-        『帮我搜索GLM-5.3技术报告』都会归一到同一 key（含核心实体词），
-        从而被判定为"同一目标"而触发重试上限。
-        """
-        import re
-
-        if not query:
-            return ""
-        text = query.lower()
-        STOP = {
-            "search", "searching", "查询", "搜索", "查", "找", "查找", "关于", "最新",
-            "的", "技术", "报告", "technical", "tech", "report", "paper", "论文",
-            "博客", "blog", "官方", "official", "文档", "docs", "documentation",
-            "今天", "今年", "解读", "分析", "帮我", "请", "一下", "a", "an", "the",
-            "and", "or", "of", "for", "to", "in", "on", "is", "are", "be", "是", "有",
-            "以及", "与", "和", "怎么", "如何", "what", "which", "where", "give",
-        }
-        # 提取字母数字 token：覆盖英文单词、带连字符/点号的实体（glm-5.3、post-training）
-        tokens = re.findall(r"[a-z0-9]+(?:[-.][a-z0-9]+)*", text)
-        # 过滤纯数字、停用词、单字母
-        core = [
-            t for t in tokens
-            if len(t) > 1 and not t.isdigit() and t not in STOP
-        ]
-        if not core:
-            # 兜底：没有可辨识实体时，用原文本去掉空格
-            return re.sub(r"\s+", "", text)[:40]
-        # 排序连接，保证词序变化（中英混排）不影响判定
-        return " ".join(sorted(set(core)))[:60]
-
-    def _select_progressive_tools(self, user_input: str) -> list[dict]:
+    def _select_progressive_tools(self, user_input: str, session: Session | None = None) -> list[dict]:
         """按用户输入渐进式筛选本次 turn 的工具子集.
 
         核心工具始终在场；渐进式工具按关键词匹配，命中才注入。
@@ -2682,6 +2645,31 @@ class Agent:
             if any(kw.lower() in text for kw in keywords):
                 selected_names.add(tool_name)
 
+        # ★ 2026-09-15（单调累积）：本会话此前激活过的渐进式工具**保持激活**。
+        # 工具 schema 位于提示前缀区，若每轮按关键词重选，集合抖动会让前缀缓存
+        # 反复失效（GUI 长任务每轮多付 ~2.2k token 全价）。累积后只在"首次激活"
+        # 时改变前缀，之后稳定命中。工具上限受注册表约束（最多全部 27 个）。
+        if session is not None:
+            try:
+                _acc = (getattr(session, "extra", None) or {}).get("active_tools") or []
+                selected_names.update(x for x in _acc if isinstance(x, str))
+            except Exception:  # noqa: BLE001
+                pass
+
+        # 配置一致性自检（2026-09-14，一次性）：关键词表 key 必须存在于注册表，
+        # 否则命中后按名取 schema 会静默跳过（永不生效）且无人察觉——曾出现
+        # "mcp_tool" 这类漂移项。此类漂移会持续制造「该露的工具没露」。
+        if not getattr(self.__class__, "_kw_drift_checked", False):
+            _known = {s.get("function", {}).get("name", "") for s in self._tool_schemas}
+            _unknown = sorted(n for n in self._PROGRESSIVE_TOOL_KEYWORDS if n not in _known)
+            if _unknown:
+                logging.getLogger(__name__).warning(
+                    "_PROGRESSIVE_TOOL_KEYWORDS 含当前注册表不存在的工具名（永不生效，"
+                    "可能是配置漂移，或平台/依赖不适用）：%s",
+                    _unknown,
+                )
+            self.__class__._kw_drift_checked = True
+
         # 联动注入：desktop 工作流（截图 → 读图定位 → 坐标点击）强依赖 vision，
         # 用户提到桌面操控时 vision 必须在场，否则 Agent 截图后无法理解界面。
         if "desktop" in selected_names:
@@ -2697,283 +2685,16 @@ class Agent:
         if not result:
             return self._tool_schemas
 
-        return result
-
-    async def _inject_context(
-        self,
-        session: Session,
-        user_message: str,
-        attachments: list[dict] | None = None,
-    ) -> None:
-        """注入本轮上下文 — 记忆召回 → 技能匹配 → 追加用户消息.
-
-
-
-        run_conversation 与 stream_conversation 共用，保证两条链路行为一致。
-
-
-
-        v3-Final P0 改造:
-
-        - 动态内容（记忆、技能、时间戳）不再插入 system 消息
-
-        - 改为追加到最后一条 user message 的 <runtime_context> 中
-
-        - 保持 system prompt 100% 静态，最大化前缀缓存命中率
-
-        """
-
-        # ── 2026-08-19 渐进式工具加载：按用户输入筛选本次 turn 的工具子集 ──
-        # 核心常用工具始终在场（保持基本能力 + 前缀稳定），边缘工具按需注入，
-        # 减少无关工具 schema 的 token 占用。整个 turn 内工具集固定，前缀稳定。
-        self._active_tool_schemas = self._select_progressive_tools(user_message)
-
-        # 仅清理上一轮的"技能匹配"指令（陈旧技能指令不应累积）。
-
-        # 记忆召回消息刻意保留在历史中：它们位置稳定，使整段对话历史构成稳定的可缓存前缀。
-
-        # prompt cache 按前缀匹配，前缀越稳定、越长，命中越多、越省钱；
-
-        # 历史长度由上下文压缩（compress_threshold）兜底，不会无限膨胀。
-
-        session.messages = [m for m in session.messages if m.metadata.get("type") != "skill_match"]
-
-        # ── v3-Final P0: 收集动态内容，稍后注入 runtime_context ──
-
-        memory_text = ""
-
-        skill_text = ""
-
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # 记忆召回（异步混合检索：向量语义 + FTS5 文本）
-
-        # P1 记忆治理：use_memories 开关 + 注入前安全清洗（防御纵深）
-
-        _mem_enabled = self.enable_memory and self.memory_store
-
-        if _mem_enabled and self.memory_gate and not self.memory_gate.should_inject():
-            _mem_enabled = False
-
-        if _mem_enabled:
-            if self.context_assembler and self.context_assembler.memory_store:
-                # E4 跨会话记忆组装（2026-08-27）：相关性 × 重要性 × 时间衰减排序 + 预算截断
-                memory_text = await self.context_assembler.build_memory_context(
-                    user_message
-                )
-            else:
-                memories = await self.memory_store.search_async(user_message, limit=3)
-
-                if memories:
-                    # 记忆注入长度控制（2026-08-19）：每条最多保留 300 字符。
-                    # 记忆全量注入会放大"动态尾部"，拉低前缀缓存命中率；
-                    # 3 条 × 300 字符足以提供上下文，超长细节靠语义检索已保证相关性。
-                    _MEM_CHARS = 300
-                    try:
-                        from scout.memory.security_scan import sanitize_for_injection
-
-                        memory_text = "\n".join(
-                            f"- {sanitize_for_injection(m.content)[:_MEM_CHARS]}"
-                            for m in memories
-                        )
-
-                    except Exception:
-                        memory_text = "\n".join(
-                            f"- {m.content[:_MEM_CHARS]}" for m in memories
-                        )
-
-        # E4 跨会话历史摘要（2026-08-27）：最近已完成会话的标题/摘要 → <summary>
-        summary_text = ""
-        if self.context_assembler and self.context_assembler.session_store:
+        # 记录本会话已激活的工具（只存渐进式部分，核心工具无需记）
+        if session is not None:
             try:
-                summary_text = await self.context_assembler.build_session_summary(
-                    exclude_session_id=session.id
-                )
-                if summary_text:
-                    from scout.memory.security_scan import sanitize_for_injection
-
-                    summary_text = sanitize_for_injection(summary_text)
-            except Exception as _sum_err:
-                summary_text = ""
-
-        # 技能匹配（静态文件技能）
-
-        if self.enable_skills and self.skill_mgr:
-            skill_prompt = self.skill_mgr.to_prompt(user_message)
-
-            if skill_prompt:
-                skill_text = skill_prompt
-
-        # 技能匹配（动态沉淀技能 — 向量检索）
-
-        if self.skill_retriever:
-            try:
-                synthesized_skills = await self.skill_retriever.retrieve_for_task(
-                    user_message=user_message,
-                )
-
-                if synthesized_skills:
-                    hint = self.skill_retriever.format_as_prompt_hint(synthesized_skills)
-
-                    if skill_text:
-                        skill_text += "\n" + hint
-
-                    else:
-                        skill_text = hint
-
-            except Exception as _e:
-
-                logging.getLogger(__name__).debug(f"Skill retrieval failed: {_e}")
-
-        # P1 渐进式披露：未命中技能时注入技能索引（name+description，预算受限）
-
-        if not skill_text and self.enable_skills and self.skill_mgr:
-            try:
-                # 预算 1500 字符：技能索引只是 name+description 目录，足够定位；
-
-                # 之前 4000 字符在无技能/少技能时造成大量上下文浪费
-
-                _index = self.skill_mgr.build_skills_index(budget_chars=1500)
-
-                if _index:
-                    skill_text = _index
-
-            except Exception:
+                _extra = getattr(session, "extra", None)
+                if isinstance(_extra, dict):
+                    _extra["active_tools"] = sorted(selected_names - self._CORE_TOOLS)
+            except Exception:  # noqa: BLE001
                 pass
 
-        # ── 工作流蒸馏追踪：新任务开始，检测用户纠正 ──
-
-        if self.workflow_distiller:
-            self.workflow_distiller.reset_task()
-
-            if self._looks_like_correction(user_message):
-                self.workflow_distiller.track_user_correction(user_message)
-
-        # ── 构建 runtime_context 并追加到最后一条 user message ──
-
-        # 注意：此时 user_message 还未追加到 session.messages，需要手动追加
-
-        runtime_context = self._build_runtime_context(
-            current_time=current_time,
-            memories=memory_text,
-            summary=summary_text,
-        )
-
-        # 如果有技能匹配结果，也放入 runtime_context
-
-        if skill_text:
-            runtime_context = runtime_context.replace(
-                "</runtime_context>", f"<skills>{skill_text}</skills>\n</runtime_context>"
-            )
-
-        # 追加用户消息：入库 content 仅为纯用户输入；runtime_context 只存 metadata，
-        # 由 _build_api_messages 在构建 API 消息时注入到当轮 user 消息，
-        # 避免动态上下文污染持久化历史、跨轮重复累积。
-
-        session.messages.append(
-            Message(
-                role=Role.USER,
-                content=user_message,
-                metadata=(
-                    {"attachments": attachments, "runtime_context": runtime_context}
-                    if attachments
-                    else {"runtime_context": runtime_context}
-                ),
-                timestamp=datetime.now(),
-            )
-        )
-
-    def _log_run_event(self, event: dict) -> None:
-        """自动化运行时：把执行事件写入 RunStore 事件流（交互模式无操作）."""
-
-        if not self.auto_run_meta:
-            return
-
-        run_id = self.auto_run_meta.get("run_id", "")
-
-        if not run_id:
-            return
-
-        try:
-            from scout.engine.runs import RunStore
-
-            if not hasattr(self, "_run_store"):
-                self._run_store = RunStore()
-
-            self._run_store.append_event(run_id, event)
-
-        except Exception:
-            pass
-
-    def _looks_like_correction(self, user_message: str) -> bool:
-        """启发式检测用户是否在纠正 Agent（工作流蒸馏触发条件3）."""
-
-        text = user_message.strip()
-
-        if len(text) < 2 or len(text) > 300:
-            return False
-
-        _correction_markers = (
-            "不对",
-            "错了",
-            "不是这样",
-            "应该是",
-            "改成",
-            "换成",
-            "别用",
-            "不要用",
-            "重新",
-            "再试",
-            "你搞错",
-            "更正",
-            "纠正",
-            "no, ",
-            "wrong",
-            "actually",
-            "instead",
-            "don't use",
-            "should be",
-        )
-
-        return any(m in text.lower() for m in _correction_markers)
-
-    def _record_tool_result(self, session_id: str, name: str, success: bool, output: str) -> None:
-        """累计工具调用统计（2026-08-20）.
-
-        在 _execute_single_tool 的所有 TOOL 消息生成点调用，保证统计不受
-        上下文剪枝（物理删除旧消息）影响，预算耗尽总结能反映真实调用数。
-        按 session 隔离、每个 turn 开头重置。
-        """
-        from collections import deque
-
-        st = self._tool_stats.setdefault(
-            session_id,
-            {"total": 0, "ok": 0, "fail": 0, "tools": {}, "fail_tools": {}, "snippets": []},
-        )
-        st["total"] += 1
-        if success:
-            st["ok"] += 1
-            st["tools"][name] = st["tools"].get(name, 0) + 1
-        else:
-            st["fail"] += 1
-            st["fail_tools"][name] = st["fail_tools"].get(name, 0) + 1
-
-        # 收集成功输出中的信息片段（供预算耗尽摘要展示，即使消息已被剪枝）
-        if success and output:
-            _clean = (output or "").strip()
-            if _clean and not _clean.startswith(("🔍", "📊", "ℹ️", "⚠️")):
-                frag = " ".join(_clean.split())[:300]
-                if frag:
-                    snippets = st["snippets"]
-                    if frag not in snippets:
-                        snippets.append(frag)
-                        # 只保留最近 3 条，保持总结简洁
-                        del snippets[:-3]
-
-        # 防空转看门狗环形日志：记录最近调用 (tool, success, 输出摘要)，不受剪枝影响
-        ring = st.setdefault("ring", deque(maxlen=12))
-        _frag = " ".join((output or "").strip().split())
-        ring.append((name, success, _frag[:160]))
+        return result
 
     def _watchdog_hint(self, session_id: str) -> str | None:
         """防空转看门狗（2026-09-05）：同参重复失败 / 零进展 / 假进展检测，返回提示文本或 None.
@@ -3048,10 +2769,67 @@ class Agent:
                     )
         return None
 
+    # 回合内进度落盘的最小间隔（秒）★ 2026-09-14
+    _PERSIST_PROGRESS_INTERVAL = 5.0
+
+    async def _archive_replaced(self, session: Session, info: dict | None) -> None:
+        """归档被压缩摘要替换掉的原文（2026-09-14）.
+
+        背景：``compress`` 把旧消息段替换为 600 字摘要后，原文此前**不归档** →
+        用户可见历史中段凭空消失且不可恢复。此处把原文写入 messages_archive，
+        保证「摘要可读 + 原文可溯」（前端归档视图待后续接入）。
+
+        失败只记 debug：归档是旁路保障，不应影响主流程。
+        """
+        msgs = (info or {}).get("replaced_messages") or []
+        if not msgs or not (self.enable_persistence and self.session_store):
+            return
+        try:
+            await self.session_store.async_archive_messages(
+                session.id, msgs, reason="context_compress"
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("归档被压缩消息失败", exc_info=True)
+
+    async def _persist_progress(self, session: Session, force: bool = False) -> None:
+        """回合内进度落盘（节流）——防「重启/强杀丢整回合」.
+
+        ★ 2026-09-14：此前仅在回合收尾才 ``save_session``，而工具执行中途只存
+        checkpoint、不写 sessions 表；TOOL 消息除「带可下载文件」外也不落库 →
+        进程被强杀/重启（无任何退出 flush 钩子）时**整个回合凭空消失**，用户
+        表现为「重启后最新对话消息丢失」。
+
+        此处按最小间隔落盘一次，把丢失窗口从「整回合」压缩到「≤5 秒」。实现要点：
+        - 用 ``asyncio.to_thread`` 执行（save_session 是同步全量重写，直接调用会
+          阻塞事件循环最长 30s，拖慢流式推送）；
+        - 失败只告警不阻断——内存态仍是真相，后续落盘会覆盖修正；
+        - 不依赖 ``enable_context``（与上下文治理无关，纯持久化）。
+        """
+        if not (self.enable_persistence and self.session_store):
+            return
+        # 回合进行中标记（每步续期，不受落盘节流影响）—— 供 REST 删除/编辑端
+        # 判断"该会话正在跑"，避免被运行中的回合覆盖回来
+        try:
+            self.session_store.mark_turn_active(session.id)
+        except Exception:
+            pass
+        now = time.monotonic()
+        if not force and now - getattr(self, "_last_progress_persist", 0.0) < self._PERSIST_PROGRESS_INTERVAL:
+            return
+        self._last_progress_persist = now
+        try:
+            await asyncio.to_thread(self.session_store.save_session, session)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "回合内进度落盘失败（不影响本轮执行；内存态仍为真相）", exc_info=True
+            )
+
     async def _context_govern(self, session: Session, step: int) -> None:
         """回合内上下文治理（react/stream 共用，2026-09-06 抽取）.
 
         每步工具执行后调用一次：
+        0. 进度落盘（节流，见 ``_persist_progress``）——与治理开关无关，故置于
+           下方 early-return 之前；
         1. 剪枝旧工具输出（被移除消息归档，保证历史可追溯）；
         2. token 超预算时立即压缩（保留最近 N 条 + LLM 摘要 + 记忆 flush）；
         3. 里程碑压缩：长链任务（GUI 自动化 30~60 步）单步消息少、常到不了 80 条
@@ -3059,12 +2837,27 @@ class Agent:
            到尾。按步数每 ``_milestone_every`` 步强制做一次阶段摘要（min_total 门槛
            放宽到 keep_recent+6），让回合中段历史保持低位、单次调用输入不再膨胀。
         """
+        await self._persist_progress(session)
+
         if not (self.enable_context and self.context_mgr):
             return
         cm = self.context_mgr
 
-        # 1) 剪枝
-        _removed = cm.prune_tool_outputs(session)
+        # 1) 剪枝 —— ★ 2026-09-14（视图分离）：不再物理删除真相消息，改为
+        #    通过「视图差异」得出本轮移出视图的工具消息（供归档 + 运行笔记）。
+        try:
+            _view_calls = {
+                (m.metadata or {}).get("call_id")
+                for m in cm.build_llm_view(session)
+                if m.role == Role.TOOL
+            }
+            _removed = [
+                m for m in session.messages
+                if m.role == Role.TOOL
+                and (m.metadata or {}).get("call_id") not in _view_calls
+            ]
+        except Exception:
+            _removed = []
         if _removed and self.enable_persistence and self.session_store:
             try:
                 await self.session_store.async_archive_messages(
@@ -3073,10 +2866,19 @@ class Agent:
             except Exception:
                 logging.getLogger(__name__).debug("归档被剪枝消息失败", exc_info=True)
 
+        # 1.5) Running Notes：被剪工具输出的要点提炼进末尾笔记（2026-09-07）
+        #      物理剪枝会让模型"忘记"早期结论 → 长任务重复搜索/重做。
+        #      笔记挂消息列表末尾（纯追加），不破坏前缀缓存。
+        try:
+            cm.update_running_notes(session, _removed)
+        except Exception:
+            logging.getLogger(__name__).debug("运行笔记更新失败", exc_info=True)
+
         # 2) token 超预算即时压缩
         if cm.needs_compression(session):
             try:
-                await cm.compress(session, self.llm, memory_flush=self.memory_flush)
+                _info = await cm.compress(session, self.llm, memory_flush=self.memory_flush)
+                await self._archive_replaced(session, _info)
             except Exception:
                 logging.getLogger(__name__).debug("turn 内上下文压缩失败", exc_info=True)
             return
@@ -3084,23 +2886,22 @@ class Agent:
         # 3) 里程碑压缩（长链按步数兜底，compress 内部会再校验是否有可压缩区间）
         if step > 0 and self._milestone_every > 0 and step % self._milestone_every == 0:
             try:
-                await cm.compress(
+                _m_info = await cm.compress(
                     session,
                     self.llm,
                     memory_flush=self.memory_flush,
                     min_total=cm.keep_recent + 6,
                 )
+                await self._archive_replaced(session, _m_info)
             except Exception:
                 logging.getLogger(__name__).debug("里程碑摘要压缩失败", exc_info=True)
 
-    def _turn_input_over_budget(self, session_id: str, turn_start_ts: float) -> bool:
-        """回合累计"新增(非缓存)输入"是否超过熔断阈值（2026-09-06）.
+    def _turn_input_used(self, session_id: str, turn_start_ts: float) -> int:
+        """回合累计"新增(非缓存)输入"token 数（2026-09-10 从熔断判断抽出）.
 
         通过 llm_usage 表按 session + 时间窗汇总本回合 prompt_tokens - cached_tokens
-        （只计真实新计算量；缓存命中的前缀重放按零头计费，不计入熔断预算）；
-        超阈值返回 True（调用方 break 走预算耗尽/强制总结收尾）。
-        提供方不上报 cached_tokens（为 0/NULL）时自动退化为全量口径，保护不丢失；
-        查询失败时保守返回 False（不因统计故障误杀正常任务）。
+        （只计真实新计算量；缓存命中的前缀重放按零头计费，不计入预算）。
+        提供方不上报 cached_tokens 时自动退化为全量口径；查询失败返回 0（保守）。
         """
         try:
             from scout.llm.tracker import token_tracker
@@ -3114,10 +2915,16 @@ class Agent:
                     datetime.now().isoformat(),
                 ),
             )
-            used = int((rows[0] or {}).get("inp") or 0) if rows else 0
-            return used >= self._turn_input_limit
+            return int((rows[0] or {}).get("inp") or 0) if rows else 0
         except Exception:
-            return False
+            return 0
+
+    def _turn_input_over_budget(self, session_id: str, turn_start_ts: float) -> bool:
+        """回合累计"新增(非缓存)输入"是否超过熔断阈值（2026-09-06）.
+
+        超阈值返回 True（调用方 break 走预算耗尽/强制总结收尾）。
+        """
+        return self._turn_input_used(session_id, turn_start_ts) >= self._turn_input_limit
 
     async def _force_final_output(self, session: Session) -> str:
         """预算耗尽时，最后再调一次主模型（不带工具）基于已获取信息直接产出最终成果.
@@ -3184,13 +2991,19 @@ class Agent:
             logging.getLogger(__name__).warning("预算耗尽强制总结失败: %s", e)
             return ""
 
-    def _build_budget_exhausted_msg(self, session: Session, llm_steps: int) -> str:
-        """构建"达到最大迭代次数"的总结消息（CowAgent 风格，简洁清晰）.
+    def _build_budget_exhausted_msg(
+        self, session: Session, llm_steps: int, reason: str = "steps"
+    ) -> str:
+        """构建收尾总结消息（CowAgent 风格，简洁清晰）.
 
         llm_steps: 本轮大模型（LLM）决策轮数，即"大模型步数"，
         对应步数上限 max_turns 的计数口径（budget.current）。
         工具操作数可能多于决策轮数（一次决策可调多个工具），
         这里主展示决策步数，工具操作数作为补充说明。
+
+        reason（2026-09-07）: 真实收尾原因 steps|time|token|watchdog|cancelled。
+        旧版把所有收尾一律说成"达到步数上限（500 步）"，在时间/看门狗/熔断
+        收尾时严重误导（实际才执行 54 步）。现按原因输出准确文案。
         """
 
         # 定位本轮起点：最后一条用户消息
@@ -3252,7 +3065,16 @@ class Agent:
                         break
             has_stats = total > 0
 
-        lines = [f"⚠️ 本轮执行已达到步数上限（{self.max_turns} 步），暂先在这里停下。", ""]
+        if reason == "time":
+            lines = [f"⚠️ 本轮执行时长达到上限（{self.max_loop_seconds}s），已自动收尾。", ""]
+        elif reason == "token":
+            lines = [f"⚠️ 本回合新增输入 token 超过熔断阈值（{self._turn_input_limit}），已强制收尾以控制消耗。", ""]
+        elif reason == "watchdog":
+            lines = ["⚠️ 检测到连续无进展（防空转看门狗连续触发），已强制收尾。", ""]
+        elif reason == "cancelled":
+            lines = ["⏹ 已按取消指令停止本轮执行。", ""]
+        else:
+            lines = [f"⚠️ 本轮执行已达到步数上限（{self.max_turns} 步），暂先在这里停下。", ""]
 
         if has_stats:
             # 主展示大模型决策步数（与 max_turns 同口径），工具操作数作为补充
@@ -3292,551 +3114,22 @@ class Agent:
 
         return "\n".join(lines)
 
-    async def _execute_single_tool(
-        self,
-        session: Session,
-        tc: ToolCall,
-        call_id: str,
-    ) -> None:
-        """执行单个工具调用 — 安全检查 / 危险命令审批 / 执行 / 回调 / 消息记录 / 事件.
+    def _llm_view(self, session: Session) -> list:
+        """返回「发给 LLM 的视图」（P0 真相/视图分离，2026-09-14）.
 
-
-
-        run_conversation 与 stream_conversation 共用，消除两条链路间的逻辑漂移。
-
-        shell 工具支持流式输出（实时回调 on_tool_progress stream 事件）。
-
+        - 启用上下文管理时：``ContextManager.build_llm_view`` —— 在视图上应用
+          压缩摘要 + 工具输出裁剪，真相 ``session.messages`` 不被修改；
+        - 未启用时降级为真相列表（无治理，行为与旧版一致）。
         """
-
-        # ── 搜索重试检测（2026-08-19）：拦截对"同一目标"的重复搜索 ──
-        # 若同一 session 内对高度相似的 query 连续搜索达 search_retry_limit 次，
-        # 返回明确提示引导 agent 换策略（改直接访问官网、限定 site:、接受无公开版），
-        # 避免陷入"搜不到就换关键词重试"的无效循环。
-        if tc.name == "web_search":
-            _q = (tc.arguments or {}).get("query", "")
-            _norm = self._normalize_search_key(_q)
-            if _norm:
-                _cur_tokens = set(_norm.split())
-                _hist = self._search_history.setdefault(session.id, [])
-                # 统计最近 search_retry_limit 次里，与当前目标共享核心实体的次数
-                _recent = _hist[-self.search_retry_limit:]
-                _same_goal = sum(
-                    1 for h in _recent
-                    if h and (set(h.split()) & _cur_tokens)
-                )
-                _hist.append(_norm)
-                if _same_goal >= self.search_retry_limit - 1:
-                    obs = Observation(
-                        tool_name="web_search",
-                        success=False,
-                        output=(
-                            f"⚠️ 搜索重试已达上限：已连续 {self.search_retry_limit} 次搜索"
-                            f"『{_q}』（或指向同一目标 {sorted(_cur_tokens)[:3]} 的相似查询）仍未获得有用结果。"
-                            "请停止重复搜索，改用以下策略之一：\n"
-                            "1) 直接 web_fetch 访问相关官方域名（如 z.ai、bigmodel.cn 等）的已知/推测 URL；\n"
-                            "2) 用 site: 限定域名搜索；\n"
-                            "3) 若确认该内容无公开来源，如实告知用户并基于已有信息继续。"
-                        ),
-                    )
-                    session.observations.append(obs)
-                    session.messages.append(
-                        Message(
-                            role=Role.TOOL,
-                            content=obs.output,
-                            metadata={"tool_name": obs.tool_name, "success": False, "call_id": call_id},
-                        )
-                    )
-                    self._record_tool_result(session.id, obs.tool_name, False, obs.output)
-                    await self.callbacks.on_tool_progress(tc.name, "error", obs.output, metadata={"call_id": call_id})
-                    return
-
-        # ── P0 无人值守权限门控：自动化运行受 AutomationPolicy 管控 ──
-
-        if self.automation_policy is not None:
+        cm = getattr(self, "context_mgr", None)
+        if self.enable_context and cm is not None:
             try:
-                from scout.security.automation_policy import AutomationPolicyManager
-
-                allowed, reason = AutomationPolicyManager().check_tool(
-                    tc.name,
-                    tc.arguments,
-                    policy=self.automation_policy,
-                    security_manager=self.security,
-                )
-
-                if not allowed:
-                    obs = Observation(
-                        tool_name=tc.name,
-                        success=False,
-                        output=f"自动化策略拒绝: {reason}",
-                    )
-
-                    session.observations.append(obs)
-
-                    session.messages.append(
-                        Message(
-                            role=Role.TOOL,
-                            content=obs.output,
-                            metadata={
-                                "tool_name": obs.tool_name,
-                                "success": False,
-                                "call_id": call_id,
-                            },
-                        )
-                    )
-
-                    self._record_tool_result(session.id, obs.tool_name, False, obs.output)
-
-                    self._log_run_event({"type": "tool_denied", "tool": tc.name, "reason": reason})
-
-                    if self.bus:
-                        await self.bus.emit(
-                            "tool.blocked",
-                            {
-                                "tool": tc.name,
-                                "reason": reason,
-                                "automated": True,
-                            },
-                        )
-
-                    return
-
+                return cm.build_llm_view(session)
             except Exception:
-                pass  # 策略模块异常不阻塞执行（危险命令硬拦截仍生效）
-
-        # 安全检查
-
-        if self.enable_security and self.security:
-            tool = ToolRegistry.get_tool(tc.name)
-
-            if tool:
-                allowed, reason = self.security.check_tool(tc.name, tool.annotations)
-
-                if not allowed:
-                    obs = Observation(
-                        tool_name=tc.name,
-                        success=False,
-                        output=f"安全拦截: {reason}",
-                    )
-
-                    session.observations.append(obs)
-
-                    session.messages.append(
-                        Message(
-                            role=Role.TOOL,
-                            content=obs.output,
-                            metadata={
-                                "tool_name": obs.tool_name,
-                                "success": False,
-                                "call_id": call_id,
-                            },
-                        )
-                    )
-
-                    if self.bus:
-                        await self.bus.emit("tool.blocked", {"tool": tc.name, "reason": reason})
-
-                    return
-
-                # 危险命令硬拦截（不受 auto_approve 影响，与 policy.py 注释一致）
-                # 同时检查 command 与 args，防止 LLM 把命令拆到 args 里绕过检测。
-
-                if tc.name == "shell":
-                    parts = [tc.arguments.get("command", "")]
-                    if isinstance(tc.arguments.get("args"), list):
-                        parts.extend(str(a) for a in tc.arguments["args"])
-                    command = " ".join(str(p).strip() for p in parts if str(p).strip())
-
-                    is_safe, warning = self.security.check_command_block(command)
-
-                    if not is_safe:
-                        obs = Observation(
-                            tool_name=tc.name,
-                            success=False,
-                            output=f"⛔ 危险命令已拦截: {warning}",
-                        )
-
-                        session.observations.append(obs)
-
-                        session.messages.append(
-                            Message(
-                                role=Role.TOOL,
-                                content=obs.output,
-                                metadata={
-                                    "tool_name": obs.tool_name,
-                                    "success": False,
-                                    "call_id": call_id,
-                                },
-                            )
-                        )
-
-                        self._record_tool_result(session.id, obs.tool_name, False, obs.output)
-
-                        if self.bus:
-                            await self.bus.emit(
-                                "tool.blocked",
-                                {"tool": tc.name, "reason": warning, "automated": True},
-                            )
-
-                        return
-
-        # Human-in-the-Loop: 危险操作前请求用户确认（auto_approve 开启时跳过；
-
-        # 自动化运行时无人可确认，由 AutomationPolicy 门控替代）
-
-        if (
-            self.enable_hitl
-            and self.security is not None
-            and not self.security.auto_approve
-            and self.automation_policy is None
-            and tc.name in self.hitl_tools
-        ):
-            import uuid
-
-            request_id = str(uuid.uuid4())[:8]
-
-            # 构建确认请求的原因说明
-
-            if tc.name == "shell":
-                command = tc.arguments.get("command", "")
-
-                reason = f"即将执行命令: {command[:100]}"
-
-            elif tc.name == "execute_code":
-                code = tc.arguments.get("code", "")
-
-                reason = f"即将执行代码: {code[:100]}"
-
-            else:
-                reason = f"即将执行 {tc.name}"
-
-            # 请求用户确认
-
-            approved = await self.callbacks.on_confirm(
-                request_id=request_id, tool_name=tc.name, args=tc.arguments, reason=reason
-            )
-
-            if not approved:
-                obs = Observation(
-                    tool_name=tc.name,
-                    success=False,
-                    output="用户拒绝执行此操作",
+                logging.getLogger(__name__).warning(
+                    "构建 LLM 视图失败，降级为完整历史", exc_info=True
                 )
-
-                session.observations.append(obs)
-
-                session.messages.append(
-                    Message(
-                        role=Role.TOOL,
-                        content=obs.output,
-                        metadata={"tool_name": obs.tool_name, "success": False, "call_id": call_id},
-                    )
-                )
-
-                self._record_tool_result(session.id, obs.tool_name, False, obs.output)
-
-                return
-
-        # 事件: 工具执行前
-
-        if self.bus:
-            await self.bus.emit("tool.start", {"tool": tc.name, "args": tc.arguments})
-
-        # 沙箱判断：根据委派深度决定是否使用沙箱
-
-        sandbox = None
-
-        if self.sandbox_mgr and self.sandbox_mgr.should_sandbox(self.delegate_depth):
-            # 使用 session_id 作为沙箱 key，同一会话共享沙箱
-
-            sandbox_key = f"session-{session.id}"
-
-            sandbox = await self.sandbox_mgr.get_sandbox(sandbox_key)
-
-        # 执行工具 — shell 工具支持流式输出，支持自修复重试
-
-        current_tc = tc
-
-        heal_attempt = 0
-
-        obs = None
-
-        if obs is None:
-            while True:
-                if current_tc.name == "shell":
-
-                    def on_output(text: str):
-
-                        asyncio.ensure_future(
-                            self.callbacks.on_tool_progress(current_tc.name, "stream", text, metadata={"call_id": call_id})
-                        )
-
-                    obs = await ToolRegistry.execute(
-                        current_tc,
-                        on_output=on_output,
-                        sandbox=sandbox,
-                        session_key=session.id,  # 持久会话按对话隔离（2026-08-27）
-                    )
-
-                else:
-                    obs = await ToolRegistry.execute(current_tc)
-
-                # ── 自修复循环：失败时尝试自动修复 ──
-
-                # 注意：安全拦截/用户拒绝是确定性结果，自修复不可能改变结局，
-
-                # 跳过以节省 LLM 调用（此前每次拦截会白烧最多 2 次 healer 调用）
-
-                if (
-                    not obs.success
-                    and self.enable_self_heal
-                    and self.heal_loop
-                    and heal_attempt < self.max_heal_retries
-                    and not obs.output.startswith(("安全拦截", "用户拒绝执行"))
-                    and await self.heal_loop.should_heal(obs)
-                ):
-                    heal_attempt += 1
-
-                    await self.callbacks.on_tool_progress(
-                        current_tc.name,
-                        "healing",
-                        f"自修复第 {heal_attempt}/{self.max_heal_retries} 次尝试...",
-                    )
-
-                    # 构建修复上下文
-
-                    context = self._build_api_messages(session)
-
-                    fixed_tc = await self.heal_loop.generate_fix(
-                        current_tc,
-                        obs,
-                        context,
-                    )
-
-                    if fixed_tc and fixed_tc.arguments != current_tc.arguments:
-                        # 记录修复尝试到 session 元数据（extra 字段，随会话持久化）
-
-                        heal_meta = session.extra.setdefault("heal_attempts", [])
-
-                        heal_meta.append(
-                            {
-                                "tool": current_tc.name,
-                                "attempt": heal_attempt,
-                                # 存原始 dict（JSON 可序列化），不再 str() 化；
-                                # 历史 str 数据由 _parse_heal_args 兼容（2026-08-20）
-                                "original_args": dict(current_tc.arguments),
-                                "error": obs.output[:300],
-                                "fixed_args": dict(fixed_tc.arguments),
-                            }
-                        )
-
-                        current_tc = fixed_tc
-
-                        continue  # 用修复后的参数重试
-
-                    elif fixed_tc and fixed_tc.arguments == current_tc.arguments:
-                        # LLM 返回了相同的参数，说明无法修复
-
-                        break
-
-                    else:
-                        # LLM 无法生成有效修复，放弃重试
-
-                        break
-
-                else:
-                    break
-
-        session.observations.append(obs)
-
-        # 工具结果缓存已移除（2026-08-14），不再写回
-
-        # ── 技能沉淀：自愈成功后异步合成新技能 ──
-
-        if obs.success and heal_attempt > 0 and self.skill_synthesizer:
-            try:
-                heal_records = session.extra.get("heal_attempts", [])
-
-                last_record = heal_records[-1] if heal_records else {}
-
-                await self.skill_synthesizer.on_heal_success(
-                    tool_name=last_record.get("tool", tc.name),
-                    original_error=last_record.get("error", ""),
-                    original_args=self._parse_heal_args(last_record.get("original_args")),
-                    fixed_args=self._parse_heal_args(last_record.get("fixed_args")),
-                    heal_attempts=heal_attempt,
-                )
-
-            except Exception as _e:
-
-                logging.getLogger(__name__).debug(f"Skill synthesis failed: {_e}")
-
-        # ── P1 工作流蒸馏追踪：记录每次工具调用（含自修复标记）──
-
-        if self.workflow_distiller:
-            try:
-                self.workflow_distiller.track_tool_call(
-                    tool=obs.tool_name,
-                    args=current_tc.arguments,
-                    success=obs.success,
-                    error="" if obs.success else (obs.output or "")[:200],
-                    self_fixed=(heal_attempt > 0 and obs.success),
-                )
-
-            except Exception:
-                pass
-
-        # ── P0 运行留痕：自动化工具调用写入 run 事件流 ──
-
-        self._log_run_event(
-            {
-                "type": "tool",
-                "tool": obs.tool_name,
-                "success": obs.success,
-                "ms": obs.duration_ms,
-                "healed": heal_attempt > 0,
-            }
-        )
-
-        # 工具输出截断到 2000 字符
-
-        output_preview = obs.output[:2000] if obs.output else "(无输出)"
-
-        heal_suffix = f" [自修复 {heal_attempt} 次]" if heal_attempt > 0 else ""
-
-        # 合并 call_id 到事件 metadata，前端可据此将输出精确归属到对应的工具卡片（多工具并行时）
-        _ev_meta = {"call_id": call_id}
-        if obs.metadata:
-            _ev_meta.update(obs.metadata)
-
-        await self.callbacks.on_tool_progress(
-            current_tc.name,
-            "done" if obs.success else "error",
-            f"{'完成' if obs.success else '失败'} ({obs.duration_ms}ms){heal_suffix}",
-            metadata=_ev_meta,
-        )
-
-        # shell 流式输出已实时推送，不再重复推 output
-
-        if current_tc.name != "shell":
-            await self.callbacks.on_tool_progress(
-                current_tc.name,
-                "output",
-                output_preview,
-                metadata=_ev_meta,
-            )
-
-        # 工具结果消息
-
-        tool_metadata = {"tool_name": obs.tool_name, "success": obs.success, "call_id": call_id}
-
-        # 合并工具返回的 metadata（如 downloadable、path 等）
-
-        if obs.metadata:
-            tool_metadata.update(obs.metadata)
-
-        # ── 策略③：工具结果"代码层瘦身"（Data Minimization）──
-
-        # 实时任务最烧钱点：工具返回的原始数据（网页全文/搜索原文）不可缓存，
-
-        # 且会撑爆 Input Token。统一瘦身到合理上限再写入历史：
-
-        #   - 默认上限 3000 字符（远小于 web_fetch 全文）
-
-        #   - 保留头部 + 尾部，中间截断（关键信息通常在头尾）
-
-        #   - 仅作用于"写入会话历史"的副本，前端展示用 output_preview 不受影响
-
-        # 注：shell 流式输出已在执行中实时推送，历史里瘦身无感知
-
-        _content = obs.output or ""
-
-        _max_tool_chars = 3000
-
-        if len(_content) > _max_tool_chars:
-            head = _content[: _max_tool_chars // 2]
-
-            tail = _content[-_max_tool_chars // 2 :]
-
-            _content = f"{head}\n\n...[中间内容已瘦身，节省了 {len(_content) - _max_tool_chars} 字符]...\n\n{tail}"
-
-        session.messages.append(
-            Message(
-                role=Role.TOOL,
-                content=_content,
-                metadata=tool_metadata,
-            )
-        )
-
-        # 工具统计累计（2026-08-20）：独立计数，避免被剪枝后统计失真
-        self._record_tool_result(session.id, obs.tool_name, obs.success, obs.output)
-
-        # 事件: 工具执行后
-
-        if self.bus:
-            await self.bus.emit(
-                "tool.complete",
-                {
-                    "tool": current_tc.name,
-                    "success": obs.success,
-                    "duration_ms": obs.duration_ms,
-                    "heal_attempts": heal_attempt,
-                },
-            )
-
-        # 如果有可下载文件，发送独立的 file 事件
-
-        if obs.metadata and obs.metadata.get("downloadable"):
-            file_path = obs.metadata.get("path")
-
-            if file_path:
-                import os
-
-                file_name = os.path.basename(file_path)
-
-                file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
-
-                # 2026-08-12 修复: 通过 callbacks.on_file 直接推送到前端（WebSocket）
-
-                # 此前只发 bus.emit("file")，但 WebSocket 层未订阅该事件 → 前端收不到文件卡片
-
-                try:
-                    await self.callbacks.on_file(
-                        file_path=file_path,
-                        file_name=file_name,
-                        file_size=file_size,
-                    )
-
-                except Exception:
-                    pass
-
-                # 持久化输出文件记录到会话，重进后仍可下载/查看（此前只实时推送，
-                # 不落库 → 重进会话文件卡片丢失）
-                try:
-                    files = session.extra.get("files", [])
-                    files.append({
-                        "file_path": file_path,
-                        "file_name": file_name,
-                        "file_size": file_size,
-                        "created_at": __import__("datetime").datetime.now().isoformat(),
-                    })
-                    session.extra["files"] = files
-                    if self.enable_persistence and self.session_store:
-                        self.session_store.save_session(session)
-                except Exception:
-                    pass
-
-                # bus 事件保留（供其他平台/插件监听，如 wecom/weixin 等）
-
-                if self.bus:
-                    await self.bus.emit(
-                        "file",
-                        {
-                            "type": "file",
-                            "file_path": file_path,
-                            "file_name": file_name,
-                            "file_size": file_size,
-                        },
-                    )
+        return session.messages
 
     def _build_api_messages(self, session: Session) -> list[dict]:
         """构建发送给 LLM 的消息列表.
@@ -3860,16 +3153,27 @@ class Agent:
         #   2) 注入位置随步数漂移（看门狗等新 user 消息插在前面）→ 前缀缓存无法命中。
         # 新版注入点固定在该 user 消息的历史位置，后续各步重发内容逐字节一致：
         #   前缀缓存命中时近乎免费；无缓存时也仅保留一份而非每步重复追加。
+        # ★ 2026-09-14（P0 真相/视图分离）：构造 API 消息一律基于「视图」——
+        # 治理（压缩摘要 / 工具裁剪）只作用于视图，session.messages 保持完整真相
+        # （持久化与 UI 因此不再丢历史）。
+        _llm_msgs = self._llm_view(session)
+
         _last_rt_idx = -1
-        for _i, _m in enumerate(session.messages):
+        for _i, _m in enumerate(_llm_msgs):
             if _m.role == Role.USER and _m.metadata.get("runtime_context"):
                 _last_rt_idx = _i
 
-        for _idx, msg in enumerate(session.messages):
+        for _idx, msg in enumerate(_llm_msgs):
             # ── SYSTEM 消息：仅保留压缩器生成的 [对话摘要]，其余动态内容已移入 runtime_context ──
 
             if msg.role == Role.SYSTEM:
-                if msg.content and msg.content.startswith("[对话摘要]"):
+                # ★ 2026-09-09：放行 [运行笔记] —— 此前只放行 [对话摘要]，运行笔记
+                # 从不进入 API 消息，"防剪枝失忆"完全无效（被剪工具结论真丢，
+                # 长任务后半程重复搜索/重做）。
+                if msg.content and (
+                    msg.content.startswith("[对话摘要]")
+                    or msg.content.startswith("[运行笔记]")
+                ):
                     messages.append({"role": "system", "content": msg.content})
                 continue
 
@@ -3924,7 +3228,11 @@ class Agent:
         system_count = sum(
             1
             for m in messages
-            if m["role"] == "system" and not m["content"].startswith("[对话摘要]")
+            if m["role"] == "system"
+            and not (
+                m["content"].startswith("[对话摘要]")
+                or m["content"].startswith("[运行笔记]")
+            )
         )
 
         assert system_count == 1, f"检测到 {system_count} 条主 system 消息，破坏缓存前缀！"

@@ -43,7 +43,7 @@ _SENSITIVE_FIELDS = ("api_key",)
 _SENSITIVE_MAP_FIELDS = ("provider_keys",)
 
 # 配置结构版本：字段增删时 +1（加载时自动补齐新字段，向后兼容旧配置）
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 # 首次启动时生成配置文件的模板
 INITIAL_CONFIG = {
@@ -60,8 +60,8 @@ INITIAL_CONFIG = {
     "image_provider": "",
     "embedding_provider": "",
     "max_turns": 60,  # 2026-08-31：单回合步数上限，由 30 提升到 60（长时间高复杂度任务需要更多轮次）
-    "max_loop_seconds": 1800,  # 2026-09-06：对话回合总时长上限默认提到 1800s（GUI 桌面自动化单步 5~60s，
-                                # 600s 常在十余步后掐断长任务；1800s 仍具防卡死兜底作用）
+    "max_loop_seconds": 3600,  # 2026-09-08：对话回合总时长上限默认提到 3600s（桌面 GUI 任务常见，单步截图/点击
+                                # 5~60s，600/1800s 均易在长任务中后段掐断；3600s 仍保留防卡死兜底作用）
     "temperature": 0.7,
     "system_prompt": "",  # 已弃用（2026-08-25）：禁止自定义，统一内置模板，仅保留字段兼容旧配置
     "deep_thinking": True,
@@ -117,7 +117,7 @@ class LLMConfig(BaseModel):
     image_provider: str = ""  # 图像模型独立厂商（空 = 跟随主 provider）
     embedding_provider: str = ""  # Embedding 模型独立厂商（空 = 跟随主 provider）
     max_turns: int = 0
-    max_loop_seconds: int = 1800
+    max_loop_seconds: int = 3600
     temperature: float = 0.0
     system_prompt: str = ""  # 已弃用（2026-08-25）：禁止自定义，仅保留字段兼容旧配置，Agent 不再读取
     deep_thinking: bool = False
@@ -204,13 +204,23 @@ class ConfigManager:
                 merged[_k] = _v
 
         # 3.1 配置结构升级：旧配置缺省 config_version 视为 1；
-        #     低于当前版本时按版本号执行结构迁移（暂无迁移步骤，仅记录并回写）。
+        #     低于当前版本时按版本号执行结构迁移并回写落盘。
+        version_migrated = False
         try:
             saved_version = int(merged.get("config_version", 1) or 1)
         except (TypeError, ValueError):
             saved_version = 1
         if saved_version < CONFIG_VERSION:
+            # v2（2026-09-08）：max_loop_seconds 下限提升到 3600s —— 桌面 GUI 任务
+            # 单步 5~60s，600/1800s 旧默认常在长任务中后段掐断。只提下限，
+            # 不影响用户已显式调大（>=3600）的值。
+            try:
+                if int(merged.get("max_loop_seconds") or 0) < 3600:
+                    merged["max_loop_seconds"] = 3600
+            except (TypeError, ValueError):
+                merged["max_loop_seconds"] = 3600
             merged["config_version"] = CONFIG_VERSION
+            version_migrated = True
 
         # 4. 解密敏感字段（api_key / provider_keys）。
         #    同时做平滑迁移：若字段是非空的明文，则自动加密并回写，
@@ -281,7 +291,7 @@ class ConfigManager:
             merged["_legacy_restored"] = True
             need_migrate = True
 
-        if need_migrate or int(merged.get("config_version", 1)) < CONFIG_VERSION:
+        if need_migrate or version_migrated:
             self._write_encrypted(merged)
 
         return LLMConfig(**merged)

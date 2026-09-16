@@ -15,9 +15,13 @@ from typing import Any
 
 # numpy imported lazily in methods that need it
 
-from scout.engine.skill_types import SkillOrigin, SkillStatus, SynthesizedSkill
+from scout.engine.skills.types import SkillOrigin, SkillStatus, SynthesizedSkill
 from scout.memory.vector.embeddings import EmbeddingProvider, create_embedding_provider
 from scout.memory.vector.store import VectorMemory, VectorStore
+
+# ★ 2026-09-10：默认路径锚定数据目录。此前默认 "data/skills.db" 是相对路径，
+# 跟进程 CWD 走 → ScoutAgent 从桌面等位置启动时在桌面凭空创建 data\ 文件夹。
+from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +35,14 @@ class VectorSkillStore:
 
     def __init__(
         self,
-        db_path: str | Path = "data/skills.db",
+        db_path: str | Path | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         max_skills: int = 5000,
     ):
+        if db_path is None:
+            db_path = Path(_SCOUT_DATA_DIR) / "skills.db"
         self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.embedding = embedding_provider or create_embedding_provider("hash")
         self._store = VectorStore(
             db_path=str(self.db_path),

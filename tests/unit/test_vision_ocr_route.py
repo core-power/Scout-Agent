@@ -1,17 +1,14 @@
 # -*- coding: utf-8 -*-
-"""vision 工具路由决策 + OCR 本地兜底测试.
+"""vision 工具路由决策测试.
 
-2026-09-04：vision 工具新增 resolve_mode 路由 ——
-配置了专属视觉模型（vision_model ≠ 主 model）→ VL；否则本地 RapidOCR 兜底。
-纯函数路由单测不依赖网络；OCR 路径用临时生成的小图实测（需要已安装
-rapidocr-onnxruntime，否则跳过）。
+2026-09-07：移除本地 OCR 兜底（用户决策：未配置视觉模型时直接提示不可用，
+为项目减负约 160MB 依赖）。路由简化为 —— vision_model 非空 → "vl"；否则
+"none"。纯函数单测不依赖网络。
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
-import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -23,23 +20,20 @@ from scout.tools.builtin.vision import VisionTool
 # ── resolve_mode 路由决策（纯函数，不触网）────────────────────
 
 @pytest.mark.unit
-def test_resolve_mode_no_api_key_ocr():
-    cfg = SimpleNamespace(api_key="", model="gpt-4o", vision_model="gpt-4o")
-    assert vision_mod.resolve_mode(cfg) == "ocr"
-
-
-@pytest.mark.unit
-def test_resolve_mode_no_vision_model_ocr():
-    """主模型没有显式配置专属视觉模型 → 本地 OCR，不拿纯文本主模型硬发图."""
+def test_resolve_mode_no_vision_model_none():
+    """未配置 vision_model → "none"（无 OCR 兜底，execute 将返回友好提示）."""
     cfg = SimpleNamespace(api_key="sk-x", model="qwen3.8-27b", vision_model="")
-    assert vision_mod.resolve_mode(cfg) == "ocr"
+    assert vision_mod.resolve_mode(cfg) == "none"
 
 
 @pytest.mark.unit
-def test_resolve_mode_vision_equals_main_ocr():
-    """视觉模型字段误填成纯文本主模型(qwen3.8-27b) → 视同未配置 → OCR."""
+def test_resolve_mode_vision_equals_main_vl():
+    """vision_model 与主 model 相同 → 仍走 VL（2026-09-06 规则保留）.
+
+    同名也可能是多模态模型（实测 qwen3.8-27b 支持 image_url）。
+    """
     cfg = SimpleNamespace(api_key="sk-x", model="qwen3.8-27b", vision_model="qwen3.8-27b")
-    assert vision_mod.resolve_mode(cfg) == "ocr"
+    assert vision_mod.resolve_mode(cfg) == "vl"
 
 
 @pytest.mark.unit
@@ -49,56 +43,33 @@ def test_resolve_mode_dedicated_vision_vl():
     assert vision_mod.resolve_mode(cfg) == "vl"
 
 
-# ── OCR 本地路径（真实引擎，无 RapidOCR 时跳过）────────────────
-
-def _has_rapidocr() -> bool:
-    try:
-        import rapidocr_onnxruntime  # noqa: F401
-        return True
-    except Exception:
-        return False
+@pytest.mark.unit
+def test_resolve_mode_missing_attrs_none():
+    """cfg 缺 vision_model 属性（异常配置）→ "none" 而非抛错."""
+    cfg = SimpleNamespace(api_key="sk-x", model="gpt-4o")
+    assert vision_mod.resolve_mode(cfg) == "none"
 
 
-def _make_test_image(text: str) -> str:
-    from PIL import Image, ImageDraw
-
-    img = Image.new("RGB", (420, 110), "white")
-    d = ImageDraw.Draw(img)
-    d.text((15, 30), text, fill="black")
-    fd, path = tempfile.mkstemp(suffix=".png")
-    os.close(fd)
-    img.save(path)
-    return path
-
+# ── execute：未配置视觉模型 → 友好提示（不抛错、不触网）────────
 
 @pytest.mark.unit
-@pytest.mark.skipif(not _has_rapidocr(), reason="rapidocr-onnxruntime 未安装")
-def test_ocr_extracts_text_from_local_image():
-    path = _make_test_image("OCR ROUTE 2026")
-    try:
-        texts = asyncio.run(vision_mod._run_ocr(path))
-        assert any("2026" in t for t in texts), f"OCR 结果: {texts}"
-    finally:
-        os.unlink(path)
-
-
-@pytest.mark.unit
-@pytest.mark.skipif(not _has_rapidocr(), reason="rapidocr-onnxruntime 未安装")
-def test_vision_tool_ocr_mode_no_vision_model(monkeypatch):
-    """未配置专属视觉模型 → execute 走 OCR 成功返回文字."""
+def test_execute_unconfigured_returns_hint(monkeypatch):
+    """未配置 vision_model → execute 返回"无法读取图片"提示，success=False."""
     cfg = SimpleNamespace(
-        api_key="sk-x", model="qwen3.8-27b", vision_model="qwen3.8-27b",
+        api_key="sk-x", model="qwen3.8-27b", vision_model="",
         vision_provider="", provider="openai", base_url="https://x.example.com/v1",
     )
     monkeypatch.setattr("scout.config.ConfigManager.load", lambda self: cfg)
-    monkeypatch.setattr("scout.config.ConfigManager.get_provider_credentials",
-                        lambda self, p: ("", ""))
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    monkeypatch.setattr(
+        "scout.config.ConfigManager.get_provider_credentials", lambda self, p: ("", "")
+    )
+    obs = asyncio.run(VisionTool().execute(image="whatever.png", question="describe"))
+    assert not obs.success
+    assert "视觉模型" in obs.output
 
-    path = _make_test_image("VISION OCR MODE")
-    try:
-        obs = asyncio.run(VisionTool().execute(image=path, question="extract text"))
-        assert obs.success
-        assert "VISION" in obs.output.upper() or "OCR" in obs.output.upper()
-    finally:
-        os.unlink(path)
+
+@pytest.mark.unit
+def test_no_ocr_symbols():
+    """OCR 相关符号已从模块移除（防止依赖回归）."""
+    for name in ("_run_ocr", "_get_ocr_engine", "_ocr_sync", "_enhance_image"):
+        assert not hasattr(vision_mod, name), f"{name} 不应存在"

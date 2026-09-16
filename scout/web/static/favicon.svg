@@ -1,1 +1,21 @@
-<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='46' fill='#0f172a'/><circle cx='50' cy='50' r='46' fill='none' stroke='#10b981' stroke-width='5'/><polygon points='50,16 61,50 39,50' fill='#10b981'/><polygon points='50,84 61,50 39,50' fill='#64748b'/><circle cx='50' cy='50' r='5' fill='#e2e8f0'/></svg>
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
+<circle cx='50' cy='50' r='50' fill='#1a1a1a'/>
+<circle cx='50' cy='50' r='47.5' fill='#ffc107'/>
+<circle cx='50' cy='50' r='37.5' fill='#ffffff'/>
+<circle cx='50' cy='50' r='34' fill='#1e293b'/>
+<g stroke='#aeb6bd' stroke-width='2.4' stroke-linecap='round'>
+<line x1='80.5' y1='50' x2='76' y2='50'/>
+<line x1='50' y1='80.5' x2='50' y2='76'/>
+<line x1='19.5' y1='50' x2='24' y2='50'/>
+</g>
+<g stroke='#6f7780' stroke-width='2' stroke-linecap='round'>
+<line x1='68.4' y1='31.6' x2='65.9' y2='34.1'/>
+<line x1='68.4' y1='68.4' x2='65.9' y2='65.9'/>
+<line x1='31.6' y1='68.4' x2='34.1' y2='65.9'/>
+<line x1='31.6' y1='31.6' x2='34.1' y2='34.1'/>
+</g>
+<polygon points='29,29 55.5,44.5 44.5,55.5' fill='#f8fafc'/>
+<polygon points='71,71 55.5,44.5 44.5,55.5' fill='#e53935' stroke='#ffffff' stroke-width='2' stroke-linejoin='round'/>
+<circle cx='50' cy='12.5' r='3.2' fill='#e53935'/>
+<circle cx='50' cy='50' r='3' fill='#26282c' stroke='#f8fafc' stroke-width='1.5'/>
+</svg>

@@ -21,6 +21,7 @@ from scout.multiagent.shared_state import SharedStateManager
 _router: AgentRouter | None = None
 _messenger: AgentMessenger | None = None
 _shared_state: SharedStateManager | None = None
+_broker = None
 
 
 def get_router() -> AgentRouter:
@@ -45,3 +46,43 @@ def get_shared_state() -> SharedStateManager:
     if _shared_state is None:
         _shared_state = SharedStateManager()
     return _shared_state
+
+
+def get_broker():
+    """委派期消息中枢单例（2026-09-07）.
+
+    子代理通过 report 工具发布中间消息（进度/发现/阻塞），主 agent 的委派
+    工具在子代理结束后 drain 汇总进工具输出（追加式，不破坏前缀缓存）。
+    """
+    global _broker
+    if _broker is None:
+        from scout.multiagent.broker import DelegateBroker
+
+        _broker = DelegateBroker()
+    return _broker
+
+
+# ── 委派上下文（2026-09-09）：sub_report / shared_data 的归属判定 ──
+# 此前 _delegation_context 读 ToolRegistry._main_agent_holder——全代码库从未
+# 赋值 → 子代理调 sub_report/shared_data 恒被判"不在子代理内"（整链路死亡）。
+# 全局 holder 在并行委派下也有竞态。改用 ContextVar：任务级隔离，并行子代理
+# 各持独立上下文互不串扰。
+import contextvars  # noqa: E402
+
+_delegation_ctx: contextvars.ContextVar = contextvars.ContextVar(
+    "scout_delegation_ctx", default=None
+)
+
+
+def set_current_delegation(delegation_id: str, sub_name: str):
+    """标记当前协程链的委派上下文；返回 token 供 reset_current_delegation."""
+    return _delegation_ctx.set((delegation_id, sub_name))
+
+
+def reset_current_delegation(token) -> None:
+    _delegation_ctx.reset(token)
+
+
+def current_delegation():
+    """(delegation_id, sub_name) 或 None（主代理/无委派上下文）."""
+    return _delegation_ctx.get()

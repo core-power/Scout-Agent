@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -92,12 +93,23 @@ class VectorStore:
             from scout.storage.schema import ensure_schema
             ensure_schema(conn)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextlib.contextmanager
+    def _connect(self):
+        """事务化连接（退出时必定关闭）.
+
+        ★ 2026-09-14 修复连接泄漏：原实现返回裸连接，`with self._connect()`
+        只提交/回滚事务、**不关闭**连接（sqlite3.Connection 上下文协议语义），
+        每次调用泄漏一个文件句柄。改为 contextmanager 后调用处语法不变。
+        """
         conn = sqlite3.connect(str(self.db_path))
         # WAL 模式：并发安全 + 崩溃可恢复（幂等，每个连接设置一次）
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        return conn
+        try:
+            with conn:  # 提交/回滚事务
+                yield conn
+        finally:
+            conn.close()
 
     def _load_index(self):
         """从数据库加载向量索引到内存."""

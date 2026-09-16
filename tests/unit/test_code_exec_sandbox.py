@@ -10,6 +10,8 @@ subprocess.Popen 执行任意命令。修复为三层防御：
 本测试锁定：恶意代码一律拒绝且不执行系统命令；合法代码不误伤。
 """
 
+import os
+
 import pytest
 
 from scout.tools.builtin.code_exec import _ast_check, _safe_builtins, _safe_exec
@@ -96,7 +98,10 @@ class TestLegitCodeStillWorks:
         ("import math; print(math.sqrt(16))", "4.0"),
         ("print(len([1, 2, 3]))", "3"),
         ("x = 5; y = x * 2; print(y)", "10"),
-        ("import os; print(os.path.join('a', 'b'))", "a/b"),
+        # ★ 2026-09-14：用 os.path.join 生成期望值（Windows 分隔符为 \，
+        # 硬编码 "a/b" 会让该用例在 Windows 上必然失败——被测的是「合法代码
+        # 不被拦截」，并非分隔符风格）
+        ("import os; print(os.path.join('a', 'b'))", os.path.join("a", "b")),
     ])
     def test_legit_code_runs(self, code, expected):
         ok, output = _safe_exec(code)

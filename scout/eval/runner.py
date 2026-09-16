@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,28 @@ from scout.eval.metrics import summarize_pass_at_k
 from scout.eval.tasks import EvalTask, load_tasks
 
 logger = logging.getLogger("scout.eval")
+
+# 解释器别名（任务定义里的惯用写法）→ 执行前替换为当前解释器绝对路径
+_PY_ALIASES = ("python", "python3", "py")
+
+
+def _normalize_cmd(cmd: str) -> str:
+    """把命令首词的解释器别名替换为当前解释器（跨平台）.
+
+    ★ 2026-09-14：Windows 上裸 ``python`` 常不可用——venv 未加入 PATH、
+    Microsoft Store 别名拦截、或干脆不存在 → 退出码 9009，导致 command 型
+    验证永远 FAIL（表现为「任务已修好也判失败」）。任务定义保持
+    ``python -m pytest`` 的可读写法，执行前归一化为 ``sys.executable``
+    （路径含空格时补引号，shell 语义下必需）。
+    """
+    head, sep, rest = cmd.strip().partition(" ")
+    if head.lower() in _PY_ALIASES:
+        exe = sys.executable or head
+        if " " in exe:
+            exe = f'"{exe}"'
+        return f"{exe}{sep}{rest}"
+    return cmd
+
 
 # Agent 构造器：callable(workdir, task) -> Agent（可为 async）
 AgentBuilder = Callable[[Path, EvalTask], Any | Awaitable[Any]]
@@ -168,7 +191,7 @@ class EvalRunner:
                 return True, f"file {v.path} 校验通过"
             # command（默认）
             r = subprocess.run(
-                v.cmd,
+                _normalize_cmd(v.cmd),
                 shell=True,
                 cwd=str(workdir),
                 capture_output=True,

@@ -64,7 +64,12 @@
         .typing-dot:nth-child(3) { animation-delay: 0.4s; }
         @keyframes blink { 0%,80%,100% { opacity: 0.2 } 40% { opacity: 1 } }
         /* 消息区滚动：flex 子项允许收缩 + 纵向滚动（历史会话消息多时滑动浏览） */
-        #chat-area { min-height: 0; overflow-y: auto !important; overscroll-behavior: contain; }
+        #chat-area {
+            min-height: 0;
+            flex: 1 1 0% !important;   /* 明确 basis=0，才能从 0 被撑开并产生溢出 */
+            overflow-y: auto !important;
+            overscroll-behavior: contain;
+        }
         #chat-area > * { max-width: 100%; }
         .msg-content pre { background: #0d1117 !important; border-radius: 8px; border: 1px solid #21262d; margin: 8px 0; overflow-x: auto; position: relative; }
         .msg-content pre code { font-size: 0.85em; padding: 12px 16px !important; display: block; }
@@ -90,6 +95,47 @@
         /* ── 移动端响应式 ── */
         /* 侧边栏：桌面端固定显示，移动端抽屉式 */
         #sidebar { transition: transform 0.25s ease-out; }
+        /* ★ 2026-09-15 修复「历史会话列表无法滚轮下翻」────────────────────
+           现象：侧栏会话超过一屏后无法滚动下翻，内容被直接裁掉。
+           原因：滚动完全依赖 Tailwind 的 h-screen / flex-1 / min-h-0 组合，
+           只要其中一环没按预期生效（CDN 运行时未生成、100vh 与实际可视高度
+           不一致、移动端 fixed 抽屉），高度链就退化成"容器高度 = 内容高度"，
+           于是永远没有溢出，也就永远不出现可滚动区域。
+           这里用 id 选择器把高度链和溢出规则固定下来，不依赖 Tailwind 类。 */
+        /* ★ P30 2026-09-16：回退 P28 —— 侧栏改回"固定头尾 + 内部列表滚动"。
+           P28 曾把 #sidebar 整块变成滚动容器，导致「设置」被推到列表最底部、
+           顶部 sticky 品牌栏在 flex+overflow 容器里错位出黑块。实测探针证明
+           原始 flex 链本就正常（#sidebar 1195px、#sidebar-scroll 被撑到 614px），
+           滚不动只是因为列表被 limit=15 截断、从未撑满过 —— 该问题已由 P29 修复。 */
+        #sidebar {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            max-height: 100vh;
+            overflow: hidden;   /* 侧栏自身不滚，交给内部列表 */
+        }
+        /* ★ 2026-09-16 修复「消息区滑动不畅/滚不动」：与侧栏同一根因 ——
+           聊天区的高度链完全依赖 Tailwind 的 h-screen / flex-1 / min-h-0，
+           任一环没生效时中间容器退化成"高度=内容"，于是 #chat-area 不产生溢出、
+           永远不出现可滚动区域（消息一多就卡住、滚不动）。这里用 id 选择器把
+           高度链固定下来。 */
+        #main-col {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            flex: 1 1 auto;
+            height: 100vh;
+            max-height: 100vh;
+            overflow: hidden;
+        }
+        #sidebar-scroll {
+            min-height: 0;      /* flex 子项必须可收缩，否则不产生溢出 */
+            flex: 1 1 auto;
+            overflow-y: auto !important;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
+        }
         @media (max-width: 767px) {
             #sidebar {
                 position: fixed; top: 0; left: 0; bottom: 0; z-index: 50;
@@ -104,89 +150,160 @@
         }
 
         /* ── Light Theme Overrides ── */
-        html:not(.dark) body { background: #e5e7eb !important; color: #1f2937 !important; }
-        html:not(.dark) .bg-\[\#0a0a0a\] { background: #e5e7eb !important; }
-        html:not(.dark) .bg-\[\#0d0d0d\] { background: #d1d5db !important; }
-        html:not(.dark) .bg-\[\#1a1a1a\] { background: #c9cdd4 !important; }
-        html:not(.dark) .bg-\[\#111\] { background: #d1d5db !important; }
-        html:not(.dark) .bg-\[\#161616\] { background: #dfe2e6 !important; }
-        html:not(.dark) .bg-\[\#222\] { background: #b8bec6 !important; }
-        html:not(.dark) .bg-slate-900 { background: #c9cdd4 !important; }
-        html:not(.dark) .bg-slate-800 { background: #b8bec6 !important; }
-        html:not(.dark) .text-white { color: #111827 !important; }
-        html:not(.dark) .text-slate-200 { color: #1f2937 !important; }
-        html:not(.dark) .text-slate-300 { color: #374151 !important; }
-        html:not(.dark) .text-slate-400 { color: #4b5563 !important; }
-        html:not(.dark) .text-slate-500 { color: #6b7280 !important; }
-        html:not(.dark) .text-slate-600 { color: #6b7280 !important; }
-        html:not(.dark) .text-slate-700 { color: #4b5563 !important; }
-        html:not(.dark) .border-white\/5 { border-color: rgba(0,0,0,0.10) !important; }
-        html:not(.dark) .border-white\/10 { border-color: rgba(0,0,0,0.16) !important; }
-        html:not(.dark) .hover\:bg-white\/5:hover { background: #c9cdd4 !important; }
-        html:not(.dark) .hover\:bg-white\/10:hover { background: #b8bec6 !important; }
+        html:not(.dark) body { background: #eaebed !important; color: #1f1f1f !important; }
+        html:not(.dark) .bg-\[\#0a0a0a\] { background: #f0f0f1 !important; }
+        html:not(.dark) .bg-\[\#0d0d0d\] { background: #e2e3e5 !important; }
+        html:not(.dark) .bg-\[\#1a1a1a\] { background: #eaebed !important; }
+        html:not(.dark) .bg-\[\#111\] { background: #f7f7f8 !important; }
+        html:not(.dark) .bg-\[\#161616\] { background: #eaebed !important; }
+        html:not(.dark) .bg-\[\#222\] { background: #d5d6d8 !important; }
+        html:not(.dark) .bg-slate-900 { background: #ffffff !important; }
+        html:not(.dark) .bg-slate-800 { background: #d5d6d8 !important; }
+        html:not(.dark) .text-white { color: #0d0d0d !important; }
+        html:not(.dark) .text-slate-200 { color: #1f1f1f !important; }
+        html:not(.dark) .text-slate-300 { color: #3d3d3d !important; }
+        html:not(.dark) .text-slate-400 { color: #515154 !important; }
+        html:not(.dark) .text-slate-500 { color: #6e6e70 !important; }
+        html:not(.dark) .text-slate-600 { color: #6e6e70 !important; }
+        html:not(.dark) .text-slate-700 { color: #515154 !important; }
+        html:not(.dark) .border-white\/5 { border-color: rgba(0,0,0,0.07) !important; }
+        html:not(.dark) .border-white\/10 { border-color: rgba(0,0,0,0.11) !important; }
+        html:not(.dark) .hover\:bg-white\/5:hover { background: #dfe0e2 !important; }
+        html:not(.dark) .hover\:bg-white\/10:hover { background: #d5d6d8 !important; }
         html:not(.dark) .hover\:border-scout-500\/40:hover { border-color: rgba(6,182,212,0.5) !important; }
-        html:not(.dark) .hover\:text-slate-200:hover { color: #111827 !important; }
-        html:not(.dark) .hover\:text-slate-300:hover { color: #1f2937 !important; }
+        html:not(.dark) .hover\:text-slate-200:hover { color: #0d0d0d !important; }
+        html:not(.dark) .hover\:text-slate-300:hover { color: #1f1f1f !important; }
         html:not(.dark) .bg-white\/5 { background: rgba(0,0,0,0.06) !important; }
         html:not(.dark) .bg-black\/60 { background: rgba(0,0,0,0.50) !important; }
         /* Login overlay */
-        html:not(.dark) #login-overlay { background: #c9cdd4 !important; }
-        html:not(.dark) #login-overlay input { background: #d1d5db !important; border-color: #9ca3af !important; color: #111827 !important; }
-        html:not(.dark) #login-overlay label { color: #374151 !important; }
+        html:not(.dark) #login-overlay { background: #ffffff !important; }
+        html:not(.dark) #login-overlay input { background: #f7f7f8 !important; border-color: #d9d9d9 !important; color: #0d0d0d !important; }
+        html:not(.dark) #login-overlay label { color: #3d3d3d !important; }
         /* Message bubbles */
-        html:not(.dark) .bg-slate-800\/50 { background: #c9cdd4 !important; }
-        html:not(.dark) .bg-slate-800\/30 { background: #dfe2e6 !important; }
+        html:not(.dark) .bg-slate-800\/50 { background: #ffffff !important; }
+        html:not(.dark) .bg-slate-800\/30 { background: #ffffff !important; }
         /* Scrollbar */
-        html:not(.dark) ::-webkit-scrollbar-thumb { background: #9ca3af !important; }
-        html:not(.dark) ::-webkit-scrollbar-thumb:hover { background: #6b7280 !important; }
+        html:not(.dark) ::-webkit-scrollbar-thumb { background: #d9d9d9 !important; }
+        html:not(.dark) ::-webkit-scrollbar-thumb:hover { background: #6e6e70 !important; }
         /* Code blocks in light mode */
-        html:not(.dark) .msg-content pre { background: #dfe2e6 !important; border-color: #b8bec6 !important; }
-        html:not(.dark) .msg-content :not(pre) > code { background: #c9cdd4 !important; color: #111827 !important; }
-        html:not(.dark) .msg-content blockquote { border-left-color: #9ca3af !important; color: #4b5563 !important; }
-        html:not(.dark) .msg-content th, html:not(.dark) .msg-content td { border-color: #b8bec6 !important; }
-        html:not(.dark) .msg-content hr { border-top-color: #b8bec6 !important; }
+        html:not(.dark) .msg-content pre { background: #ffffff !important; border-color: #e4e4e7 !important; }
+        html:not(.dark) .msg-content :not(pre) > code { background: #eff0f0 !important; color: #0d0d0d !important; }
+        html:not(.dark) .msg-content blockquote { border-left-color: #d9d9d9 !important; color: #515154 !important; }
+        html:not(.dark) .msg-content th, html:not(.dark) .msg-content td { border-color: #e4e4e7 !important; }
+        html:not(.dark) .msg-content hr { border-top-color: #e2e2e0 !important; }
         html:not(.dark) .msg-content a { color: #0891b2 !important; }
-        html:not(.dark) .code-copy-btn { background: #c9cdd4 !important; color: #374151 !important; border-color: #b8bec6 !important; }
-        html:not(.dark) .code-copy-btn:hover { background: #b8bec6 !important; color: #111827 !important; }
+        html:not(.dark) .code-copy-btn { background: #ffffff !important; color: #3d3d3d !important; border-color: #e4e4e7 !important; }
+        html:not(.dark) .code-copy-btn:hover { background: #e2e2e0 !important; color: #0d0d0d !important; }
         /* Settings modal */
-        html:not(.dark) #settings-modal .bg-\[\#111\] { background: #d1d5db !important; }
+        html:not(.dark) #settings-modal .bg-\[\#111\] { background: #f7f7f8 !important; }
         /* Input area */
-        html:not(.dark) #input { background: #c9cdd4 !important; border-color: #9ca3af !important; color: #111827 !important; }
-        html:not(.dark) #input::placeholder { color: #6b7280 !important; }
+        html:not(.dark) #input { background: #ffffff !important; border-color: #d9d9d9 !important; color: #0d0d0d !important; }
+        html:not(.dark) #input::placeholder { color: #6e6e70 !important; }
+
+/* ═══ 输入区重设计（2026-09-15，UI）═══════════════════════════════
+   背景：html:not(.dark) 下 textarea/#input 被强制白底灰框（!important），
+   使输入框在容器内"套了一个丑方框"。这里以更高特异性重置为一体化容器，
+   并统一工具按钮 / 模型徽章 / 发送按钮的视觉语言（双主题一致）。 */
+
+#input,
+html.dark #input,
+html:not(.dark) #input {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: inherit !important;
+    padding: 2px !important;
+    outline: none !important;
+}
+#input::placeholder { color: #94a3b8 !important; }
+html.dark #input::placeholder { color: #64748b !important; }
+
+/* 聚焦：容器描边 + 柔和外发光（纯状态反馈，不引起布局位移） */
+#composer { transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease; }
+#composer:focus-within {
+    border-color: rgba(6, 182, 212, .55) !important;
+    box-shadow: 0 0 0 3px rgba(6, 182, 212, .10), 0 1px 3px rgba(15, 23, 42, .06);
+}
+html.dark #composer:focus-within {
+    border-color: rgba(34, 211, 238, .45) !important;
+    box-shadow: 0 0 0 3px rgba(34, 211, 238, .10);
+}
+
+/* 工具按钮 */
+.composer-tool {
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+    height: 30px; min-width: 30px; padding: 0 7px;
+    border-radius: 9px; border: none; background: transparent;
+    color: #64748b; font-size: 12px; line-height: 1; cursor: pointer;
+    transition: background-color .15s, color .15s;
+}
+.composer-tool:hover { background: rgba(15, 23, 42, .06); color: #0f172a; }
+html.dark .composer-tool { color: #94a3b8; }
+html.dark .composer-tool:hover { background: rgba(255, 255, 255, .08); color: #e2e8f0; }
+
+/* 模型徽章 */
+.composer-model {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 30px; max-width: 220px; padding: 0 8px;
+    border-radius: 9px; border: none; background: transparent;
+    font-size: 12px; color: #475569; cursor: pointer;
+    transition: background-color .15s, color .15s;
+}
+.composer-model:hover { background: rgba(15, 23, 42, .06); color: #0f172a; }
+html.dark .composer-model { color: #cbd5e1; }
+html.dark .composer-model:hover { background: rgba(255, 255, 255, .08); color: #f1f5f9; }
+.composer-model .dot {
+    width: 6px; height: 6px; border-radius: 9999px; flex: none;
+    background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, .15);
+}
+
+/* 发送 / 停止 */
+.composer-send {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 10px; border: none;
+    background: #06b6d4; color: #fff; cursor: pointer;
+    box-shadow: 0 1px 2px rgba(6, 182, 212, .28);
+    transition: background-color .15s, transform .12s, box-shadow .15s;
+}
+.composer-send:hover { background: #0891b2; }
+.composer-send:active { transform: scale(.93); }
+.composer-send:disabled { opacity: .35; cursor: not-allowed; box-shadow: none; }
+.composer-stop { background: #ef4444; box-shadow: 0 1px 2px rgba(239, 68, 68, .28); }
+.composer-stop:hover { background: #dc2626; }
         /* Sidebar search */
-        html:not(.dark) #session-search { background: #c9cdd4 !important; border-color: #9ca3af !important; color: #1f2937 !important; }
+        html:not(.dark) #session-search { background: #ffffff !important; border-color: #d9d9d9 !important; color: #1f1f1f !important; }
         /* Tool buttons */
-        html:not(.dark) .tool-btn { background: #c9cdd4 !important; border-color: #b8bec6 !important; color: #374151 !important; }
-        html:not(.dark) .tool-btn:hover { background: #b8bec6 !important; }
+        html:not(.dark) .tool-btn { background: #ffffff !important; border-color: #e4e4e7 !important; color: #3d3d3d !important; }
+        html:not(.dark) .tool-btn:hover { background: #d5d6d8 !important; }
         /* Thinking blocks */
-        html:not(.dark) .thinking-block { background: #dfe2e6 !important; border-color: #b8bec6 !important; }
-        html:not(.dark) .thinking-header { background: #c9cdd4 !important; }
+        html:not(.dark) .thinking-block { background: #ffffff !important; border-color: #e4e4e7 !important; }
+        html:not(.dark) .thinking-header { background: #ffffff !important; }
         /* Tool call display */
-        html:not(.dark) .tool-call-display { background: #dfe2e6 !important; border-color: #b8bec6 !important; }
-        html:not(.dark) .tool-call-display .tool-name { background: #b8bec6 !important; }
-        html:not(.dark) .tool-args { background: #c9cdd4 !important; color: #374151 !important; }
-        html:not(.dark) .tool-result-display { background: #dfe2e6 !important; border-color: #b8bec6 !important; }
+        html:not(.dark) .tool-call-display { background: #ffffff !important; border-color: #e4e4e7 !important; }
+        html:not(.dark) .tool-call-display .tool-name { background: #d5d6d8 !important; }
+        html:not(.dark) .tool-args { background: #ffffff !important; color: #3d3d3d !important; }
+        html:not(.dark) .tool-result-display { background: #ffffff !important; border-color: #e4e4e7 !important; }
         /* Mode menu */
-        html:not(.dark) #mode-menu { background: #d1d5db !important; border-color: #b8bec6 !important; }
+        html:not(.dark) #mode-menu { background: #f7f7f8 !important; border-color: #e4e4e7 !important; }
         /* Example cards */
-        html:not(.dark) .example-card:hover { background: #c9cdd4 !important; }
+        html:not(.dark) .example-card:hover { background: #dfe0e2 !important; }
         /* Scroll button */
-        html:not(.dark) #scroll-btn { background: #b8bec6 !important; border-color: #9ca3af !important; color: #374151 !important; }
+        html:not(.dark) #scroll-btn { background: #e2e2e0 !important; border-color: #d9d9d9 !important; color: #3d3d3d !important; }
         /* Sidebar session items */
-        html:not(.dark) .session-item { color: #374151 !important; }
-        html:not(.dark) .session-item:hover { background: #c9cdd4 !important; color: #111827 !important; }
-        html:not(.dark) .session-item.active { background: #a8aeb6 !important; color: #111827 !important; }
+        html:not(.dark) .session-item { color: #3d3d3d !important; }
+        html:not(.dark) .session-item:hover { background: #ececeb !important; color: #0d0d0d !important; }
+        html:not(.dark) .session-item.active { background: #e4e4e2 !important; color: #0d0d0d !important; }
         /* Tab buttons in settings */
-        html:not(.dark) .tab-btn { color: #4b5563 !important; }
-        html:not(.dark) .tab-btn:hover { color: #111827 !important; }
+        html:not(.dark) .tab-btn { color: #515154 !important; }
+        html:not(.dark) .tab-btn:hover { color: #0d0d0d !important; }
         /* Select/Input in settings */
-        html:not(.dark) select { background: #c9cdd4 !important; border-color: #9ca3af !important; color: #1f2937 !important; }
-        html:not(.dark) input[type="text"], html:not(.dark) input[type="password"], html:not(.dark) input[type="number"] { background: #c9cdd4 !important; border-color: #9ca3af !important; color: #1f2937 !important; }
-        html:not(.dark) textarea { background: #c9cdd4 !important; border-color: #9ca3af !important; color: #1f2937 !important; }
+        html:not(.dark) select { background: #ffffff !important; border-color: #d9d9d9 !important; color: #1f1f1f !important; }
+        html:not(.dark) input[type="text"], html:not(.dark) input[type="password"], html:not(.dark) input[type="number"] { background: #ffffff !important; border-color: #d9d9d9 !important; color: #1f1f1f !important; }
+        html:not(.dark) textarea { background: #ffffff !important; border-color: #d9d9d9 !important; color: #1f1f1f !important; }
         /* Tool result pre in light */
-        html:not(.dark) .tool-result-pre { background: #dfe2e6 !important; border-color: #b8bec6 !important; color: #1f2937 !important; }
+        html:not(.dark) .tool-result-pre { background: #ffffff !important; border-color: #e4e4e7 !important; color: #1f1f1f !important; }
         /* Attachment preview */
-        html:not(.dark) .attachment-item { background: #c9cdd4 !important; border-color: #b8bec6 !important; }
+        html:not(.dark) .attachment-item { background: #ffffff !important; border-color: #e4e4e7 !important; }
         /* ── Scout brand colors in light mode (darken for contrast) ── */
         html:not(.dark) .text-scout-300 { color: #0e7490 !important; }
         html:not(.dark) .text-scout-400 { color: #0e7490 !important; }
@@ -303,15 +420,15 @@
            "深字压近黑/深紫底" 反而比深色主题更看不清; text-white 全局暗化
            又误伤了实心深色按钮(发送/保存/批准等)。此块统一补齐。 */
         /* ① 工具卡 / 子代理工具卡 / Multi-Agent 卡片(近黑/深紫底 → 浅灰/浅紫) */
-        html:not(.dark) .bg-\[\#0d1117\] { background: #dfe2e6 !important; border-color: #b8bec6 !important; }
-        html:not(.dark) .bg-\[\#150d24\] { background: #e8e5f2 !important; border-color: rgba(124,58,237,0.30) !important; }
-        html:not(.dark) .bg-\[\#140d22\] { background: #e8e5f2 !important; border-color: rgba(124,58,237,0.28) !important; }
-        html:not(.dark) .ma-panel { background: linear-gradient(135deg, #ece8f8, #ddd8ee) !important; border-color: rgba(124,58,237,0.35) !important; }
+        html:not(.dark) .bg-\[\#0d1117\] { background: #ffffff !important; border-color: #e4e4e7 !important; }
+        html:not(.dark) .bg-\[\#150d24\] { background: #f4f2fb !important; border-color: rgba(124,58,237,0.30) !important; }
+        html:not(.dark) .bg-\[\#140d22\] { background: #f4f2fb !important; border-color: rgba(124,58,237,0.28) !important; }
+        html:not(.dark) .ma-panel { background: linear-gradient(135deg, #f7f5fd, #efecfa) !important; border-color: rgba(124,58,237,0.35) !important; }
         /* ② 用户消息气泡 / 其它半透明深灰容器 / 图谱 tooltip */
-        html:not(.dark) .bg-slate-700\/50 { background: #d1d5db !important; }
-        html:not(.dark) .bg-slate-700\/30 { background: #e5e7eb !important; }
-        html:not(.dark) .hover\:bg-slate-700\/50:hover { background: #d1d5db !important; }
-        html:not(.dark) .bg-slate-800\/95 { background: #dfe2e6 !important; border-color: #b8bec6 !important; }
+        html:not(.dark) .bg-slate-700\/50 { background: #f7f7f8 !important; }
+        html:not(.dark) .bg-slate-700\/30 { background: #ffffff !important; }
+        html:not(.dark) .hover\:bg-slate-700\/50:hover { background: #dfe0e2 !important; }
+        html:not(.dark) .bg-slate-800\/95 { background: #ffffff !important; border-color: #e4e4e7 !important; }
         /* ③ 补暗化 200 级 / 透明度 / 500 级亮色文字(浅底可读) */
         html:not(.dark) .text-violet-200 { color: #6d28d9 !important; }
         html:not(.dark) .text-violet-400\/70 { color: rgba(109,40,217,0.75) !important; }
@@ -465,6 +582,59 @@
     </script>
 </head>
 <body class="h-screen overflow-hidden bg-[#0a0a0a] text-slate-200">
+<!-- ═══════════════ 统一图标雪碧图（2026-09-08）：stroke 2 / viewBox 24 / currentColor，
+     页面与 JS 动态渲染统一经 iconHtml() 引用，替代散落的 emoji 图标 ═══════════════ -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<defs>
+<symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#1a1a1a"/><circle cx="12" cy="12" r="10.92" fill="#ffc107"/><circle cx="12" cy="12" r="9" fill="#ffffff"/><circle cx="12" cy="12" r="8.16" fill="#1e293b"/><g stroke="#aeb6bd" stroke-width="0.58" stroke-linecap="round"><line x1="19.32" y1="12" x2="18.24" y2="12"/><line x1="12" y1="19.32" x2="12" y2="18.24"/><line x1="4.68" y1="12" x2="5.76" y2="12"/></g><g stroke="#6f7780" stroke-width="0.48" stroke-linecap="round"><line x1="16.42" y1="7.58" x2="15.82" y2="8.18"/><line x1="16.42" y1="16.42" x2="15.82" y2="15.82"/><line x1="7.58" y1="16.42" x2="8.18" y2="15.82"/><line x1="7.58" y1="7.58" x2="8.18" y2="8.18"/></g><polygon points="6.96,6.96 13.32,10.68 10.68,13.32" fill="#f8fafc"/><polygon points="17.04,17.04 13.32,10.68 10.68,13.32" fill="#e53935" stroke="#ffffff" stroke-width="0.48" stroke-linejoin="round"/><circle cx="12" cy="3" r="0.77" fill="#e53935"/><circle cx="12" cy="12" r="0.72" fill="#26282c" stroke="#f8fafc" stroke-width="0.36"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+<symbol id="i-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+<symbol id="i-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></symbol>
+<symbol id="i-check-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-x-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+<symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/></symbol>
+<symbol id="i-feishu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2.5 10 12"/><path d="M21.5 2.5 14 21.5l-3.5-8.5-8.5-3.5 19.5-7Z"/><path d="m10.5 13 4-4"/></symbol>
+<symbol id="i-message-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/></symbol>
+<symbol id="i-message-square" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/></symbol>
+<symbol id="i-megaphone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-5v12L3 14v-3Z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></symbol>
+<symbol id="i-building" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M8 10h.01M8 14h.01M16 14h.01"/></symbol>
+<symbol id="i-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/></symbol>
+<symbol id="i-headphones" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1Z"/></symbol>
+<symbol id="i-gamepad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="15" y1="13" x2="15.01" y2="13"/><line x1="18" y1="11" x2="18.01" y2="11"/><rect x="2" y="6" width="20" height="12" rx="6"/></symbol>
+<symbol id="i-briefcase" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></symbol>
+<symbol id="i-hash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></symbol>
+<symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/></symbol>
+<symbol id="i-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2Z"/></symbol>
+<symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></symbol>
+<symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+<symbol id="i-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+<symbol id="i-book-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2Z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7Z"/></symbol>
+<symbol id="i-wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/></symbol>
+<symbol id="i-clipboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 10 5-10 5L2 7l10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></symbol>
+<symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10"/></symbol>
+<symbol id="i-dots" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+</defs>
+</svg>
+<script>
+/* 统一图标助手（2026-09-08）：替代散落的 emoji 图标，全站同风格线性图标 */
+function iconHtml(name, cls, style) {
+    cls = cls || 'w-4 h-4';
+    return '<svg class="' + cls + '"' + (style ? ' style="' + style + '"' : '') +
+        ' aria-hidden="true"><use href="#i-' + name + '"/></svg>';
+}
+</script>
 <!-- ═══════════════ 更新提示横幅（桌面绿色版自动检查，2026-08-30） ═══════════════ -->
 <div id="update-banner" class="hidden fixed top-4 right-4 z-[9000] flex items-center gap-3 px-4 py-2.5 rounded-xl bg-emerald-950/90 border border-emerald-600/40 shadow-xl shadow-emerald-900/40 backdrop-blur">
     <svg class="w-4 h-4 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -522,7 +692,7 @@
     <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
     <aside id="sidebar" class="w-60 bg-[#0d0d0d] border-r border-white/5 flex flex-col flex-shrink-0">
         <div class="flex items-center gap-3 px-4 h-14 border-b border-white/5">
-            <div class="w-8 h-8 rounded-lg bg-scout-500/20 flex items-center justify-center text-lg">🧭</div>
+            <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center"><svg class="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-compass"/></svg></div>
             <div>
                 <div class="text-white font-semibold text-sm">Scout Agent</div>
                 <div class="text-slate-500 text-xs">Always one step ahead</div>
@@ -538,7 +708,7 @@
                 <svg class="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"/></svg>
             </div>
         </div>
-        <div class="flex-1 overflow-y-auto px-2 pb-2 min-h-0">
+        <div id="sidebar-scroll" class="flex-1 overflow-y-auto px-2 pb-2 min-h-0">
             <div class="text-xs text-slate-600 font-medium uppercase tracking-wider px-2 py-2" data-i18n="历史会话">历史会话</div>
             <div id="session-list" class="space-y-0.5">
                 <div class="text-xs text-slate-600 px-3 py-2" data-i18n="加载中...">加载中...</div>
@@ -557,7 +727,7 @@
     </aside>
 
     <!-- ═══════════════ MAIN ═══════════════ -->
-    <div class="flex-1 flex flex-col min-w-0">
+    <div id="main-col" class="flex-1 flex flex-col min-w-0">
         <header class="h-14 flex items-center gap-3 px-4 border-b border-white/5 bg-[#0d0d0d] flex-shrink-0">
             <!-- 移动端菜单按钮 -->
             <button onclick="toggleSidebar()" class="md:hidden p-2 -ml-2 rounded-lg hover:bg-white/5 text-slate-400 transition-colors">
@@ -598,7 +768,7 @@
                             知识库
                         </button>
                         <button onclick="openPanel('starlight')" class="w-full px-4 py-2.5 text-left text-sm text-slate-300 hover:bg-white/5 transition-colors flex items-center gap-2">
-                            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M9 3h6M10 3v6.5L5 18a2 2 0 002 2h10a2 2 0 002-2l-5-8.5V3"/>
                                 <circle cx="12" cy="16" r="1" fill="currentColor" stroke="none"/>
                             </svg>
@@ -719,7 +889,7 @@
         <div id="chat-area" class="flex-1 overflow-y-auto relative min-h-0">
             <!-- Welcome screen -->
             <div id="welcome-screen" class="flex flex-col items-center justify-center h-full px-6 pb-16">
-                <div class="w-16 h-16 rounded-2xl bg-scout-500/20 flex items-center justify-center text-3xl mb-6">🧭</div>
+                <div class="w-16 h-16 rounded-2xl bg-white/10 flex items-center justify-center mb-6"><svg class="w-10 h-10" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-compass"/></svg></div>
                 <h1 class="text-2xl font-bold text-white mb-2">Scout Agent</h1>
                 <p class="text-slate-500 text-sm mb-10">Always one step ahead</p>
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 w-full max-w-2xl">
@@ -761,42 +931,55 @@
 
         <!-- Input area -->
         <div class="flex-shrink-0 border-t border-white/5 bg-[#0d0d0d] px-2 sm:px-4 py-3">
-            <div class="max-w-3xl mx-auto">
+            <div class="max-w-3xl mx-auto relative">
+                <!-- @ 引用文件候选（2026-09-15）-->
+                <div id="mention-menu" class="hidden absolute bottom-full mb-2 left-3 bg-white dark:bg-[#1a1a1a] border border-slate-200 dark:border-white/10 rounded-xl shadow-2xl py-1.5 min-w-[320px] max-w-[80vw] max-h-[300px] overflow-y-auto z-50"></div>
                 <!-- 附件预览区 -->
                 <div id="attachments-preview" class="hidden flex flex-wrap gap-2 mb-2"></div>
-                <div class="flex items-center gap-2 relative">
-                    <!-- 附件按钮 -->
-                    <button onclick="document.getElementById('file-input').click()" class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-200 transition-colors" title="添加附件" data-i18n-title="添加附件">
-                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
-                    </button>
-                    <input type="file" id="file-input" class="hidden" multiple onchange="handleFiles(this.files)">
-                    <div class="flex-1 relative">
-                        <textarea id="input" rows="1" class="w-full px-3 sm:px-4 py-3 pr-20 sm:pr-28 rounded-xl bg-[#1a1a1a] border border-slate-600/50 text-slate-200 placeholder-slate-500 text-sm leading-relaxed resize-none focus:outline-none focus:border-scout-500/50 transition-colors" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" data-i18n-placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"></textarea>
-                        <!-- 输入框右侧：语音按钮 + 模型选择器 + 模式选择器 -->
-                        <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                            <!-- 语音输入 -->
-                            <button id="voice-btn" onclick="toggleVoiceRecording()" title="语音输入" data-i18n-title="语音输入" class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-colors" style="display:none;">
-                                <svg id="voice-icon" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg>
+                <!-- ★ 2026-09-15 输入区（UI 重设计）：一体化容器 · 双主题 · 聚焦发光 -->
+                <div id="composer" class="rounded-2xl bg-white dark:bg-[#1a1a1a] border border-slate-200 dark:border-white/10 px-3.5 pt-3 pb-2">
+                    <textarea id="input" rows="1" class="w-full bg-transparent border-0 text-[13.5px] leading-6 text-slate-800 dark:text-slate-200 resize-none focus:outline-none min-h-[50px] max-h-[240px]" placeholder="输入消息… (Enter 发送, Shift+Enter 换行)" data-i18n-placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"></textarea>
+                    <div class="flex items-center justify-between gap-2 mt-1">
+                        <!-- 左：功能组 -->
+                        <div class="flex items-center gap-0.5 min-w-0">
+                            <button onclick="document.getElementById('file-input').click()" class="composer-tool" title="添加附件" data-i18n-title="添加附件">
+                                <svg class="w-[18px] h-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"/></svg>
+                            </button>
+                            <input type="file" id="file-input" class="hidden" multiple onchange="handleFiles(this.files)">
+                            <button id="voice-btn" onclick="toggleVoiceRecording()" title="语音输入" data-i18n-title="语音输入" class="composer-tool" style="display:none;">
+                                <svg id="voice-icon" class="w-[18px] h-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"/></svg>
                             </button>
                             <!-- 模式选择器 -->
-                            <div class="relative">
-                                <button onclick="toggleModeMenu()" id="mode-btn" class="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-colors">
+                            <div class="relative flex-shrink-0">
+                                <button onclick="toggleModeMenu()" id="mode-btn" class="composer-tool">
                                     <span id="mode-label" data-i18n="快速">快速</span>
-                                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7"/></svg>
+                                    <svg class="w-3 h-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7"/></svg>
                                 </button>
-                                <div id="mode-menu" class="hidden absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-[#1a1a1a] border border-white/10 rounded-lg shadow-2xl py-1 min-w-[120px] z-50">
-                                    <button onclick="selectMode('fast')" class="mode-option w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-colors" data-mode="fast" data-i18n="快速">快速<svg class="mode-check w-3 h-3 text-scout-400 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></button>
-                                    <button onclick="selectMode('thinking')" class="mode-option w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-colors" data-mode="thinking" data-i18n="思考">思考<svg class="mode-check w-3 h-3 text-scout-400 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></button>
+                                <div id="mode-menu" class="hidden absolute bottom-full mb-1.5 left-0 bg-white dark:bg-[#1a1a1a] border border-slate-200 dark:border-white/10 rounded-xl shadow-xl py-1 min-w-[130px] z-50">
+                                    <button onclick="selectMode('fast')" class="mode-option w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-colors" data-mode="fast" data-i18n="快速">快速<svg class="mode-check w-3 h-3 text-scout-400 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></button>
+                                    <button onclick="selectMode('thinking')" class="mode-option w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-colors" data-mode="thinking" data-i18n="思考">思考<svg class="mode-check w-3 h-3 text-scout-400 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></button>
                                                                     </div>
                             </div>
                         </div>
+                        <!-- 右：模型徽章 + 发送/停止 -->
+                        <div class="flex items-center gap-1.5 flex-shrink-0">
+                            <div class="relative">
+                                <button onclick="toggleChatModelMenu()" id="chat-model-btn" class="composer-model" title="选择本轮使用的模型（可跨厂商）" data-i18n-title="选择本轮使用的模型（可跨厂商）">
+                                    <span class="dot"></span>
+                                    <span id="chat-model-label" class="truncate">模型</span>
+                                    <span id="chat-model-provider" class="hidden"></span>
+                                    <svg class="w-3 h-3 opacity-50 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                                </button>
+                                <div id="chat-model-menu" class="hidden absolute bottom-full mb-2 right-0 bg-white dark:bg-[#1a1a1a] border border-slate-200 dark:border-white/10 rounded-xl shadow-2xl py-1.5 min-w-[320px] max-w-[90vw] max-h-[380px] overflow-y-auto z-50"></div>
+                            </div>
+                            <button id="send-btn" onclick="send()" class="composer-send" title="发送 (Enter)">
+                                <svg class="w-[18px] h-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18"/></svg>
+                            </button>
+                            <button id="stop-btn" onclick="stopGeneration()" class="composer-send composer-stop hidden" title="停止生成">
+                                <svg class="w-[15px] h-[15px]" fill="currentColor" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+                            </button>
+                        </div>
                     </div>
-                    <button id="send-btn" onclick="send()" class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-scout-500 hover:bg-scout-600 text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
-                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
-                    </button>
-                    <button id="stop-btn" onclick="stopGeneration()" class="hidden flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-red-500/80 hover:bg-red-600 text-white transition-colors">
-                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 9h6v6H9z"/></svg>
-                    </button>
                 </div>
                 <div class="flex items-center justify-between mt-1.5 px-1">
                     <p class="text-xs text-slate-700" id="latency-badge"></p>
@@ -1050,7 +1233,7 @@
                         <div class="grid grid-cols-4 gap-3">
                             <button onclick="addChannel('feishu')" class="flex flex-col items-center gap-2 p-3 rounded-lg bg-[#1a1a1a] border border-white/10 hover:border-blue-500/50 hover:bg-blue-500/5 transition-colors group">
                                 <div class="w-8 h-8 flex items-center justify-center text-xl">🐦</div>
-                                <span class="text-xs text-slate-300">飞书</span>
+<span class="text-xs text-slate-300">飞书</span>
                             </button>
                             <button onclick="addChannel('wechat')" class="flex flex-col items-center gap-2 p-3 rounded-lg bg-[#1a1a1a] border border-white/10 hover:border-green-500/50 hover:bg-green-500/5 transition-colors group">
                                 <div class="w-8 h-8 flex items-center justify-center text-xl">💬</div>
@@ -1191,7 +1374,7 @@
                     <div class="bg-[#1a1a1a] border border-white/10 rounded-lg p-4">
                         <div class="flex items-center justify-between mb-3">
                             <h3 class="text-sm font-medium text-slate-300">当前版本</h3>
-                            <span id="current-version" class="text-lg font-mono text-scout-400">v1.0.0.2</span>
+                            <span id="current-version" class="text-lg font-mono text-scout-400">v1.0.0.3</span>
                         </div>
                         <div id="update-indicator" class="hidden text-sm text-green-400 mt-2">
                             <span class="inline-block w-2 h-2 bg-green-400 rounded-full mr-2"></span>
@@ -1878,15 +2061,15 @@ function onGenerationDone() {
 
 // ── 统一 Agent 消息气泡 ──
 const TOOL_ICONS = {
-    web_search: '🔍', web_fetch: '🌐', shell: '⚡', files: '📂', memory: '🧠',
-    code_exec: '💻', delegate: '📤', image_generation: '🎨', vision: '👁',
-    scheduler: '⏰', browser: '🖥', knowledge: '📚', mcp: '🔧',
+web_search: '🔍', web_fetch: '🌐', shell: '⚡', files: '📂', memory: '🧠',
+code_exec: '💻', delegate: '📤', image_generation: '🎨', vision: '👁',
+scheduler: '⏰', browser: '🖥', knowledge: '📚', mcp: '🔧',
 };
 function getToolIcon(name) {
-    for (const [key, icon] of Object.entries(TOOL_ICONS)) {
-        if (name.includes(key)) return icon;
-    }
-    return '🔧';
+for (const [key, icon] of Object.entries(TOOL_ICONS)) {
+if (name.includes(key)) return icon;
+}
+return '🔧';
 }
 
 class AgentBubble {
@@ -1942,7 +2125,7 @@ class AgentBubble {
         const time = new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
         const d = document.createElement('div');
         d.className = 'slide-in flex gap-5 group';
-        d.innerHTML = `<div class="flex-shrink-0 w-9 h-9 rounded-lg bg-scout-500/20 flex items-center justify-center text-sm">🧭</div>
+        d.innerHTML = `<div class="flex-shrink-0 w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center">${iconHtml('compass', 'w-5 h-5')}</div>
         <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
                 <span class="text-xs font-medium text-scout-400">Scout</span>
@@ -2688,7 +2871,7 @@ class AgentBubble {
         const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i.test(fileName);
         // ★ 同 downloadFile：把 `\` 换成 `/`，避开 WebView2 GURL 丢弃反斜杠的坑
         const safeFilePath = String(fileData.file_path || '').replace(/\\/g, '/');
-        const dlUrl = `/api/files/download?path=${encodeURIComponent(safeFilePath)}`;
+        const dlUrl = withAuth(`/api/files/download?path=${encodeURIComponent(safeFilePath)}`);
         
         let fileCard;
         if (isImg) {
@@ -2792,7 +2975,7 @@ function addMessage(role, content, msgAttachments, realIndex) {
     } else {
         d.className = 'slide-in flex gap-5 group';
         d.dataset.msgId = mid;
-        d.innerHTML = `<div class="flex-shrink-0 w-9 h-9 rounded-lg bg-scout-500/20 flex items-center justify-center text-sm">🧭</div>
+        d.innerHTML = `<div class="flex-shrink-0 w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center">${iconHtml('compass', 'w-5 h-5')}</div>
         <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
                 <span class="text-xs font-medium text-scout-400">Scout</span>
@@ -2991,6 +3174,11 @@ function doSend(text) {
     const payload = { content: text, attachments: attachments.map(a => ({
         name: a.name, type: a.type, size: a.size, data: a.dataUrl,
     }))};
+    // ★ 2026-09-14：带上输入框旁选择的 (provider, model)（后端按消息覆盖，不改全局配置）
+    if (chatModelSel && chatModelSel.model) {
+        payload.model = chatModelSel.model;
+        if (chatModelSel.provider) payload.provider = chatModelSel.provider;
+    }
     if (editFromMid !== null) payload.edit_from = editFromMid;
     ws.send(JSON.stringify(payload));
     editFromMid = null;
@@ -3233,19 +3421,39 @@ function renderSessionItem(s) {
     </div>`;
 }
 
-async function loadSessions() {
+/* ★ P29 2026-09-16：历史会话列表原来写死 limit=15，而库里有 89 条 —— 只显示 15 条，
+   剩下的既看不见也划不到（用户对照 CowAgent 反馈"消息排不下来、不能滑动选取"）。
+   现在改为分页加载：首屏 30 条，侧栏滚到底自动追加 30 条，直到取完为止。 */
+const SESS_PAGE = 30;
+let _sessShown = 0;      // 已加载条数
+let _sessAll = false;    // 是否已取完全部
+let _sessLoading = false;
+
+async function loadSessions(reset) {
+    if (_sessLoading) return;
+    if (reset === false && _sessAll) return;
+    _sessLoading = true;
     try {
-        const r = await fetch('/api/sessions?limit=15');
+        const isReset = (reset !== false);
+        if (isReset) { _sessShown = 0; _sessAll = false; }
+        const want = _sessShown + SESS_PAGE;
+        const r = await fetch(`/api/sessions?limit=${want}`);
         const d = await r.json();
         const list = document.getElementById('session-list');
-        if (d.sessions.length === 0) {
-            list.innerHTML = '<div class="text-xs text-slate-600 px-3 py-2">暂无历史会话</div>';
+        const all = d.sessions || [];
+        if (all.length <= _sessShown) {
+            _sessAll = true;
+            if (isReset && all.length === 0) {
+                list.innerHTML = '<div class="text-xs text-slate-600 px-3 py-2">暂无历史会话</div>';
+            }
             return;
         }
+        _sessShown = all.length;
+        if (all.length < want) _sessAll = true;
         // 按时间分档分组（会话已按 updated_at 倒序返回）
         const groupOrder = ['今天', '昨天', '最近 7 天', '本月', '更早'];
         const groups = new Map(groupOrder.map(g => [g, []]));
-        for (const s of d.sessions) {
+        for (const s of all) {
             const g = sessionTimeGroup(s.updated_at);
             if (!groups.has(g)) groups.set(g, []);
             groups.get(g).push(s);
@@ -3260,8 +3468,19 @@ async function loadSessions() {
         list.innerHTML = html.join('');
     } catch(e) {
         document.getElementById('session-list').innerHTML = '<div class="text-xs text-slate-600 px-3 py-2">加载失败</div>';
+    } finally {
+        _sessLoading = false;
     }
 }
+
+/* 侧栏滚到底自动加载下一页（P30：滚动容器是 #sidebar-scroll） */
+document.addEventListener('DOMContentLoaded', () => {
+    const sb = document.getElementById('sidebar-scroll');
+    if (!sb) return;
+    sb.addEventListener('scroll', () => {
+        if (sb.scrollHeight - sb.scrollTop - sb.clientHeight < 150) loadSessions(false);
+    }, { passive: true });
+});
 
 // ── 跨会话搜索 ──
 let _searchTimer = null;
@@ -3298,7 +3517,12 @@ function searchSessions(q) {
         }
     }, 300);
 }
+// ★ 2026-09-15：会话加载竞态保护 —— 快速连点 A→B 时，A 的响应可能晚于 B 到达，
+// 直接渲染会覆盖 B 的界面（显示错内容）。用自增序号标记"最新一次请求"，
+// 过期响应一律丢弃。
+let _loadSessionSeq = 0;
 async function loadSession(sid, opts = {}) {
+    const _mySeq = ++_loadSessionSeq;
     console.log('[DEBUG] loadSession called with sid:', sid, 'force:', !!opts.force);
     // ★ 2026-08-31 UI 兜底（v2）：任何早返回/异常路径前，先把"新会话欢迎界面"恢复——
     //   避免消息区纯黑。判定条件：消息区为空、welcome 当前被藏、目标 sid 与当前
@@ -3329,6 +3553,12 @@ async function loadSession(sid, opts = {}) {
     // force=true 用于"断线重连时补齐历史"，此时允许在生成中重建 DOM
     if (isProcessing && !opts.force) {
         console.log('[DEBUG] loadSession aborted: isProcessing=true');
+        // ★ 2026-09-15：不再静默返回 —— 此前点了历史会话毫无反应（像卡死）
+        try {
+            if (typeof toast !== 'undefined' && toast.warning) {
+                toast.warning('正在生成回复中，请先停止或等它完成后再切换会话');
+            }
+        } catch (_) {}
         return;
     }
     // 非强制加载（新会话/正常切换）：重置断线重建标志，允许后续再次触发
@@ -3355,6 +3585,11 @@ async function loadSession(sid, opts = {}) {
     try {
         const r = await fetch(`/api/sessions/${sid}`);
         const d = await r.json();
+        // ★ 2026-09-15：过期响应丢弃（等待期间用户已切到其它会话）
+        if (_mySeq !== _loadSessionSeq) {
+            console.log('[DEBUG] loadSession 结果已过期，丢弃 sid=', sid);
+            return;
+        }
         // 防御：会话不存在 或 messages 非数组（服务端已清理的幽灵会话）
         if (!d || d.error || !Array.isArray(d.messages)) {
             console.warn('[loadSession] 会话不可用:', sid, d && d.error, '消息数:', d && d.messages && d.messages.length);
@@ -3409,12 +3644,44 @@ async function loadSession(sid, opts = {}) {
         document.getElementById('welcome-screen').classList.add('hidden');
         document.getElementById('messages').classList.remove('hidden');
         document.getElementById('messages').innerHTML = '';
+        // ★ 2026-09-15：展示被压缩摘要替换掉的早期原文 —— 此前这些消息从界面上
+        // 直接"凭空消失"，用户以为丢数据（数据其实一直在 compressed_history 里）。
+        try {
+            const _ch = Array.isArray(d.compressed_history) ? d.compressed_history : [];
+            if (_ch.length) {
+                const _esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+                const _rows = _ch.map(function (m) {
+                    const _who = (m.role === 'user') ? '你' : (m.role === 'assistant' ? 'Scout' : (m.role || ''));
+                    return '<div class="px-3 py-1.5 border-l-2 border-slate-300 dark:border-white/10 mb-1.5">' +
+                        '<div class="text-[10px] text-slate-400 mb-0.5">' + _who + '</div>' +
+                        '<div class="text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap break-words">' +
+                        _esc((m.content || '').slice(0, 1500)) + '</div></div>';
+                }).join('');
+                document.getElementById('messages').insertAdjacentHTML('beforeend',
+                    '<details class="mx-auto max-w-3xl mb-3 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5">' +
+                    '<summary class="cursor-pointer select-none px-3 py-2 text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">已压缩 ' +
+                    _ch.length + ' 条早期对话为摘要（点击查看原文）</summary>' +
+                    '<div class="px-2 pb-2">' + _rows + '</div></details>');
+            }
+        } catch (_) { /* 展示失败不影响主流程 */ }
         msgCount = 0;
         msgSeqCounter = 0;
         agentBubble.reset();
         // 历史渲染：合并 assistant(带tool_calls) + 紧随的 tool 输出
         // 跳过 system 消息（内部上下文），tool 消息归属到前一个 assistant 气泡
         let pendingToolCallsMsg = null;   // 等待归属的 tool_calls assistant 消息
+        // ★ 2026-09-09：文件卡片按 call_id 归位到产出它的工具所在气泡。
+        //   旧逻辑把所有 files 挂到最后一个气泡 → 多轮生成/发送文件时全部错位。
+        const filesByCallId = new Map();
+        const filesLeftover = [];
+        (Array.isArray(d.files) ? d.files : []).forEach(f => {
+            if (f && f.call_id) {
+                if (!filesByCallId.has(f.call_id)) filesByCallId.set(f.call_id, []);
+                filesByCallId.get(f.call_id).push(f);
+            } else if (f) {
+                filesLeftover.push(f);
+            }
+        });
         for (const m of d.messages) {
             if (m.role === 'system') {
                 // system 消息（记忆/目标/反思/摘要等内部上下文）直接跳过，不渲染
@@ -3514,6 +3781,11 @@ async function loadSession(sid, opts = {}) {
                     }
                     const status = toolCard.querySelector('.tool-status');
                     if (status) { status.textContent = __t('完成'); status.className = 'tool-status text-emerald-400 ml-1'; }
+                    // ★ 2026-09-09：该工具产出的文件卡片就地恢复——此刻 DOM 里
+                    // 最后一个气泡正是该工具所在气泡，addFileAttachment 会追加到
+                    // 工具卡片之后，顺序与实时渲染一致。
+                    const _fl = filesByCallId.get(callId);
+                    if (_fl) { _fl.forEach(f => agentBubble.addFileAttachment(f)); filesByCallId.delete(callId); }
                     // tool 输出归属完成后，气泡保持打开给下一个 tool 追加
                 }
             }
@@ -3537,11 +3809,13 @@ async function loadSession(sid, opts = {}) {
         if (Array.isArray(d.suggestions) && d.suggestions.length > 0) {
             try { agentBubble.addSuggestions(d.suggestions); } catch (e) { /* 非致命 */ }
         }
-        // 恢复历史输出文件（持久化的 files，重进后仍可下载/查看）
-        if (Array.isArray(d.files) && d.files.length > 0) {
+        // 恢复未能按 call_id 归位的文件（旧数据无 call_id / 对应工具卡片缺失），
+        // 兜底挂到最后一个气泡
+        const filesUnmatched = [...filesLeftover, ...filesByCallId.values()].flat();
+        if (filesUnmatched.length > 0) {
             setTimeout(() => {
                 try {
-                    d.files.forEach(f => agentBubble.addFileAttachment(f));
+                    filesUnmatched.forEach(f => agentBubble.addFileAttachment(f));
                     // 渲染完文件后重新滚到底部
                     scrollToBottom(false);
                 } catch (e) { /* 非致命 */ }
@@ -3576,7 +3850,7 @@ async function downloadFile(filePath) {
     //   把 `\` 替换为 `/` 是 GURL 兼容写法（`/` 在 query value 里是合法字符，不被规范化）。
     //   后端 /api/files/download 用 os.path.abspath 在 Windows 上对 forward-slash 路径同样能解析。
     const safePath = String(filePath || '').replace(/\\/g, '/');
-    const url = `/api/files/download?path=${encodeURIComponent(safePath)}`;
+    const url = withAuth(`/api/files/download?path=${encodeURIComponent(safePath)}`);
     const fileName = (safePath.split('/').pop() || 'download');
     const a = document.createElement('a');
     a.href = url;
@@ -3633,7 +3907,7 @@ function openImagePreview(filePath, fileName) {
     document.getElementById('image-preview-name').textContent = fileName || filePath.split('/').pop() || '';
     // ★ 同 downloadFile：把 `\` 换成 `/` 避开 WebView2 GURL 丢反斜杠的坑
     const safePath = String(filePath || '').replace(/\\/g, '/');
-    document.getElementById('image-preview-img').src = `/api/files/download?path=${encodeURIComponent(safePath)}`;
+    document.getElementById('image-preview-img').src = withAuth(`/api/files/download?path=${encodeURIComponent(safePath)}`);
     overlay.classList.remove('hidden');
 }
 
@@ -3832,11 +4106,20 @@ async function deleteMessage(mid) {
     if (!confirm(__tpl('删除这条消息及之后的所有消息？'))) return;
     try {
         const r = await fetch(`/api/sessions/${currentSessionId}/messages/${mid}`, {method:'DELETE'});
-        const d = await r.json();
-        if (d.status === 'ok') {
+        let d = {};
+        try { d = await r.json(); } catch (_) { d = {}; }
+        // ★ 2026-09-16 修复「删掉一条、又冒出来一条」：
+        // 原实现只在 d.status === 'ok' 时刷新，**非 ok 时静默什么都不做、也不提示**。
+        // 而服务端在"会话正在生成回复"时会返回 409 拒绝删除 —— 用户以为删掉了，
+        // 界面却没变（或下次重载后旧消息又回来），看起来就是"删除后消息冒出来"。
+        // 现在：成功则刷新；失败则**显示服务端给出的真实原因**，并同步一次真实状态。
+        if (r.ok && d.status === 'ok') {
+            await loadSession(currentSessionId);
+        } else {
+            toast.error(d.error || __tpl('删除失败'));
             await loadSession(currentSessionId);
         }
-    } catch(e) { toast.error('删除失败'); }
+    } catch(e) { toast.error(__tpl('删除失败')); }
 }
 
 async function deleteSession(sid, name) {
@@ -4091,7 +4374,7 @@ const PANEL_TEMPLATES = {
                      ondrop="event.preventDefault(); this.classList.remove('border-scout-400','bg-scout-500/10'); handleKbUpload(event.dataTransfer.files)">
                     <input type="file" id="kb-upload-input" class="hidden" accept=".pdf,.docx,.md,.txt,.csv,.json,.html,.py,.js,.ts,.rs,.go,.java,.c,.cpp,.sh,.yml,.yaml,.toml" onchange="handleKbUpload(this.files)" multiple>
                     <svg class="w-8 h-8 mx-auto mb-2 text-slate-500 group-hover:text-scout-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                     </svg>
                     <p class="text-sm text-slate-400 group-hover:text-slate-300">拖拽文件到此处，或 <span class="text-scout-400 font-medium">点击选择</span></p>
                     <p class="text-xs text-slate-600 mt-1">支持 PDF、DOCX、Markdown、TXT、CSV、JSON、HTML、代码文件</p>
@@ -4145,8 +4428,8 @@ const PANEL_TEMPLATES = {
                     <button onclick="toggleKnowledgeView('graph')" id="kb-view-graph" class="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-all bg-white/5 text-slate-400 border border-white/10 hover:bg-white/10">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/>
-                            <line x1="7" y1="7" x2="10" y2="10" stroke-width="1.5"/><line x1="14" y1="10" x2="17" y2="7" stroke-width="1.5"/>
-                            <line x1="7" y1="17" x2="10" y2="14" stroke-width="1.5"/><line x1="14" y1="14" x2="17" y2="17" stroke-width="1.5"/>
+                            <line x1="7" y1="7" x2="10" y2="10" stroke-width="2"/><line x1="14" y1="10" x2="17" y2="7" stroke-width="2"/>
+                            <line x1="7" y1="17" x2="10" y2="14" stroke-width="2"/><line x1="14" y1="14" x2="17" y2="17" stroke-width="2"/>
                         </svg>
                         知识图谱
                     </button>
@@ -5694,6 +5977,177 @@ function saveImageModel() {
     fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({image_model: model || ''}) });
 }
 
+// ── @ 引用文件（2026-09-15）──────────────────────────────────────────
+// 输入框输入 @ 触发：搜索**当前工作目录**下的文件 → 选择后插入相对路径。
+// 模型看到 @path 即可用 file 工具按需读取（不必把整文件当附件塞进上下文，
+// 对大文件/代码文件更省 token 也更精确）。
+let _mentionTimer = null;
+let _mentionItems = [];
+let _mentionAt = -1;
+
+function _mentionMenu() { return document.getElementById('mention-menu'); }
+
+function hideMentionMenu() {
+    const m = _mentionMenu();
+    if (m) { m.classList.add('hidden'); m.innerHTML = ''; }
+    _mentionItems = [];
+    _mentionAt = -1;
+}
+
+async function _fetchMentions(q) {
+    try {
+        const r = await fetch('/api/files/mention?q=' + encodeURIComponent(q || ''));
+        const d = await r.json();
+        _mentionItems = d.items || [];
+    } catch (e) {
+        _mentionItems = [];
+    }
+    _renderMentionMenu();
+}
+
+function _renderMentionMenu() {
+    const m = _mentionMenu();
+    if (!m) return;
+    if (!_mentionItems.length) { hideMentionMenu(); return; }
+    const esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+    m.innerHTML = '<div class="px-3 py-1.5 text-[10px] text-slate-500">引用文件（点击插入路径）</div>' +
+        _mentionItems.map(function (it) {
+            const kb = it.size > 1024 ? (it.size / 1024).toFixed(1) + ' KB' : (it.size || 0) + ' B';
+            return '<button type="button" data-mpath="' + esc(it.path) + '" ' +
+                'class="mention-item w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs text-slate-500 dark:text-slate-400 hover:bg-black/5 dark:hover:bg-white/5 transition-colors">' +
+                '<span class="truncate">' + esc(it.path) + '</span>' +
+                '<span class="text-[10px] text-slate-400 flex-none">' + kb + '</span></button>';
+        }).join('');
+    m.classList.remove('hidden');
+    m.querySelectorAll('.mention-item').forEach(function (btn) {
+        btn.addEventListener('click', function () { insertMention(btn.dataset.mpath); });
+    });
+}
+
+function insertMention(path) {
+    const el = document.getElementById('input');
+    if (!el || _mentionAt < 0) { hideMentionMenu(); return; }
+    const v = el.value;
+    const cursor = el.selectionStart || 0;
+    el.value = v.slice(0, _mentionAt) + '@' + path + ' ' + v.slice(cursor);
+    const np = _mentionAt + path.length + 2;
+    try { el.selectionStart = el.selectionEnd = np; } catch (e) {}
+    el.focus();
+    hideMentionMenu();
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    const el = document.getElementById('input');
+    if (!el) return;
+    el.addEventListener('input', function () {
+        const v = this.value;
+        const pos = this.selectionStart || 0;
+        const m = /(?:^|\s)@([^\s@]{0,40})$/.exec(v.slice(0, pos));
+        if (!m) { hideMentionMenu(); return; }
+        _mentionAt = pos - m[1].length - 1;   // '@' 所在下标
+        clearTimeout(_mentionTimer);
+        _mentionTimer = setTimeout(function () { _fetchMentions(m[1]); }, 220);
+    });
+    el.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') hideMentionMenu();
+    });
+    el.addEventListener('blur', function () {
+        setTimeout(hideMentionMenu, 200);     // 让点击先落地
+    });
+});
+
+// ── 聊天模型选择器（2026-09-14）──────────────────────────────────────
+// 需求：把「已配置厂商 Key 的模型」全部放进输入框旁的下拉里，可自由切换。
+// 选择只作用于本轮——后端 ws.py 按 (provider, model) 覆盖本轮 LLM，
+// 不改全局配置。选择结果本地记忆（provider + model）。
+let chatModelSel = { provider: '', model: '' };
+try {
+    const _saved = JSON.parse(localStorage.getItem('scout_chat_model_sel') || '{}');
+    if (_saved && _saved.model) chatModelSel = { provider: _saved.provider || '', model: _saved.model };
+} catch (e) {}
+
+function toggleChatModelMenu() {
+    const m = document.getElementById('chat-model-menu');
+    if (!m) return;
+    const willShow = m.classList.contains('hidden');
+    document.querySelectorAll('#mode-menu').forEach(el => el && el.classList.add('hidden'));
+    m.classList.toggle('hidden', !willShow);
+}
+
+async function loadChatModels() {
+    const menu = document.getElementById('chat-model-menu');
+    const label = document.getElementById('chat-model-label');
+    const pvLabel = document.getElementById('chat-model-provider');
+    if (!menu) return;
+    try {
+        const cfg = await (await fetch('/api/models')).json();
+        const groups = cfg.provider_groups || [];
+        const currentModel = chatModelSel.model || cfg.current_model || '';
+        const currentProvider = chatModelSel.provider || cfg.provider || '';
+        menu.innerHTML = '';
+        if (!groups.length) {
+            menu.innerHTML = '<div class="px-3 py-2 text-xs text-slate-500">未配置可用模型（请先在设置中填写厂商 API Key）</div>';
+            if (label) label.textContent = '选择模型';
+            if (pvLabel) pvLabel.textContent = '未配置';
+            return;
+        }
+        let curName = currentModel, curProvName = currentProvider;
+        groups.forEach(g => {
+            const head = document.createElement('div');
+            head.className = 'px-3 pt-2 pb-1 text-[10px] tracking-wide text-slate-500 flex items-center gap-1.5';
+            head.innerHTML = '<span class="truncate">' + (g.label || g.provider) + '</span>' +
+                (g.is_current ? '<span class="px-1.5 py-0.5 rounded bg-scout-500/20 text-scout-300 text-[9px]">当前</span>' : '');
+            menu.appendChild(head);
+            (g.models || []).forEach(m => {
+                const active = (m.id === currentModel && g.provider === currentProvider);
+                if (active) { curName = m.name || m.id; curProvName = g.provider; }
+                const btn = document.createElement('button');
+                btn.className = 'w-full flex items-center justify-between gap-2 pl-4 pr-3 py-1.5 text-xs transition-colors ' +
+                    (active ? 'text-scout-300 bg-scout-500/10' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5');
+                btn.dataset.modelId = m.id;
+                btn.dataset.provider = g.provider;
+                btn.onclick = () => selectChatModel(g.provider, m.id, m.name || m.id);
+                btn.innerHTML = '<span class="truncate">' + (m.name || m.id) + '</span>' +
+                    '<svg class="chat-model-check w-3 h-3 flex-shrink-0' + (active ? ' text-scout-400' : ' hidden') +
+                    '" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>';
+                menu.appendChild(btn);
+            });
+        });
+        if (label) label.textContent = String(curName || '模型').replace(/（当前配置）/g, '').trim();
+        if (pvLabel) pvLabel.textContent = curProvName || '默认';
+    } catch (e) {
+        console.error('loadChatModels failed:', e);
+    }
+}
+
+function selectChatModel(provider, id, name) {
+    chatModelSel = { provider: provider || '', model: id || '' };
+    try { localStorage.setItem('scout_chat_model_sel', JSON.stringify(chatModelSel)); } catch (e) {}
+    const menu = document.getElementById('chat-model-menu');
+    if (menu) {
+        menu.classList.add('hidden');
+        menu.querySelectorAll('.chat-model-check').forEach(el => el.classList.add('hidden'));
+        const hit = menu.querySelector('[data-provider="' + provider + '"][data-model-id="' + id + '"] .chat-model-check');
+        if (hit) hit.classList.remove('hidden');
+    }
+    const label = document.getElementById('chat-model-label');
+    const pvLabel = document.getElementById('chat-model-provider');
+    if (label) label.textContent = String(name || id || '模型').replace(/（当前配置）/g, '').trim();
+    if (pvLabel) pvLabel.textContent = provider || '默认';
+}
+
+document.addEventListener('click', function (e) {
+    const menu = document.getElementById('chat-model-menu');
+    if (!menu || menu.classList.contains('hidden')) return;
+    if (!e.target.closest('#chat-model-btn') && !e.target.closest('#chat-model-menu')) {
+        menu.classList.add('hidden');
+    }
+});
+
+document.addEventListener('DOMContentLoaded', loadChatModels);
+
+
 function toggleModeMenu() {
     const menu = document.getElementById('mode-menu');
     menu.classList.toggle('hidden');
@@ -6162,6 +6616,16 @@ const AUTH_TOKEN_KEY = 'scout_auth_token';
 const AUTH_USER_KEY = 'scout_auth_user';
 
 function getAuthToken() { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; }
+
+// ★ 2026-09-09：给非 fetch 请求（<a> 下载导航 / <img> 预览）拼 token query。
+//   这些 URL 不经过 window.fetch 包装器（不发 Authorization header），
+//   开启登录认证后直接 401（图片全裂、下载得到 JSON 错误页）。
+//   后端 AuthMiddleware 早已支持 query param token（server.py），前端一直没拼。
+function withAuth(url) {
+    const t = getAuthToken();
+    if (!t) return url;
+    return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(t);
+}
 function setAuthToken(token, username) {
     localStorage.setItem(AUTH_TOKEN_KEY, token);
     localStorage.setItem(AUTH_USER_KEY, username);

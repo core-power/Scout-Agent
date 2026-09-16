@@ -96,6 +96,14 @@ class ExtractedItem:
     kind: str = "fact"
     importance: float = 0.6
     source_turn: int = 0
+    # ── 结构化事实字段（2026-09-15，分层记忆 · 语义层）──────────────
+    # fact_key: 事实键，形如 "user:lives_in"。**同键新值会令旧值失效**
+    #           （由 MemoryStore.add 处理），因此同一属性必须复用同一个 key。
+    # confidence: 置信度（0 表示未提供，写入时回退到 kind 的默认重要度）
+    # evidence: 证据原文片段（抗幻觉：必须能指回对话原话）
+    fact_key: str = ""
+    confidence: float = 0.0
+    evidence: str = ""
 
 
 @dataclass
@@ -126,7 +134,17 @@ _LLM_EXTRACT_PROMPT = """你是记忆工程器。从下面的对话中抽取"跨
 4. fact：重要事实/需求背景
 5. skill：沉淀技能（可复用的经验/命令/代码模式）
 要求：
-- 只输出 JSON（无任何其他文字）：{{"memories":[{{"content":"...","kind":"preference|decision|conclusion|fact|skill","importance":0.0-1.0}}]}}
+- 只输出 JSON（无任何其他文字）：
+  {{"memories":[{{"content":"...","kind":"preference|decision|conclusion|fact|skill","importance":0.0~1.0,
+     "fact_key":"实体:属性","confidence":0.0~1.0,"evidence":"对话中的原话片段"}}]}}
+- fact_key 只给**长期稳定**的属性起键，格式"实体:属性"，例如：
+  user:lives_in（居住地）、user:diet（饮食禁忌）、user:phone（手机号）、
+  project:name（项目名）、user:preference:hotel（酒店偏好）
+  ★ 同一属性再次出现时**必须复用完全相同的 key** —— 新值才能取代旧值
+    （例：用户从北京搬到深圳，两次的 key 都是 user:lives_in）。
+  非长期事实（一次性安排、临时状态）请留空字符串。
+- confidence 表示把握程度：有用户明确原话 = 0.9 以上；合理推断 = 0.5 以下
+- evidence 必须是对话中的**原文片段**，不得改写或总结
 - content 用一句话概括，不含标签
 - 忽略寒暄、工具输出细节、临时性内容
 对话：
@@ -198,7 +216,23 @@ class SessionMemoryExtractor:
                 continue
             if store is not None:
                 try:
-                    store.add(item.content, category=item.kind, importance=item.importance)
+                    # ★ 2026-09-10：写入来源归属（会话 + 抽取时覆盖的消息数），
+                    #   编辑/重新生成截断对话时按归属精准清理对应记忆。
+                    store.add(
+                        item.content,
+                        category=item.kind,
+                        importance=item.importance,
+                        source_session=session.id,
+                        source_msg_count=len(session.messages),
+                        # ★ 2026-09-15（分层记忆 · 语义层）：带上结构化字段，
+                        # 使 MemoryStore 能对同一 fact_key 的新旧值做冲突失效。
+                        fact_key=getattr(item, "fact_key", "") or "",
+                        confidence=(
+                            getattr(item, "confidence", 0.0)
+                            or KIND_DEFAULT_IMPORTANCE.get(item.kind, 0.6)
+                        ),
+                        evidence=getattr(item, "evidence", "") or "",
+                    )
                 except Exception as exc:
                     logger.warning("记忆写入失败 %r: %s", item.content[:20], exc)
                     continue
@@ -238,7 +272,14 @@ class SessionMemoryExtractor:
             except (TypeError, ValueError):
                 importance = KIND_DEFAULT_IMPORTANCE.get(kind, 0.5)
             importance = max(0.0, min(1.0, importance))
-            items.append(ExtractedItem(content=content, kind=kind, importance=importance))
+            _fk = str(m.get("fact_key", "") or "").strip()[:120]
+            _ev = str(m.get("evidence", "") or "").strip()[:300]
+            try:
+                _cf = float(m.get("confidence", 0) or 0)
+            except (TypeError, ValueError):
+                _cf = 0.0
+            items.append(ExtractedItem(content=content, kind=kind, importance=importance,
+                                       fact_key=_fk, confidence=_cf, evidence=_ev))
         return items
 
     # ── 启发式降级抽取 ──────────────────────────────────────────────────
@@ -291,6 +332,37 @@ class SessionMemoryExtractor:
 
     # ── 去重 ────────────────────────────────────────────────────────────
     def _dedup(self, store: Any, item: ExtractedItem) -> bool:
+        # ★ 2026-09-15（分层记忆 · 语义层）：同一 fact_key 但内容不同 → 这是
+        # **事实更新**（如 user:lives_in 北京→深圳），不是重复。必须放行，
+        # 否则新值会被去重挡在门外，旧矛盾事实永远无法被标为失效。
+        _fk = (getattr(item, "fact_key", "") or "").strip()
+        if _fk and store is not None:
+            try:
+                for _e in (store.search(item.content, limit=8) or []):
+                    if (getattr(_e, "fact_key", "") or "") != _fk:
+                        continue
+                    if (getattr(_e, "status", "active") or "active") == "deprecated":
+                        continue
+                    _old = (getattr(_e, "content", "") or "").strip()
+                    _new = item.content.strip()
+                    if _old == _new:
+                        break  # 完全相同 → 交给常规去重逻辑
+                    # ★ 2026-09-16 修复（自伤 bug）：**措辞漂移不算事实更新**。
+                    # 实测：模型每次抽取 user:diet 的措辞都略有不同
+                    # （"涉及饮食推荐时应避开辣味" vs "餐厅推荐需要避开辣味"），
+                    # 若一律视为"新值"，就会把旧值反复标记 deprecated，而新条目
+                    # 又常被去重挡下 → 最终该 fact_key 下**全是 deprecated**，
+                    # 被召回过滤后等于"用户忌口彻底丢失"（表现为推荐了川湘菜）。
+                    # 判定：高相似 → 视为同一事实的重复表达，不触发"更新放行"。
+                    try:
+                        _sim = _jaccard(set(_tokenize(_old)), set(_tokenize(_new)))
+                    except Exception:  # noqa: BLE001
+                        _sim = 0.0
+                    if _sim >= 0.8:
+                        break
+                    return False  # 语义确实不同（如 深圳→北京）→ 放行，触发冲突失效
+            except Exception:  # noqa: BLE001 — 查询失败不改变原有去重语义
+                pass
         """与库内已有记忆比较相似度，超过阈值视为重复."""
         try:
             candidates = store.search(item.content, limit=5)

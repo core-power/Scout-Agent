@@ -8,7 +8,7 @@ author: scout-self-distilled
 
 # Windows 系统级操控（desktop + shell 组合拳）
 
-> 通用方法论见 `windows-gui-control`。本技能是系统层专项：窗口/托盘/电源/音量/设置页等。
+> 通用方法论见 `cua-computer-use`。本技能是系统层专项：窗口/托盘/电源/音量/设置页等。
 
 ## 工具分工
 

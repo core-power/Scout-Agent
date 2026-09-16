@@ -22,6 +22,7 @@ import asyncio
 import os
 import socket
 import sys
+from datetime import datetime  # 数据迁移路径写 marker/备份名使用（此前缺失被外层 except 静默吞掉）
 import threading
 import time
 from pathlib import Path
@@ -285,6 +286,10 @@ def _enable_dpi_awareness() -> None:
 
     必须在创建任何窗口之前调用。否则 Windows 会把整个窗口按系统缩放
     位图拉伸，导致文字/界面模糊、布局错位、分辨率不适配。
+
+    ★ 2026-09-11 加成功性验证：设置失败（被 CLR/已有 manifest 抢先等）
+    时进程保持 DPI unaware，鼠标/窗口坐标会被虚拟化（150% 缩放下点哪儿
+    偏哪儿），desktop 工具的坐标换算全部错位——必须显式留痕，不能默默失败。
     """
     if os.name != "nt":
         return
@@ -292,15 +297,34 @@ def _enable_dpi_awareness() -> None:
         import ctypes
 
         # Windows 10 1703+：DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-    except Exception:  # noqa: BLE001
-        try:
-            import ctypes
+        ok = ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        state = _verify_dpi_awareness()
+        if not ok and state != 2:
+            # 降级：旧系统 PROCESS_PER_MONITOR_DPI_AWARE = 2
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+                state = _verify_dpi_awareness()
+            except Exception:  # noqa: BLE001
+                pass
+        if state == 2:
+            _log("DPI: Per-Monitor V2 感知已启用（坐标=物理像素）")
+        else:
+            _log(f"⚠️ DPI 感知设置未生效（状态={state}）——高 DPI/多屏环境下鼠标坐标会被虚拟化，GUI 自动化将错位！")
+    except Exception as _e:  # noqa: BLE001
+        _log(f"⚠️ DPI 感知设置异常: {_e}")
 
-            # 旧系统：PROCESS_PER_MONITOR_DPI_AWARE = 2
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        except Exception:  # noqa: BLE001
-            pass
+
+def _verify_dpi_awareness() -> int:
+    """查询本进程 DPI 感知状态（0=unaware 1=system 2=permonitor），失败 -1."""
+    try:
+        import ctypes
+
+        val = ctypes.c_int(-1)
+        h = ctypes.windll.kernel32.GetCurrentProcess()
+        hr = ctypes.windll.shcore.GetProcessDpiAwareness(ctypes.c_void_p(h), ctypes.byref(val))
+        return val.value if hr == 0 else -1
+    except Exception:  # noqa: BLE001
+        return -1
 
 
 def _workarea_size() -> tuple[int, int]:
@@ -564,6 +588,18 @@ def _open_gui(url: str, port: int) -> None:
     server = _SERVER_STATE.get("server")
     if server is not None:
         server.should_exit = True
+
+    # ★ 2026-09-14：退出前直接落盘活跃会话（不依赖 uvicorn lifespan finally）——
+    # server 跑在 daemon 线程上，should_exit 后主线程随即走完并 sys.exit，
+    # daemon 线程被直接终结，lifespan 的 finally（含 flush 钩子）可能来不及执行。
+    # 这里在主线程同步执行一次，确保「未收尾回合 / 未到节流点的增量」不丢。
+    try:
+        from scout.session.store import get_session_store
+
+        _n = get_session_store().flush_active()
+        _log(f"退出 flush: {_n} 个活跃会话已落盘")
+    except Exception as e:  # noqa: BLE001 — 退出路径，失败不阻断关闭
+        _log(f"退出 flush 失败: {e}")
 
 
 # ─────────────────────────────────────────────────────────────

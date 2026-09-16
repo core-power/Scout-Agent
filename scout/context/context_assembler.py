@@ -53,6 +53,15 @@ def _truncate_budget(text: str, budget: int) -> str:
     return text[: budget - 30].rstrip() + "\n…（已截断）"
 
 
+# 混进 preference 类的**系统行为规则 / 工具约定 / 测试残留**特征（2026-09-16）。
+# 这类文本描述的是"助手该怎么做事"，不是"用户的长期事实"，无脑钉进上下文只会
+# 挤占预算并误导模型（实测它们与"不吃辣"一起被注入）。
+_PINNED_NOISE_HINTS = (
+    "不要调用", "只回复", "调用任何工具", "token", "熔断", "省略标记",
+    "存盘路径", "工具返回", "预算告警", "快速评估", "分割发送", "输出存盘",
+)
+
+
 class ContextAssembler:
     """跨会话上下文组装器.
 
@@ -104,17 +113,125 @@ class ContextAssembler:
             return ""
 
         # decay_score = importance × 时间衰减（MemoryEntry.decay_score）
-        ranked = sorted(candidates, key=_rank_score, reverse=True)[: self.memory_limit]
+        # ★ 2026-09-16（分层记忆 · 必注入事实 / pinned facts）：
+        # 用户偏好与"带 fact_key 的稳定事实"必须注入，**不参与语义相似度竞争**。
+        # 实测根因：query="推荐餐厅" 时，库里的"推荐算法/推荐系统"（简历背景）
+        # 向量相似度远高于"不吃辣"，把召回集占满 → 忌口从未进入上下文 →
+        # 模型给不吃辣的用户推荐了麻辣小龙虾。这类信息与当前问句的字面相似度
+        # 可能极低，却对回答正确性起决定作用，因此单独走钉住通道。
+        pinned: list = []
+        try:
+            # ① 带 fact_key 的稳定事实（居住地/忌口/约束…）—— **必钉**。
+            #    它们数量少、价值最高，且经过冲突管理（同键只留最新值）。
+            for _cat in ("preference", "constraint", "fact"):
+                for _m in (self.memory_store.list_recent(category=_cat, limit=40) or []):
+                    if (getattr(_m, "status", "active") or "active") == "deprecated":
+                        continue
+                    if (getattr(_m, "fact_key", "") or "").strip():
+                        pinned.append(_m)
 
-        lines = []
-        for m in ranked:
+            # ② 无 fact_key 的偏好 —— **限量 + 去噪**（2026-09-16）。
+            #    原实现把最近 20 条 preference 全部钉住，实测混入大量
+            #    "系统行为规则 / 工具约定 / 测试残留"（见 _PINNED_NOISE_HINTS），
+            #    既挤占预算又干扰模型；这里按重要度取前若干条并过滤噪音。
+            _pref: list = []
+            for _m in (self.memory_store.list_recent(category="preference", limit=20) or []):
+                if (getattr(_m, "status", "active") or "active") == "deprecated":
+                    continue
+                if (getattr(_m, "fact_key", "") or "").strip():
+                    continue  # ① 已收
+                _txt = (getattr(_m, "content", "") or "").strip()
+                if not _txt or len(_txt) > 180:      # 过长的不是"一句话长期事实"
+                    continue
+                if any(_h in _txt for _h in _PINNED_NOISE_HINTS):
+                    continue
+                _pref.append(_m)
+            _pref.sort(key=lambda x: getattr(x, "importance", 0.0) or 0.0, reverse=True)
+            pinned.extend(_pref[:5])
+        except Exception:  # noqa: BLE001 — 钉住失败不影响常规召回
+            pinned = []
+
+        _seen_pinned: set = set()
+        _pinned_uniq: list = []
+        for _m in pinned:
+            _mid = getattr(_m, "id", None)
+            if _mid is not None and _mid in _seen_pinned:
+                continue
+            if _mid is not None:
+                _seen_pinned.add(_mid)
+            _pinned_uniq.append(_m)
+
+        # ★ 2026-09-16（分层记忆 · 召回配额）：**不在这里做全局截断**。
+        # 实测问题：全局 top-N 截断下，数量多、篇幅长的 skill / session_history
+        # 会把 preference / fact 这类"短小但价值最高"的记忆挤出注入窗口
+        # （表现为：新会话问餐厅推荐时没有体现用户忌口）。配额改在下面按层施加。
+        _pinned_sorted = sorted(_pinned_uniq, key=_rank_score, reverse=True)
+        _seen_all = {getattr(m, "id", None) for m in _pinned_sorted}
+        _rest = [m for m in candidates if getattr(m, "id", None) not in _seen_all]
+        # pinned 排在最前（内部按 rank 排序），保证偏好/稳定事实一定拿到 facts 层配额
+        ranked = _pinned_sorted + sorted(_rest, key=_rank_score, reverse=True)
+
+        # ★ 2026-09-15（分层记忆 · 分层注入）：召回结果按"记忆层"分组输出，
+        # 而不是混成一个扁平列表让模型自己分辨。三层在决策中的角色不同：
+        #   facts    长期稳定事实/偏好 —— 直接约束本次回答
+        #   episodes 历史片段（压缩归档）—— 提供"上次做到哪"的来龙去脉
+        #   rules    行为规则/可复用技能 —— 告诉模型"该怎么做事"
+        # 同时：跳过已失效（deprecated）事实；对带 fact_key 的事实注明键名，
+        # 便于模型认识到"同一属性只应以最新值为准"。
+        _group_of = {
+            "preference": "facts",
+            "fact": "facts",
+            "decision": "facts",
+            "conclusion": "facts",
+            "general": "facts",
+            "skill": "rules",
+            "session_history": "episodes",
+        }
+        _label = {
+            "facts": "用户长期事实与偏好",
+            "episodes": "相关历史片段（压缩归档，可用 memory_search 检索更多）",
+            "rules": "行为规则与可复用技能",
+        }
+
+        # 每层配额（可调）：事实层最大，其次是情节与规则。
+        # 依据方案建议的"语义事实 top 5~20 / 情节摘要 top 3~10 / 程序规则 top 3~10"。
+        _quota = {"facts": 10, "episodes": 5, "rules": 5}
+        # 事实层保底：只要候选里确实有事实，就至少注入这么多条 ——
+        # 长期事实（居住地/忌口/约束）对回答正确性的影响远大于一条相关技能。
+        _min_facts = 3
+
+        buckets: dict[str, list[str]] = {"facts": [], "episodes": [], "rules": []}
+        overflow: dict[str, list[str]] = {"facts": [], "episodes": [], "rules": []}
+        for m in ranked:  # 保持 rank_score 顺序（组内即按相关性×重要性×时效）
+            if (getattr(m, "status", "active") or "active") == "deprecated":
+                continue
             text = (getattr(m, "content", "") or "").strip()
             if not text:
                 continue
-            text = text.replace("\n", " ")
-            text = text[:300]
+            text = text.replace("\n", " ")[:300]
             kind = getattr(m, "category", "") or "general"
-            lines.append(f"- [{kind}] {text}")
+            _fk = (getattr(m, "fact_key", "") or "").strip()
+            _suffix = f"  (fact_key={_fk})" if _fk else ""
+            _g = _group_of.get(kind, "facts")
+            _line = f"- [{kind}] {text}{_suffix}"
+            if len(buckets[_g]) < _quota[_g]:
+                buckets[_g].append(_line)
+            else:
+                overflow[_g].append(_line)
+
+        # 事实层保底补齐（用同层 overflow 中排名最靠前的若干条）
+        if len(buckets["facts"]) < _min_facts:
+            for _ln in overflow["facts"]:
+                if len(buckets["facts"]) >= _min_facts:
+                    break
+                buckets["facts"].append(_ln)
+
+        lines: list[str] = []
+        for _g in ("facts", "episodes", "rules"):
+            _items = buckets.get(_g) or []
+            if _items:
+                lines.append(f"# {_label[_g]}")
+                lines.extend(_items)
         return _truncate_budget("\n".join(lines), budget)
 
     # ── 历史会话摘要 ────────────────────────────────────────────────────

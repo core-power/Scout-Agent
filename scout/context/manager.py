@@ -8,10 +8,9 @@
 
 from __future__ import annotations
 
-import json
 import re
-from datetime import datetime
 from typing import Any
+from datetime import datetime
 
 from scout.core.types import Message, Role, Session
 
@@ -43,15 +42,115 @@ def estimate_tokens(text: str) -> int:
     return cjk + max(0, (other + 3) // 4)
 
 
+# ── 情节记忆结构化摘要（2026-09-15，分层记忆 · 情节层）──────────────────
+# 设计依据：情节记忆应"按时间组织、可检索、可复用"，因此压缩产物不是一段散文，
+# 而是带固定字段的结构化记录；同时保留"不可改写"的关键原话与产物路径清单
+# （历史事故：旧摘要丢了产物清单，agent 把"写入 X"当新任务重跑全流程）。
+_EPISODE_SUMMARY_PROMPT = """你是 Agent 记忆压缩模块。把下面的对话压缩成**结构化记忆**，
+只保留对后续任务有价值的信息。**不要编造、不要推测**；不确定的字段留空。
+
+只输出 JSON（无任何其他文字）：
+{{
+  "topic": "一句话主题",
+  "goal": "当时在做的任务目标",
+  "constraints": ["限制条件（预算/时间/平台/口味等）"],
+  "decisions": ["已经确定的做法或方案"],
+  "actions": ["执行过的动作"],
+  "results": ["结果、关键数据、以及**已产出/已修改文件的完整路径**"],
+  "failures": ["失败原因或踩过的坑"],
+  "open_loops": ["尚未完成的事项（全部完成则为 []）"],
+  "user_preferences": ["用户表达的偏好"],
+  "important_quotes": ["不可改写的关键原话，逐字引用"],
+  "next_steps": ["下一步待办"],
+  "importance": 0.0
+}}
+
+压缩要求（必须遵守）：
+- 用户**最新一次明确的行动指令**必须逐字出现在 goal 或 important_quotes 中
+- 已产出/已修改的文件**完整路径**必须逐条列入 results（后续迭代依据，绝不可省略）
+- 关键数字、日期、金额、ID 等必须保留原值，不得四舍五入或改写
+- open_loops 必须准确反映未完成事项
+
+对话历史：
+{dialog}"""
+
+_EPISODE_FIELDS = (
+    ("topic", "主题"),
+    ("goal", "目标"),
+    ("constraints", "约束"),
+    ("decisions", "已定方案"),
+    ("actions", "已执行"),
+    ("results", "结果/产物"),
+    ("failures", "失败与教训"),
+    ("open_loops", "未完成"),
+    ("user_preferences", "用户偏好"),
+    ("important_quotes", "关键原话"),
+    ("next_steps", "下一步"),
+)
+
+
+def _parse_episode_json(raw: str) -> dict | None:
+    """从模型输出中解析结构化摘要；解析不出返回 None（调用方回退）."""
+    if not raw:
+        return None
+    import json as _json
+    import re as _re
+
+    text = raw.strip()
+    if text.startswith("```"):
+        text = _re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = _re.sub(r"\n?```$", "", text)
+    # 容错：截取第一个 { 到最后一个 }
+    i, j = text.find("{"), text.rfind("}")
+    if i < 0 or j <= i:
+        return None
+    try:
+        data = _json.loads(text[i:j + 1])
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(data, dict):
+        return None
+    # 至少要有一个有内容的字段才算解析成功
+    for key, _ in _EPISODE_FIELDS:
+        v = data.get(key)
+        if (isinstance(v, str) and v.strip()) or (isinstance(v, list) and v and any(str(x).strip() for x in v)):
+            return data
+    return None
+
+
+def _render_episode(d: dict) -> str:
+    """结构化摘要 → 紧凑可读文本（给模型看的摘要块）."""
+    lines: list[str] = []
+    topic = str(d.get("topic", "") or "").strip()
+    if topic:
+        lines.append(f"主题：{topic}")
+    for key, label in _EPISODE_FIELDS:
+        if key == "topic":
+            continue
+        v = d.get(key)
+        if isinstance(v, str):
+            v = v.strip()
+            if v:
+                lines.append(f"{label}：{v}")
+        elif isinstance(v, list):
+            items = [str(x).strip() for x in v if str(x).strip()]
+            if items:
+                lines.append(f"{label}：" + "；".join(items))
+    imp = d.get("importance")
+    if isinstance(imp, (int, float)):
+        lines.append(f"重要度：{imp}")
+    return "\n".join(lines)
+
+
 class ContextManager:
     """上下文治理器 — 管理 Session 的消息列表长度."""
 
     def __init__(
         self,
         max_messages: int = 50,
-        max_tool_outputs: int = 50,
-        compress_threshold: int = 80,
-        keep_recent: int = 20,
+        max_tool_outputs: int = 24,
+        compress_threshold: int = 40,
+        keep_recent: int = 12,
         prune_batch: int = 6,
         max_tokens: int = 0,
         compress_ratio: float = 0.8,
@@ -60,9 +159,9 @@ class ContextManager:
         Args:
             max_messages: 消息列表最大长度
             max_tool_outputs: 保留最近 N 条工具输出（超过后批量剪枝）。
-                2026-08-20 调大至 50：信息密集型任务（如"写技术文章"需搜索+抓取
-                5~10 个来源、找真实图片 URL 并验证 ≈ 15~25 条工具消息）在素材
-                收集阶段完全不触发剪枝，避免"获取→遗忘→重获"的步数浪费。
+                2026-09-07 从 50 收紧到 24：ReAct 累计 input 随历史长度平方级
+                增长，过程性上下文要保持低位；信息不丢由 Running Notes 兜底
+                （剪枝要点提炼进末尾笔记），不再需要大量原文陪跑。
             compress_threshold: 达到此长度触发压缩
             keep_recent: 压缩时保留最近 N 条消息
             prune_batch: 剪枝缓冲，批量删到 max_tool_outputs-prune_batch，降低触发频率
@@ -99,14 +198,178 @@ class ContextManager:
         return total
 
     def _over_budget(self, session: Session) -> bool:
-        """token 维度是否已超压缩预算（2026-09-05 提取，供 needs_compression/compress 共用）."""
+        """token 维度是否已超压缩预算（2026-09-05 提取，供 needs_compression/compress 共用）.
+
+        ★ 2026-09-14（视图分离）：按「视图」而非真相计量 —— 视图才是实际发给 LLM
+        的内容（真相已不再被压缩缩短）。
+        """
         if self.max_tokens <= 0:
             return False
-        return self.count_tokens(session) >= int(self.max_tokens * self.compress_ratio)
+        _total = 0
+        for m in self.build_llm_view(session, apply_tool_pruning=False):
+            _total += estimate_tokens(m.content or "")
+            if (m.metadata or {}).get("tool_name"):
+                _total += 4
+        return _total >= int(self.max_tokens * self.compress_ratio)
+
+    # ── 真相 / 视图分离（P0，2026-09-14）─────────────────────────────
+    #
+    # 背景：此前 prune/compress 直接改写 session.messages，用户可见历史被破坏性
+    # 裁剪（"历史中段凭空消失"且不可追溯）。分离后：
+    #   session.messages  = 真相：只增不减（除显式编辑截断）→ 持久化 / UI 读取
+    #   build_llm_view()  = 视图：应用摘要 + 工具裁剪 → 仅用于构造 API 消息（省 token）
+
+    @staticmethod
+    def _anchor_of(m: Message) -> tuple:
+        """消息锚点：用 (role, timestamp, content 前 40 字) 标识身份.
+
+        不用下标——剪枝/编辑会改变下标，锚点在原地仍稳定。
+        """
+        ts = getattr(m, "timestamp", None)
+        return (
+            getattr(getattr(m, "role", None), "value", str(getattr(m, "role", ""))),
+            ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+            (m.content or "")[:40],
+        )
+
+    def _summary_anchors(self, session: Session) -> dict[tuple, str]:
+        """锚点 → 摘要文本（来自 session.extra['summaries']，由 compress 写入）."""
+        out: dict[tuple, str] = {}
+        for s in (getattr(session, "extra", None) or {}).get("summaries", []) or []:
+            text = s.get("summary", "") if isinstance(s, dict) else ""
+            for a in (s.get("anchors", []) if isinstance(s, dict) else []) or []:
+                try:
+                    out[tuple(a)] = text
+                except TypeError:
+                    continue
+        return out
+
+    def build_llm_view(
+        self, session: Session, apply_tool_pruning: bool = True
+    ) -> list[Message]:
+        """构建「发给 LLM 的视图」—— 治理只作用于视图，session.messages 保持不变.
+
+        Args:
+            apply_tool_pruning: 是否应用「工具输出裁剪/瘦身」。压缩判据与压缩
+                区间计算传 False（只应用摘要），使命中逻辑与工具裁剪解耦——
+                否则工具裁剪会改变列表长度，干扰区间计算（P0 批 4，2026-09-14）。
+
+        ★ 2026-09-14（P0 真相/视图分离）：解决「历史中段凭空消失」的根因 ——
+        为省 token 做的剪枝/压缩此前直接改写 ``session.messages`` 并全量落盘，
+        把用户可见的完整历史覆盖成"剪短版"。现在：
+        - 真相（``session.messages``）只增不减 → 持久化与 UI 天然完整；
+        - 本视图应用「压缩摘要」+「工具输出裁剪/瘦身」→ 只影响发给 LLM 的内容。
+
+        确定性（缓存前缀友好）：给定相同 messages + summaries，输出逐字节一致；
+        工具裁剪沿用原「批量边界」策略（保留 ``max_tool_outputs - prune_batch`` 条），
+        避免每条新工具消息都让前缀变化。
+        """
+        msgs: list[Message] = list(session.messages)
+        if not msgs:
+            return msgs
+
+        # ① 应用压缩摘要：命中锚点的消息移出视图，并在其原位置插入摘要消息
+        anchors = self._summary_anchors(session)
+        out: list[Message] = []
+        emitted: set[str] = set()
+        for m in msgs:
+            key = self._anchor_of(m)
+            if key in anchors:
+                text = anchors[key]
+                if text and text not in emitted:  # 同一摘要只插入一次
+                    emitted.add(text)
+                    out.append(
+                        Message(
+                            role=Role.SYSTEM,
+                            content=f"[对话摘要] {text}",
+                            metadata={"type": "compression"},
+                        )
+                    )
+                continue
+            out.append(m)
+
+        if not apply_tool_pruning:
+            return out
+
+        # ② 工具输出「条数裁剪」：从最旧开始整批移出视图。
+        #    必须整批（assistant(tool_calls) + 其全部 TOOL 结果）一起移出，
+        #    否则留下缺响应的 tool_calls → API 400（原实现注释中的教训）。
+        tool_pos = [i for i, m in enumerate(out) if m.role == Role.TOOL]
+        if len(tool_pos) > self.max_tool_outputs:
+            target_keep = max(self.prune_batch, self.max_tool_outputs - self.prune_batch)
+            skip: set[int] = set()
+            cur = list(tool_pos)
+            while len(cur) > target_keep and cur:
+                i = cur[0]
+                start = i - 1 if i > 0 and out[i - 1].role == Role.ASSISTANT else i
+                end = i
+                while end < len(out) and out[end].role == Role.TOOL:
+                    end += 1
+                skip.update(range(start, end))
+                cur = [k for k in cur if k >= end]
+            out = [m for i, m in enumerate(out) if i not in skip]
+
+        # ③ 工具输出「瘦身」（token 维度）：超大输出在视图内替换为占位符。
+        #    注意：只替换视图内的引用，绝不修改原 Message 对象（真相不受影响）。
+        if self.max_tokens > 0:
+            _budget = max(2000, self.max_tokens // 2)
+            live = [i for i, m in enumerate(out) if m.role == Role.TOOL]
+            while live:
+                _total = sum(estimate_tokens(out[i].content or "") for i in live)
+                if _total <= _budget:
+                    break
+                _cand = next(
+                    (i for i in live if estimate_tokens(out[i].content or "") >= _budget // 20),
+                    None,
+                )
+                if _cand is None:
+                    break
+                _orig = out[_cand].content or ""
+                out[_cand] = Message(
+                    role=Role.TOOL,
+                    content=(
+                        f"[输出已瘦身：该工具输出原约 {estimate_tokens(_orig)} token，"
+                        "为控制上下文预算已移出视图，要点已并入运行笔记]"
+                    ),
+                    metadata=out[_cand].metadata,
+                    timestamp=out[_cand].timestamp,
+                    sender=out[_cand].sender,
+                    session_id=out[_cand].session_id,
+                    source=out[_cand].source,
+                )
+                live = [i for i in live if i != _cand]
+
+        # ④ 无 USER 保护（★ 2026-09-14）：摘要/裁剪后视图内若没有 USER 消息，
+        #    GLM 系（及部分网关）会 400 "No user query found in messages"。
+        #    从被摘要覆盖的原文里补回最后一条 user（等价于原 preserved_user 逻辑）。
+        if out and not any(m.role == Role.USER for m in out):
+            _last_user = next((m for m in reversed(msgs) if m.role == Role.USER), None)
+            if _last_user is not None:
+                out.append(
+                    Message(
+                        role=Role.USER,
+                        content=_last_user.content,
+                        metadata={"type": "preserved_user", "note": "压缩后重注入，防 API 400"},
+                        timestamp=_last_user.timestamp,
+                    )
+                )
+
+        return out
+
+    def reset_governance(self, session: Session) -> None:
+        """清空压缩摘要记录（编辑/重新生成截断后调用）——摘要锚点已失效."""
+        try:
+            (getattr(session, "extra", None) or {}).pop("summaries", None)
+        except Exception:  # noqa: BLE001
+            pass
 
     def needs_compression(self, session: Session) -> bool:
-        """判断是否需要压缩：条数超限 或 token 超预算（二者任一触发）."""
-        if len(session.messages) >= self.compress_threshold:
+        """判断是否需要压缩：条数超限 或 token 超预算（二者任一触发）.
+
+        ★ 2026-09-14（视图分离）：条数按「视图」计 —— 真相不再被压缩缩短，若仍用
+        ``len(session.messages)`` 会每步都判需压缩 → 每步白调 LLM 摘要。
+        """
+        if len(self.build_llm_view(session, apply_tool_pruning=False)) >= self.compress_threshold:
             return True
         return self._over_budget(session)
 
@@ -142,28 +405,35 @@ class ContextManager:
         if len(tool_messages) > self.max_tool_outputs:
             # 目标：删到保留 max_tool_outputs - prune_batch 条，留出增长缓冲
             target_keep = max(self.prune_batch, self.max_tool_outputs - self.prune_batch)
-            to_remove = len(tool_messages) - target_keep
-            if to_remove > 0:
-                # 每次从"当前最旧"的工具消息开始删，删完重算索引（删除会使后续索引位移）
-                for _ in range(to_remove):
-                    cur_tools = [
-                        i for i, m in enumerate(session.messages)
-                        if m.role == Role.TOOL
-                    ]
-                    if not cur_tools:
-                        break
-                    idx = cur_tools[0]
-                    removed.append(session.messages[idx])
-                    # 若前一条是与之配对的 assistant(tool_calls)，一并移除以保持结构合法
-                    if idx > 0 and session.messages[idx - 1].role == Role.ASSISTANT:
-                        removed.append(session.messages[idx - 1])
-                        del session.messages[idx - 1:idx + 1]
-                    else:
-                        del session.messages[idx]
+            # ★ 2026-09-09：整批删除 —— 一次 assistant 的 N 个并行 tool_call 产生
+            # N 条连续 TOOL 结果；此前"删 1 条 TOOL + 紧邻前 1 条 assistant"会把
+            # 同批其余 N-1 条结果留成孤儿（tool_call_id 指向已删除的 assistant），
+            # 下一次 API 调用报 "tool message must follow tool_calls"，会话永久损坏
+            # （系统提示鼓励并行 tool_call，必现）。正确语义：删该批全部 TOOL 结果
+            # + 发起它们的 assistant。
+            while True:
+                cur_tools = [
+                    i for i, m in enumerate(session.messages)
+                    if m.role == Role.TOOL
+                ]
+                if len(cur_tools) <= target_keep or not cur_tools:
+                    break
+                idx = cur_tools[0]
+                start = idx
+                if idx > 0 and session.messages[idx - 1].role == Role.ASSISTANT:
+                    start = idx - 1
+                end = idx
+                while end < len(session.messages) and session.messages[end].role == Role.TOOL:
+                    end += 1
+                removed.extend(session.messages[start:end])
+                del session.messages[start:end]
 
         # token 维度补充（2026-08-30）：工具输出总 token 超预算时，从最旧开始
         # 剪掉超大输出（单条搜索抓取全文可达数万字符）。预算 = max_tokens//2，
         # 单条 < 预算/20 的小输出不剪（保护前缀稳定以命中缓存）。
+        # ★ 2026-09-09：改为【原地瘦身】而非删除 —— 物理删除批中间的 TOOL 结果
+        # 同样会拆散 tool_call 配对（留下缺响应的 tool_calls → API 400）；
+        # 原地替换为占位符既省 token 又保配对完整。
         if self.max_tokens > 0:
             _tool_budget = max(2000, self.max_tokens // 2)
             while True:
@@ -185,15 +455,86 @@ class ContextManager:
                         break
                 if _cand is None:
                     break
-                if _cand > 0 and session.messages[_cand - 1].role == Role.ASSISTANT:
-                    removed.append(session.messages[_cand - 1])
-                    removed.append(session.messages[_cand])
-                    del session.messages[_cand - 1:_cand + 1]
-                else:
-                    removed.append(session.messages[_cand])
-                    del session.messages[_cand]
+                _orig = session.messages[_cand].content or ""
+                removed.append(session.messages[_cand])
+                session.messages[_cand].content = (
+                    f"[输出已瘦身：该工具输出原约 {estimate_tokens(_orig)} token，"
+                    "为控制上下文预算已移除，要点已并入运行笔记]"
+                )
 
         return removed
+
+    # ── Running Notes + 预算告警（2026-09-07）─────────────────────
+    # 剪枝是物理删除，模型会"忘记"早期工具发现的关键结论（长任务后半程
+    # 重复搜索/重做已完成的步骤）。剪枝时把被删工具输出的要点提炼进一条
+    # "运行笔记"消息（始终挂在消息列表末尾 = 纯追加，不破坏前缀缓存），
+    # 模型每轮都能看到全部历史要点，上下文却不膨胀。
+    _NOTES_TYPE = "running_notes"
+    _NOTES_MAX_ITEMS = 30      # 最多保留条目数
+    _NOTES_MAX_CHARS = 2400    # 整块字符上限
+    _NOTES_ITEM_CHARS = 160    # 单条要点截断长度
+
+    def update_running_notes(self, session: Session, removed: list[Message]) -> bool:
+        """把被剪枝工具输出的要点合并进"运行笔记"消息，并将该消息挂到末尾.
+
+        - 仅提炼 role==TOOL 的被删消息（配对的 assistant 是模型自己的话，无信息量）；
+        - 无可提炼内容且已存在笔记时，仍会把现有笔记挪到末尾（保证位置正确，
+          例如被压缩卷走后重建）；
+        - 笔记上限 _NOTES_MAX_ITEMS 条 / _NOTES_MAX_CHARS 字符，超出丢最旧。
+
+        Returns: 笔记是否发生变化。
+        """
+        notes_idx = next(
+            (
+                i
+                for i, m in enumerate(session.messages)
+                if m.metadata.get("type") == self._NOTES_TYPE
+            ),
+            None,
+        )
+        old_items: list[str] = []
+        if notes_idx is not None:
+            old_items = [
+                s
+                for s in (session.messages[notes_idx].content or "").splitlines()
+                if s.startswith("- ")
+            ]
+
+        new_items: list[str] = []
+        for m in removed or []:
+            if m.role != Role.TOOL:
+                continue
+            name = (m.metadata or {}).get("tool_name", "tool")
+            text = re.sub(r"\s+", " ", (m.content or "")).strip()
+            if not text:
+                continue
+            if len(text) > self._NOTES_ITEM_CHARS:
+                text = text[: self._NOTES_ITEM_CHARS] + "…"
+            new_items.append(f"- [{name}] {text}")
+
+        merged = old_items + [x for x in new_items if x not in old_items]
+        # 超限丢最旧（保尾部 = 最近发生的步骤）
+        merged = merged[-self._NOTES_MAX_ITEMS :]
+        total = sum(len(x) + 1 for x in merged)
+        while total > self._NOTES_MAX_CHARS and len(merged) > 1:
+            total -= len(merged[0]) + 1
+            merged.pop(0)
+
+        if not merged:
+            return False
+
+        content = "[运行笔记] 已归档步骤的关键结论（自动提炼，防剪枝失忆）:\n" + "\n".join(merged)
+        changed = notes_idx is None or session.messages[notes_idx].content != content
+        if notes_idx is not None:
+            del session.messages[notes_idx]
+        session.messages.append(
+            Message(
+                role=Role.SYSTEM,
+                content=content,
+                metadata={"type": self._NOTES_TYPE},
+            )
+        )
+        return changed
 
     def get_compression_range(
         self, session: Session, min_total: int | None = None
@@ -207,18 +548,31 @@ class ContextManager:
         通常到不了 80 条消息就早已远超 token 预算；若仍死守 80 条门槛，
         token 预算压缩形同虚设。默认仍为 ``compress_threshold``（按条数触发场景）。
         """
-        total = len(session.messages)
+        # ★ 2026-09-14（视图分离）：区间在「视图」上计算（视图 = 已应用摘要与
+        # 工具裁剪的有效消息）。返回的 [start, end) 为**视图下标**，调用方
+        # compress 亦在视图上取段，无需映射回真相下标。
+        msgs = self.build_llm_view(session, apply_tool_pruning=False)
+        total = len(msgs)
         if total < (min_total if min_total is not None else self.compress_threshold):
             return None
 
-        # 找到 system prompt 之后的第一条消息
+        # 找到【开头的】system 消息段之后的第一条消息。
+        # ★ 2026-09-09：原实现 break 在第一条 SYSTEM —— 但运行笔记是 SYSTEM 且
+        # 被挂在列表末尾，导致 start ≈ total，回合内压缩/里程碑压缩在有笔记后
+        # 永久 no-op（token 只涨不降）。改为只跳过【前导】SYSTEM 段。
         start = 0
-        for i, m in enumerate(session.messages):
+        for i, m in enumerate(msgs):
             if m.role == Role.SYSTEM:
                 start = i + 1
+            else:
                 break
 
         end = total - self.keep_recent
+        # ★ 2026-09-09：边界不得切开 tool_call 批次 —— end 处若是 TOOL 消息，
+        # 其发起的 assistant(tool_calls) 已在压缩区间内，保留它们会变成孤儿
+        # tool 结果（API 400）。把整批划入压缩区间。
+        while end < total and msgs[end].role == Role.TOOL:
+            end += 1
         if end <= start:
             return None
 
@@ -244,9 +598,8 @@ class ContextManager:
         """
         info = {"compressed": False, "removed": 0, "summary": "", "flushed": False}
 
-        # 先剪枝
-        pruned = self.prune_tool_outputs(session)
-        info["pruned_chars"] = pruned
+        # ★ 2026-09-14（视图分离）：不再在此剪枝真相 —— 工具裁剪已由
+        # build_llm_view 在视图层完成（真相保持完整）。
 
         # 触发压缩的最小消息数门槛：
         # - min_total 显式传入时以调用方为准（2026-09-06 里程碑压缩）；
@@ -268,7 +621,8 @@ class ContextManager:
             return info
 
         start, end = rng
-        old_messages = session.messages[start:end]
+        _view = self.build_llm_view(session, apply_tool_pruning=False)
+        old_messages = _view[start:end]
 
         # 压缩前记忆 flush（E4 闭环，2026-08-27）：先抽取将被替换的旧消息段，
         # 再把压缩摘要写入 —— 两路并行，保证关键信息不随压缩丢失。
@@ -276,8 +630,19 @@ class ContextManager:
             try:
                 flushed = await memory_flush.flush(session, messages=old_messages)
                 info["flushed"] = bool(flushed)
-            except Exception as _flush_exc:
+            except Exception:
                 info["flushed"] = False
+
+        # ★ 2026-09-15（用户方案）：把被压缩的**原文**分块归档到记忆库，
+        # 使其可被 memory_search（embedding 语义 + FTS 关键词）随时召回。
+        # 有了这个兜底，压缩才敢"压得狠"——细节不再是单向丢失。
+        if memory_flush is not None:
+            try:
+                info["archived"] = await self._archive_to_memory(
+                    getattr(memory_flush, "memory_store", None), session, old_messages
+                )
+            except Exception:  # noqa: BLE001
+                info["archived"] = 0
 
         if llm:
             # 用 LLM 生成摘要
@@ -286,17 +651,68 @@ class ContextManager:
             # 简单截断 — 提取关键信息
             summary = self._simple_summarize(old_messages)
 
-        # 替换旧消息为摘要
-        summary_msg = Message(
-            role=Role.SYSTEM,
-            content=f"[对话摘要] {summary}",
-            metadata={"type": "compression", "original_count": len(old_messages)},
-        )
-        session.messages = session.messages[:start] + [summary_msg] + session.messages[end:]
+        # ★ 2026-09-15：告知 agent「更早的原文可检索」，避免它凭摘要猜测或重复劳动
+        if info.get("archived"):
+            summary += (
+                "\n\n（提示：被压缩的这段对话**原文已归档**到长期记忆，"
+                "需要其中的具体细节时，请用 memory_search 工具检索召回，不要凭猜测复述。）"
+            )
+
+        # ★ 2026-09-14：原文快照 —— 摘要替换后原文此前**不可找回**，用户可见
+        # 历史中段"凭空消失"（反馈「对话历史经常丢数据」）。此处把被替换的原文
+        # 追加进 session.extra（有界保留），使「上下文用摘要省 token」与
+        # 「真相可追溯」并存；session 详情 API 会把它作为 compressed_history
+        # 返回，前端可展示"已摘要的 N 条原文"。归档表（messages_archive）同时
+        # 保留一份，互为兜底。
+        try:
+            _snap = session.extra.setdefault("compressed_history", [])
+            for _m in old_messages:
+                _snap.append({
+                    "role": getattr(getattr(_m, "role", None), "value", str(getattr(_m, "role", ""))),
+                    "content": _m.content or "",
+                    "timestamp": (
+                        _m.timestamp.isoformat()
+                        if hasattr(getattr(_m, "timestamp", None), "isoformat")
+                        else str(getattr(_m, "timestamp", ""))
+                    ),
+                })
+            _SNAP_MAX = 400
+            if len(_snap) > _SNAP_MAX:  # 有界：防 extra 无限膨胀
+                del _snap[: len(_snap) - _SNAP_MAX]
+        except Exception:  # noqa: BLE001 — 快照失败不影响压缩主流程
+            pass
+
+        # ★ 2026-09-14（P0 视图分离）：不再构造"压缩后的 messages"去覆盖真相。
+        # 摘要与锚点写入 session.extra['summaries']，由 build_llm_view 在构造
+        # API 消息时应用；session.messages 保持完整 → 用户可见历史不再"中段消失"。
+        _anchors = [list(self._anchor_of(m)) for m in old_messages]
+        try:
+            _sums = session.extra.setdefault("summaries", [])
+            _sums.append({
+                "anchors": _anchors,
+                "summary": summary,
+                # ★ 2026-09-15（分层记忆 · 情节层）：同时持久化结构化字段，
+                # 便于后续按字段检索/排序/复用（summary 文本只用于给模型阅读）。
+                "structured": getattr(self, "_last_episode", None),
+                "count": len(old_messages),
+                "created_at": datetime.now().isoformat(),
+            })
+            if len(_sums) > 20:  # 有界：单条摘要已覆盖一批消息，20 段足够长任务
+                del _sums[: len(_sums) - 20]
+        except Exception:  # noqa: BLE001 — 摘要写入失败不影响主流程
+            pass
+        # 旧的"压缩后补 user 防 API 400"逻辑已上移到 build_llm_view（视图内保证
+        # 至少一条 USER，等价语义）。
+
         session.lineage_id = f"{session.lineage_id}→compressed" if session.lineage_id else "compressed"
+        # ★ 2026-09-14：把被摘要替换掉的原文回传给调用方归档。此前压缩**不做归档**
+        # → 原文永久丢失：用户可见历史中段"凭空消失"，只剩 600 字摘要且不可恢复
+        # （用户反馈「对话历史经常丢数据」的直接根因之一）。归档需 session_store，
+        # ContextManager 不持有，故由调用方（Agent._context_govern）负责落归档表。
+        info["replaced_messages"] = old_messages
 
         info["compressed"] = True
-        info["removed"] = len(old_messages) - 1  # 替换 N 条为 1 条
+        info["removed"] = len(old_messages)  # 语义：本次移出视图的消息条数
         info["summary"] = summary
         return info
 
@@ -330,28 +746,111 @@ class ContextManager:
                 lines.append(f"- [来源·{name}] " + "; ".join(non_imgs[:3]))
         return "\n".join(lines)
 
+    async def _archive_to_memory(self, memory_store: Any, session: Any, messages: list) -> int:
+        """把被压缩的**原文**分块归档进记忆库，使其可被 embedding / FTS 检索召回.
+
+        ★ 2026-09-15（用户方案：低频压缩 + 每次压得狠 + 靠 embedding/grep 召回）：
+        现有 ``memory_flush`` 走的是 LLM **提炼**（要点/偏好），细节仍会随压缩丢失；
+        ``compressed_history`` 虽留了原文快照，却**没有索引、没有检索入口**，等于
+        压在库里取不出来。
+
+        这里把原文按约 800 字符分块写进 ``memories``（``category="session_history"``），
+        直接复用 ``MemoryStore.search`` 的 RRF 混合检索（向量语义 + FTS5/LIKE 关键词）
+        —— 也就是既支持 embedding 语义召回，也支持关键词精确召回。于是压缩可以
+        放心压狠，需要细节时让 agent 用 ``memory_search`` 随时取回，而不是靠摘要里
+        那几百字硬撑。
+
+        返回成功归档的块数（任何异常都只记 0，绝不影响压缩主流程）。
+        """
+        if memory_store is None or not messages:
+            return 0
+        try:
+            # ── 分块（保留角色前缀，便于召回后理解对话上下文）──
+            chunks: list[str] = []
+            cur: list[str] = []
+            size = 0
+            for m in messages:
+                role = getattr(getattr(m, "role", None), "value", None) or str(getattr(m, "role", ""))
+                line = f"{role}: {(getattr(m, 'content', '') or '')[:1200]}"
+                if size + len(line) > 800 and cur:
+                    chunks.append("\n".join(cur))
+                    cur, size = [], 0
+                cur.append(line)
+                size += len(line) + 1
+            if cur:
+                chunks.append("\n".join(cur))
+            if not chunks:
+                return 0
+
+            embedder = getattr(memory_store, "_embedding_provider", None)
+            sid = str(getattr(session, "id", "") or "")
+            n = 0
+            for i, ch in enumerate(chunks):
+                text = (
+                    f"[会话历史归档 {sid[:8]} 第 {i + 1}/{len(chunks)} 块，共 {len(messages)} 条消息]\n{ch}"
+                )
+                emb = None
+                if embedder is not None:
+                    try:
+                        _r = embedder.embed(ch)
+                        emb = await _r if hasattr(_r, "__await__") else _r
+                    except Exception:  # noqa: BLE001 — 无向量时退化为纯文本检索
+                        emb = None
+                try:
+                    mid = memory_store.add(
+                        text,
+                        category="session_history",
+                        importance=0.35,
+                        embedding=emb,
+                        source_session=sid,
+                        source_msg_count=len(messages),
+                    )
+                    if isinstance(mid, int) and mid > 0:
+                        n += 1
+                except Exception:  # noqa: BLE001
+                    continue
+            return n
+        except Exception:  # noqa: BLE001 — 归档失败绝不影响压缩
+            return 0
+
     async def _llm_summarize(self, messages: list[Message], llm) -> str:
-        """用 LLM 生成对话摘要."""
-        # 构建压缩 prompt
+        """用 LLM 生成**结构化**情节摘要，失败时回退自然语言 / 本地截断.
+
+        ★ 2026-09-15（分层记忆 · 情节层）：原实现只产出一段自然语言摘要，
+        细节不可检索、字段不可复用。现在要求模型输出结构化 JSON
+        （goal/constraints/decisions/actions/results/failures/open_loops/
+        user_preferences/important_quotes/next_steps/importance），
+        —— 这是"情节记忆"该有的形态：可检索、可排序、可复用。
+
+        返回渲染后的文本（供摘要锚点使用）；结构化 dict 暂存
+        ``self._last_episode``，由 ``compress`` 一并持久化（同一协程内读取，
+        不存在跨会话串扰）。解析失败则退回自然语言原文，绝不因格式问题
+        丢失压缩能力。
+        """
+        self._last_episode = None
         dialog = "\n".join(
-            f"{m.role.value}: {m.content[:500]}" for m in messages
+            f"{msg.role.value}: {(msg.content or '')[:500]}" for msg in messages
         )
         meta = self._extract_tool_meta(messages)
-        prompt = (
-            "请将以下对话历史压缩为简洁的摘要，保留关键信息（用户意图、"
-            "工具执行结果、重要结论）。用中文回答，不超过 500 字。\n\n"
-            f"对话历史:\n{dialog}"
-        )
+
+        prompt = _EPISODE_SUMMARY_PROMPT.format(dialog=dialog)
         if meta:
             prompt += (
                 "\n\n以下是从工具结果中提取的来源/图片链接清单，"
-                "压缩后的摘要中必须完整保留这些链接（逐条列出，不要省略、不要改写）：\n"
+                "压缩后的 results 中必须完整保留这些链接（逐条列出，不要省略、不要改写）：\n"
                 f"{meta}"
             )
+
         try:
             resp = await llm.complete([{"role": "user", "content": prompt}])
-            return resp.content
-        except Exception:
+            raw = (resp.content or "").strip()
+            structured = _parse_episode_json(raw)
+            if structured is not None:
+                self._last_episode = structured
+                return _render_episode(structured)
+            # 模型没按 JSON 输出 → 原样当摘要使用（不丢信息）
+            return raw or self._simple_summarize(messages)
+        except Exception:  # noqa: BLE001
             return self._simple_summarize(messages)
 
     def _simple_summarize(self, messages: list[Message]) -> str:

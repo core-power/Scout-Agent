@@ -8,7 +8,7 @@
 'use strict';
 
 const CACHE_NAME = 'scout-web-v1';
-const SHELL_CACHE = 'scout-shell-v1';
+const SHELL_CACHE = 'scout-shell-v6';
 
 const SHELL_ASSETS = [
   '/static/manifest.json',
