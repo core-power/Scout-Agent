@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模型监控 · Scout Agent</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="/static/vendor/tailwind.js"></script>
+    <script>
+    tailwind.config = {
+        darkMode: 'class',
+        theme: { extend: { colors: { scout: {
+            50:'#ecfeff',100:'#cffafe',200:'#a5f3fc',300:'#67e8f9',
+            400:'#22d3ee',500:'#06b6d4',600:'#0891b2',700:'#0e7490',800:'#155e75',900:'#164e63',
+        }}}}
+    }
+    </script>
+    <style>
+        * { -webkit-font-smoothing: antialiased; }
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        .bar-chart { display: flex; align-items: flex-end; gap: 2px; height: 120px; }
+        .bar { flex: 1; min-width: 4px; border-radius: 3px 3px 0 0; transition: height 0.3s; position: relative; }
+        .bar:hover { opacity: 0.8; }
+        .bar:hover .bar-tip { display: block; }
+        .bar-tip { display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #1e293b; color: #e2e8f0; padding: 4px 8px; border-radius: 4px; font-size: 11px; white-space: nowrap; z-index: 10; }
+    </style>
+    <script src="/static/i18n.js"></script>
+</head>
+<body class="h-screen overflow-y-auto bg-[#0a0a0a] text-slate-200">
+    <script>renderLangToggle();</script>
+
+<div class="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+    <!-- 顶栏 -->
+    <div class="flex items-center gap-3 mb-6">
+        <a href="/" class="p-2 -ml-2 rounded-lg hover:bg-white/5 text-slate-400 transition-colors">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+        </a>
+        <h1 class="text-xl font-bold text-white">模型监控</h1>
+        <div class="flex-1"></div>
+        <!-- 时间范围切换 -->
+        <div class="flex gap-1 bg-[#161616] rounded-lg p-1" id="period-tabs">
+            <button onclick="switchPeriod('day')" class="period-btn px-3 py-1.5 rounded-md text-xs font-medium transition-colors">今日</button>
+            <button onclick="switchPeriod('week')" class="period-btn px-3 py-1.5 rounded-md text-xs font-medium transition-colors">本周</button>
+            <button onclick="switchPeriod('month')" class="period-btn px-3 py-1.5 rounded-md text-xs font-medium transition-colors">本月</button>
+            <button onclick="switchPeriod('year')" class="period-btn px-3 py-1.5 rounded-md text-xs font-medium transition-colors">全年</button>
+        </div>
+    </div>
+
+    <!-- 概览卡片 -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6" id="overview-cards">
+        <div class="bg-[#111] border border-white/5 rounded-xl p-4">
+            <div class="text-xs text-slate-500 mb-1">总调用次数</div>
+            <div class="text-2xl font-bold text-white" id="stat-calls">—</div>
+        </div>
+        <div class="bg-[#111] border border-white/5 rounded-xl p-4">
+            <div class="text-xs text-slate-500 mb-1">总 Token 消耗</div>
+            <div class="text-2xl font-bold text-scout-400" id="stat-tokens">—</div>
+        </div>
+        <div class="bg-[#111] border border-white/5 rounded-xl p-4">
+            <div class="text-xs text-slate-500 mb-1">缓存命中</div>
+            <div class="text-2xl font-bold text-emerald-400" id="stat-cache">—</div>
+        </div>
+        <div class="bg-[#111] border border-white/5 rounded-xl p-4">
+            <div class="text-xs text-slate-500 mb-1">平均延迟</div>
+            <div class="text-2xl font-bold text-amber-400" id="stat-latency">—</div>
+        </div>
+    </div>
+
+    <!-- 每日趋势 -->
+    <div class="bg-[#111] border border-white/5 rounded-xl p-4 mb-6">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-slate-300">每日 Token 消耗趋势</h2>
+            <span class="text-xs text-slate-600">最近 30 天</span>
+        </div>
+        <div class="bar-chart" id="daily-chart">
+            <div class="text-slate-600 text-xs flex items-center justify-center w-full">加载中...</div>
+        </div>
+    </div>
+
+    <!-- 按模型统计 -->
+    <div class="bg-[#111] border border-white/5 rounded-xl p-4 mb-6">
+        <h2 class="text-sm font-semibold text-slate-300 mb-4">按模型统计</h2>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm" id="model-table">
+                <thead>
+                    <tr class="text-xs text-slate-500 border-b border-white/5">
+                        <th class="text-left py-2 pr-4">模型</th>
+                        <th class="text-right py-2 px-4">调用次数</th>
+                        <th class="text-right py-2 px-4">Prompt</th>
+                        <th class="text-right py-2 px-4">Completion</th>
+                        <th class="text-right py-2 px-4">总 Token</th>
+                        <th class="text-right py-2 px-4">缓存命中</th>
+                        <th class="text-right py-2 pl-4">平均延迟</th>
+                    </tr>
+                </thead>
+                <tbody id="model-tbody">
+                    <tr><td colspan="7" class="text-center text-slate-600 py-4">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 最近调用 -->
+    <div class="bg-[#111] border border-white/5 rounded-xl p-4 mb-6">
+        <h2 class="text-sm font-semibold text-slate-300 mb-4">最近调用记录</h2>
+        <div class="space-y-2" id="recent-list">
+            <div class="text-slate-600 text-xs text-center py-4">加载中...</div>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentPeriod = 'day';
+
+function formatNum(n) {
+    if (!n) return '0';
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return n.toString();
+}
+
+function formatMs(ms) {
+    if (!ms) return '—';
+    if (ms >= 1000) return (ms / 1000).toFixed(1) + 's';
+    return Math.round(ms) + 'ms';
+}
+
+function switchPeriod(period) {
+    currentPeriod = period;
+    document.querySelectorAll('.period-btn').forEach(btn => {
+        btn.classList.remove('bg-scout-500/20', 'text-scout-400');
+        btn.classList.add('text-slate-400');
+    });
+    const btn = document.querySelectorAll('.period-btn')[['day','week','month','year'].indexOf(period)];
+    btn.classList.add('bg-scout-500/20', 'text-scout-400');
+    btn.classList.remove('text-slate-400');
+    loadSummary();
+}
+
+async function loadSummary() {
+    try {
+        const r = await fetch(`/api/usage/summary?period=${currentPeriod}`);
+        const d = await r.json();
+        const t = d.total || {};
+        document.getElementById('stat-calls').textContent = formatNum(t.call_count || 0);
+        document.getElementById('stat-tokens').textContent = formatNum(t.total_tokens || 0);
+        const cacheRate = t.call_count > 0 ? ((t.cache_hits || 0) / t.call_count * 100).toFixed(0) + '%' : '0%';
+        document.getElementById('stat-cache').textContent = cacheRate;
+        document.getElementById('stat-latency').textContent = formatMs(t.avg_latency);
+
+        // 模型表格
+        const tbody = document.getElementById('model-tbody');
+        if (d.models && d.models.length > 0) {
+            tbody.innerHTML = d.models.map(m => `
+                <tr class="border-b border-white/5 hover:bg-white/[0.02]">
+                    <td class="py-2.5 pr-4 text-slate-300 font-mono text-xs">${m.model}</td>
+                    <td class="py-2.5 px-4 text-right text-slate-400">${formatNum(m.call_count)}</td>
+                    <td class="py-2.5 px-4 text-right text-slate-500">${formatNum(m.prompt_tokens)}</td>
+                    <td class="py-2.5 px-4 text-right text-slate-500">${formatNum(m.completion_tokens)}</td>
+                    <td class="py-2.5 px-4 text-right text-scout-400 font-medium">${formatNum(m.total_tokens)}</td>
+                    <td class="py-2.5 px-4 text-right text-emerald-400">${m.cache_hits || 0}</td>
+                    <td class="py-2.5 pl-4 text-right text-amber-400">${formatMs(m.avg_latency)}</td>
+                </tr>
+            `).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-600 py-4">暂无数据</td></tr>';
+        }
+    } catch(e) {
+        console.error('loadSummary error:', e);
+    }
+}
+
+async function loadDaily() {
+    try {
+        const r = await fetch('/api/usage/daily?days=30');
+        const d = await r.json();
+        const data = d.data || [];
+        const chart = document.getElementById('daily-chart');
+        if (data.length === 0) {
+            chart.innerHTML = '<div class="text-slate-600 text-xs flex items-center justify-center w-full">暂无数据</div>';
+            return;
+        }
+        const maxTokens = Math.max(...data.map(d => d.total_tokens || 0), 1);
+        chart.innerHTML = data.reverse().map(d => {
+            const h = Math.max((d.total_tokens / maxTokens * 100), 2);
+            const date = d.date.slice(5);
+            return `<div class="bar bg-scout-500/40" style="height:${h}%">
+                <div class="bar-tip">${date} · ${formatNum(d.total_tokens)} tokens · ${d.call_count}${__t('次')}</div>
+            </div>`;
+        }).join('');
+    } catch(e) {
+        console.error('loadDaily error:', e);
+    }
+}
+
+async function loadRecent() {
+    try {
+        const r = await fetch('/api/usage/recent?limit=15');
+        const d = await r.json();
+        const data = d.data || [];
+        const list = document.getElementById('recent-list');
+        if (data.length === 0) {
+            list.innerHTML = '<div class="text-slate-600 text-xs text-center py-4">暂无数据</div>';
+            return;
+        }
+        list.innerHTML = data.map(r => {
+            const time = r.timestamp ? r.timestamp.slice(11, 19) : '';
+            const cacheBadge = r.cache_hit ? '<span class="text-emerald-400 text-xs">⚡缓存</span>' : '';
+            return `
+                <div class="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-white/[0.02]">
+                    <span class="text-xs text-slate-600 font-mono w-16">${time}</span>
+                    <span class="text-xs text-slate-300 font-mono flex-1 truncate">${r.model}</span>
+                    <span class="text-xs text-slate-500">${formatNum(r.prompt_tokens)}→${formatNum(r.completion_tokens)}</span>
+                    <span class="text-xs text-scout-400 font-medium">${formatNum(r.total_tokens)}</span>
+                    <span class="text-xs text-amber-400">${formatMs(r.latency_ms)}</span>
+                    ${cacheBadge}
+                </div>`;
+        }).join('');
+    } catch(e) {
+        console.error('loadRecent error:', e);
+    }
+}
+
+// 启动
+switchPeriod('day');
+loadDaily();
+loadRecent();
+// 每 30 秒刷新
+setInterval(() => { loadSummary(); loadRecent(); }, 30000);
+</script>
+</body>
+</html>

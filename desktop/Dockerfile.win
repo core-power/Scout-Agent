@@ -1,0 +1,64 @@
+# Scout Agent Windows 交叉打包镜像
+# 在 Linux 上通过 Wine 运行 Windows Python 3.11 + PyInstaller 产出 Windows exe。
+# 构建:  docker build -f desktop/Dockerfile.win -t scout-win-builder .
+# 使用:  docker run --rm -v "$PWD:/src" -w /src scout-win-builder \
+#          wine /opt/py311/python.exe -m PyInstaller desktop\\scout_desktop.spec --noconfirm --clean
+#
+# 关键修复记录:
+#   1. ubuntu 22.04 自带 wine 6.0 的 kernel32 内部会调用 propsys.dll.VariantToString
+#      （该函数 wine 6.0 未实现），python.exe 一启动即 abort 进 winedbg 挂起。
+#      → 改用 ubuntu 24.04（noble）官方源的 wine 9.0，该函数已实现，无需 winehq 源。
+#   2. 不再运行 wineboot —— embeddable python 不依赖注册表初始化，跳过更稳。
+#   3. WINEDLLOVERRIDES="mscoree,mshtml=" 禁用 wine 自带 .NET/HTML 实现。
+#   4. 每个 wine 命令外层套 timeout，防止任何进程挂起拖死构建。
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    WINEPREFIX=/root/.wine \
+    WINEARCH=win64 \
+    WINEDEBUG=-all \
+    WINEDLLOVERRIDES="mscoree,mshtml=" \
+    PYEXE="wine /opt/py311/python.exe"
+
+# ── wine 9.0+（winehq 官方源） ──
+# ubuntu 24.04 官方源的 wine 9.0~repack 缺 ucrtbase.dll.crealf 等函数，
+# PyInstaller isolated 子进程 / numpy / onnxruntime 加载即崩。
+# winehq 源提供最新 winehq-stable，已实现这些 C99 复数函数。
+RUN dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates gnupg wget unzip xvfb xauth \
+    && mkdir -pm755 /etc/apt/keyrings \
+    && wget --no-check-certificate -qO- https://dl.winehq.org/wine-builds/winehq.key | gpg --dearmor --yes -o /etc/apt/keyrings/winehq-archive.key \
+    && wget --no-check-certificate -qO /etc/apt/sources.list.d/winehq-noble.sources https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources \
+    && apt-get update \
+    && apt-get install -y --install-recommends winehq-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Windows Python 3.11.9 embeddable（64 位） ──
+# 不用 3.12：其 shutil.copyfile 调用 KERNEL32.dll.CopyFile2，Ubuntu 24.04 的
+# wine 9.0 未实现该函数，pip 安装时会 crash。3.11 用 CopyFileW，规避此问题。
+RUN wget --no-check-certificate -q https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip -O /tmp/py.zip \
+    && mkdir -p /opt/py311 \
+    && unzip -q /tmp/py.zip -d /opt/py311 \
+    && rm /tmp/py.zip \
+    && sed -i 's/^#import site/import site/' /opt/py311/python311._pth \
+    && wget --no-check-certificate -q https://bootstrap.pypa.io/get-pip.py -O /tmp/get-pip.py
+
+# ── pip 安装（无头环境用 xvfb；跳过 wineboot，见文件头说明） ──
+COPY desktop/requirements-desktop.txt /tmp/requirements-desktop.txt
+# embeddable python 不自带 setuptools（新版 get-pip 只装 pip），
+# 缺它装 sdist 依赖会报 "Cannot import 'setuptools.build_meta'"，先补上。
+RUN xvfb-run -a bash -c "\
+    timeout 600 wine /opt/py311/python.exe /tmp/get-pip.py -q && \
+    timeout 600 wine /opt/py311/python.exe -m pip install -q --no-warn-script-location setuptools wheel && \
+    timeout 1800 wine /opt/py311/python.exe -m pip install -q --no-warn-script-location \
+        -r /tmp/requirements-desktop.txt \
+        pyinstaller pywebview \
+    " \
+    && rm /tmp/get-pip.py /tmp/requirements-desktop.txt
+
+# ── 冒烟验证：Windows Python 可导入关键依赖（含 numpy/onnxruntime 复数函数） ──
+RUN xvfb-run -a timeout 600 wine /opt/py311/python.exe -c "import math, numpy, onnxruntime, fastapi, uvicorn, dotenv, click, croniter; print('wine-python OK')"
+
+WORKDIR /src

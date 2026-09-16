@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 插件生成器 - Scout</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 24px 32px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            color: #2d3748;
+            margin-bottom: 8px;
+        }
+        
+        .back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 14px;
+            padding: 8px 16px;
+            background: #f7fafc;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            color: #4a5568;
+            font-size: 14px;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+        
+        .back-btn:hover {
+            background: #edf2f7;
+            border-color: #cbd5e0;
+            color: #2d3748;
+        }
+        
+        .header p {
+            color: #718096;
+            font-size: 15px;
+        }
+        
+        .main-card {
+            background: white;
+            border-radius: 12px;
+            padding: 32px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 24px;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .requirement-input {
+            width: 100%;
+            min-height: 120px;
+            padding: 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 15px;
+            font-family: inherit;
+            resize: vertical;
+            transition: border-color 0.2s;
+        }
+        
+        .requirement-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .example-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 16px;
+        }
+        
+        .example-btn {
+            padding: 10px 16px;
+            background: #f7fafc;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #4a5568;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .example-btn:hover {
+            background: #edf2f7;
+            border-color: #cbd5e0;
+        }
+        
+        .generate-btn {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .generate-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .generate-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+        }
+        
+        .loading.active {
+            display: block;
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #f3f4f6;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .code-section {
+            display: none;
+        }
+        
+        .code-section.active {
+            display: block;
+        }
+        
+        .plugin-name-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 15px;
+            margin-bottom: 16px;
+        }
+        
+        .plugin-name-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .code-editor {
+            width: 100%;
+            min-height: 400px;
+            padding: 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            background: #f7fafc;
+            resize: vertical;
+        }
+        
+        .code-editor:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        
+        .btn {
+            flex: 1;
+            padding: 14px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: #48bb78;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #38a169;
+        }
+        
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #4a5568;
+        }
+        
+        .btn-secondary:hover {
+            background: #cbd5e0;
+        }
+        
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 16px 24px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            z-index: 10000;
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        .toast.success {
+            background: #48bb78;
+        }
+        
+        .toast.error {
+            background: #f56565;
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        .info-box {
+            background: #f7fafc;
+            border-left: 4px solid #667eea;
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        
+        .info-box h3 {
+            color: #2d3748;
+            margin-bottom: 8px;
+            font-size: 15px;
+        }
+        
+        .info-box p {
+            color: #718096;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+    </style>
+    <script src="/static/i18n.js"></script>
+</head>
+<body>
+    <script>renderLangToggle();</script>
+    <div class="container">
+        <div class="header">
+            <a href="/plugins" class="back-btn" data-i18n="← 返回插件管理">← 返回插件管理</a>
+            <h1>🤖 AI 插件生成器</h1>
+            <p>描述你想要的插件功能，AI 会自动生成完整的插件代码</p>
+        </div>
+        
+        <div class="main-card">
+            <div class="section-title">
+                📝 描述插件功能
+            </div>
+            
+            <textarea 
+                id="requirementInput" 
+                class="requirement-input"
+                placeholder="例如：创建一个插件，当用户说“帮助”时显示帮助信息" data-i18n-placeholder="例如：创建一个插件，当用户说“帮助”时显示帮助信息"
+            ></textarea>
+            
+            <div class="example-buttons">
+                <button class="example-btn" onclick="setExample('创建一个插件，当用户说帮助时显示帮助信息')">
+                    💬 帮助信息
+                </button>
+                <button class="example-btn" onclick="setExample('创建一个插件，过滤所有包含广告的消息')">
+                    🚫 广告过滤
+                </button>
+                <button class="example-btn" onclick="setExample('创建一个插件，当用户问好时根据时间段回复不同的问候语')">
+                    👋 智能问候
+                </button>
+                <button class="example-btn" onclick="setExample('创建一个插件，当用户询问日期时显示当前日期')">
+                    📅 日期查询
+                </button>
+                <button class="example-btn" onclick="setExample('创建一个插件，记录所有工具调用到日志文件')">
+                    📊 工具监控
+                </button>
+            </div>
+            
+            <button id="generateBtn" class="generate-btn" onclick="generatePlugin()">
+                ✨ 生成插件代码
+            </button>
+            
+            <div class="search-skills-box" id="searchSkillsBox" style="margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.08);">
+                <button id="searchSkillsBtn" class="generate-btn" style="background:linear-gradient(135deg,#38bdf8,#6366f1);" onclick="searchWebSkills()">
+                    🔍 先搜全网现成 Skill/插件
+                </button>
+                <div id="searchLoading" style="display:none; color:#718096; font-size:13px; margin-top:10px;">
+                    ⏳ 正在搜索 agentskills.io / GitHub / awesome 仓库...
+                </div>
+                <div id="searchResults" style="margin-top:12px; display:none;">
+                    <div style="font-size:14px; font-weight:600; color:#a0aec0; margin-bottom:10px;">
+                        📦 全网找到 <span id="searchCount">0</span> 个可复用方案
+                    </div>
+                    <div id="searchResultList" style="display:flex; flex-direction:column; gap:8px;"></div>
+                    <p style="font-size:12px; color:#718096; margin-top:8px;">
+                        💡 找到现成方案可以直接用 Git Clone 安装，或不满意再点「✨ 生成插件代码」
+                    </p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-card loading" id="loadingSection">
+            <div class="spinner"></div>
+            <p style="color: #718096;">AI 正在生成插件代码，请稍候...</p>
+        </div>
+        
+        <div class="main-card code-section" id="codeSection">
+            <div class="section-title">
+                🔧 插件代码
+            </div>
+            
+            <input 
+                type="text" 
+                id="pluginName" 
+                class="plugin-name-input"
+                placeholder="插件名称（小写字母和下划线，如：my_plugin）" data-i18n-placeholder="插件名称（小写字母和下划线，如：my_plugin）"
+            >
+            
+            <textarea 
+                id="codeEditor" 
+                class="code-editor"
+                placeholder="生成的代码将显示在这里..." data-i18n-placeholder="生成的代码将显示在这里..."
+            ></textarea>
+            
+            <div class="action-buttons">
+                <button class="btn btn-secondary" onclick="resetForm()">
+                    🔄 重新生成
+                </button>
+                <button class="btn btn-primary" onclick="savePlugin()">
+                    💾 保存插件
+                </button>
+            </div>
+            
+            <div class="info-box">
+                <h3>💡 提示</h3>
+                <p>
+                    1. 可以编辑生成的代码进行自定义调整<br>
+                    2. 插件名称只能包含小写字母、数字和下划线<br>
+                    3. 保存后的插件会自动启用，可在插件管理页面查看
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ── 认证 API 封装（安全修复 2026-08-20）──
+        const AUTH_TOKEN_KEY = 'scout_auth_token';
+        async function apiFetch(path, options) {
+            options = options || {};
+            options.headers = options.headers || {};
+            const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+            if (token) options.headers['Authorization'] = 'Bearer ' + token;
+            const response = await fetch(path, options);
+            if (response.status === 401) {
+                // 写码/敏感操作：401 表示密码二次验证失败，提示用户重试，不跳转
+                if (path.includes('/create') || path.includes('/save') ||
+                    path.includes('/delete') || path.includes('/config') ||
+                    path.includes('/toggle') || path.includes('/reload')) {
+                    const data = await response.json().catch(() => null);
+                    const detail = (data && (data.detail || data.error)) || '密码验证失败';
+                    throw new Error(detail);
+                }
+                location.href = '/chat';  // 首页会引导重新登录
+                throw new Error('登录已过期，请重新登录');
+            }
+            return response;
+        }
+
+        function setExample(text) {
+            document.getElementById('requirementInput').value = text;
+        }
+        
+        // ── 搜索全网现成 Skill/插件 ──
+        async function searchWebSkills() {
+            const requirement = document.getElementById('requirementInput').value.trim();
+            if (!requirement) {
+                showToast('先输入功能描述，再搜索现成方案', 'error');
+                return;
+            }
+            
+            const btn = document.getElementById('searchSkillsBtn');
+            const loading = document.getElementById('searchLoading');
+            const results = document.getElementById('searchResults');
+            const list = document.getElementById('searchResultList');
+            
+            btn.disabled = true;
+            btn.textContent = '⏳ 搜索中...';
+            loading.style.display = 'block';
+            results.style.display = 'none';
+            
+            try {
+                const resp = await fetch('/api/skills/search-web', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: requirement, top_k: 8 })
+                });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.error || '搜索失败');
+                }
+                const data = await resp.json();
+                const items = data.results || [];
+                
+                document.getElementById('searchCount').textContent = items.length;
+                list.innerHTML = '';
+                
+                if (items.length === 0) {
+                    list.innerHTML = '<div style="color:#718096;font-size:13px;padding:10px;background:rgba(255,255,255,0.04);border-radius:8px;">没有找到现成方案，直接生成吧 ✨</div>';
+                } else {
+                    items.forEach(item => {
+                        list.appendChild(buildResultCard(item));
+                    });
+                }
+
+                results.style.display = 'block';
+            } catch(e) {
+                showToast('搜索失败: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔍 先搜全网现成 Skill/插件';
+                loading.style.display = 'none';
+            }
+        }
+
+        
+
+        // 构建单个搜索结果卡片（避免复杂嵌套模板，用 DOM API 更稳）
+        function buildResultCard(item) {
+            const div = document.createElement('div');
+            div.style.cssText = 'background:rgba(255,255,255,0.05);border-radius:8px;padding:10px;font-size:13px;';
+            
+            const head = document.createElement('div');
+            head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;';
+            const title = document.createElement('span');
+            title.style.cssText = 'color:#e2e8f0;font-weight:500;flex:1;';
+            title.textContent = item.title || '';
+            const badge = document.createElement('span');
+            badge.style.cssText = 'color:#38bdf8;font-size:11px;white-space:nowrap;';
+            badge.textContent = item.source === 'github' ? '🐙 GitHub' : item.source === 'agentskills' ? '🧩 agentskills' : '🌐 网页';
+            head.appendChild(title);
+            head.appendChild(badge);
+            div.appendChild(head);
+            
+            if (item.snippet) {
+                const sn = document.createElement('div');
+                sn.style.cssText = 'color:#718096;font-size:12px;margin-top:4px;';
+                sn.textContent = item.snippet;
+                div.appendChild(sn);
+            }
+            
+            const actions = document.createElement('div');
+            actions.style.cssText = 'display:flex;gap:8px;margin-top:8px;align-items:center;';
+            const link = document.createElement('a');
+            link.href = item.url || '#';
+            link.target = '_blank';
+            link.style.cssText = 'color:#6366f1;font-size:12px;text-decoration:none;';
+            link.textContent = '🔗 查看仓库';
+            actions.appendChild(link);
+            if (item.source === 'github' && item.url && !/\/blob\/|\/tree\/|\/raw\/|\/issues\/|\/pull\//.test(item.url)) {
+                // 仅"仓库根地址"才显示一键安装（文件页/子页面不是可克隆仓库，避免误点报错）
+                const repoPath = String(item.url || '').replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, '');
+                // 一键安装按钮
+                const installBtn = document.createElement('button');
+                installBtn.style.cssText = 'background:linear-gradient(135deg,#38bdf8,#6366f1);border:none;color:#fff;font-size:12px;border-radius:6px;padding:3px 10px;cursor:pointer;font-weight:500;';
+                installBtn.textContent = '📦 一键安装';
+                installBtn.onclick = async function() {
+                    installBtn.disabled = true;
+                    installBtn.textContent = '⏳ 安装中...';
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), 45000); // 45s 超时
+                    try {
+                        const resp = await fetch('/api/skills/install-from-url', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: item.url }),
+                            signal: controller.signal
+                        });
+                        clearTimeout(timer);
+                        let data = {};
+                        try { data = await resp.json(); } catch(e) {}
+                        if (!resp.ok) throw new Error(data.error || ('安装失败 (HTTP ' + resp.status + ')'));
+                        showToast(data.message || '安装成功！', 'success');
+                        installBtn.textContent = '✅ 已安装';
+                        installBtn.disabled = true;
+                    } catch(e) {
+                        clearTimeout(timer);
+                        const msg = e.name === 'AbortError' ? '安装超时（仓库可能过大或网络慢）' : e.message;
+                        showToast('安装失败: ' + msg, 'error');
+                        installBtn.textContent = '📦 一键安装';
+                        installBtn.disabled = false;
+                    }
+                };
+                actions.appendChild(installBtn);
+                // 复制命令按钮（次要）
+                const copyBtn = document.createElement('button');
+                copyBtn.style.cssText = 'background:none;border:1px solid rgba(99,102,241,0.3);color:#818cf8;font-size:12px;border-radius:6px;padding:2px 8px;cursor:pointer;';
+                copyBtn.textContent = '📋 复制命令';
+                copyBtn.onclick = function() { copyCloneCmd(repoPath); };
+                actions.appendChild(copyBtn);
+            }
+            div.appendChild(actions);
+            return div;
+        }
+
+        function copyCloneCmd(repoPath) {
+            const cmd = 'git clone https://github.com/' + repoPath + ' ~/.scout/skills/';
+            navigator.clipboard.writeText(cmd).then(() => {
+                showToast('已复制: ' + cmd, 'success');
+            }).catch(() => {
+                showToast(cmd, 'success');
+            });
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text || '';
+            return div.innerHTML;
+        }
+        
+        async function generatePlugin() {
+            const requirement = document.getElementById('requirementInput').value.trim();
+            if (!requirement) {
+                showToast('请输入插件功能描述', 'error');
+                return;
+            }
+            
+            const generateBtn = document.getElementById('generateBtn');
+            const loadingSection = document.getElementById('loadingSection');
+            const codeSection = document.getElementById('codeSection');
+            
+            // 显示加载状态
+            generateBtn.disabled = true;
+            generateBtn.textContent = '⏳ 生成中...';
+            loadingSection.classList.add('active');
+            codeSection.classList.remove('active');
+            
+            try {
+                const response = await apiFetch('/api/plugins/ai-generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ requirement })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || '生成失败');
+                }
+                
+                const result = await response.json();
+                
+                // 显示生成的代码
+                document.getElementById('pluginName').value = result.plugin_name;
+                document.getElementById('codeEditor').value = result.code;
+                
+                // 显示代码区域
+                loadingSection.classList.remove('active');
+                codeSection.classList.add('active');
+                
+                showToast('插件代码生成成功！', 'success');
+                
+            } catch (error) {
+                showToast('生成失败：' + error.message, 'error');
+                loadingSection.classList.remove('active');
+            } finally {
+                generateBtn.disabled = false;
+                generateBtn.textContent = '✨ 生成插件代码';
+            }
+        }
+        
+        async function savePlugin() {
+            const name = document.getElementById('pluginName').value.trim();
+            const code = document.getElementById('codeEditor').value.trim();
+            
+            if (!name) {
+                showToast('请输入插件名称', 'error');
+                return;
+            }
+            
+            if (!code) {
+                showToast('插件代码不能为空', 'error');
+                return;
+            }
+            
+            // 验证插件名称格式
+            if (!/^[a-z][a-z0-9_]*$/.test(name)) {
+                showToast('插件名称只能包含小写字母、数字和下划线，且必须以字母开头', 'error');
+                return;
+            }
+            
+            // 密码二次确认：已设置凭证（localStorage 有 token）时必须输入登录密码
+            const authToken = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+            const needPassword = !!authToken;
+            let password = '';
+            const MAX_PASSWORD_ATTEMPTS = 3;
+            for (let attempt = 0; attempt < MAX_PASSWORD_ATTEMPTS; attempt++) {
+                if (needPassword) {
+                    password = window.prompt(__t('请输入登录密码以确认插件创建（写码操作需二次验证）'), '') || '';
+                    if (!password) {
+                        showToast('已取消：插件创建需要密码确认', 'error');
+                        return;
+                    }
+                }
+                try {
+                    const response = await apiFetch('/api/plugins/create', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            name,
+                            code,
+                            description: 'AI 生成的插件',
+                            password
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({}));
+                        throw new Error(error.detail || error.error || '保存失败');
+                    }
+                    
+                    showToast('插件保存成功！', 'success');
+                    
+                    // 延迟后跳转到插件管理页面
+                    setTimeout(() => {
+                        window.location.href = '/plugins';
+                    }, 1500);
+                    return;
+                    
+                } catch (error) {
+                    // 密码二次验证失败 → 重新输入密码
+                    if (needPassword && /密码/.test(String(error.message))) {
+                        showToast('密码验证失败，请重试', 'error');
+                        continue;
+                    }
+                    showToast('保存失败：' + error.message, 'error');
+                    return;
+                }
+            }
+            showToast('密码验证失败次数过多，请稍后再试', 'error');
+        }
+        
+        function resetForm() {
+            document.getElementById('requirementInput').value = '';
+            document.getElementById('codeSection').classList.remove('active');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        
+        function showToast(message, type = 'success') {
+            message = __tpl(message);
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.animation = 'slideIn 0.3s ease-out reverse';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>事件总线 · Scout Agent</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="/static/vendor/tailwind.js"></script>
+    <script>
+    tailwind.config = {
+        darkMode: 'class',
+        theme: { extend: { colors: { scout: {
+            50:'#ecfeff',100:'#cffafe',200:'#a5f3fc',300:'#67e8f9',
+            400:'#22d3ee',500:'#06b6d4',600:'#0891b2',700:'#0e7490',800:'#155e75',900:'#164e63',
+        }}}}
+    }
+    </script>
+    <style>
+        * { -webkit-font-smoothing: antialiased; }
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        .card { background: #0d0d0d; border: 1px solid rgba(255,255,255,0.08); border-radius: 0.75rem; }
+        .badge { padding: 2px 8px; border-radius: 9999px; font-size: 0.7rem; }
+        .ev-type { font-family: ui-monospace, monospace; }
+        .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: 8px; font-size: 0.8rem; color: #fff; z-index: 100; opacity: 0; transition: opacity .3s; pointer-events: none; }
+        .toast.show { opacity: 1; }
+        pre.detail { white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
+    </style>
+    <script src="/static/i18n.js"></script>
+</head>
+<body class="h-screen overflow-hidden bg-[#0a0a0a] text-slate-200 flex flex-col">
+    <script>renderLangToggle();</script>
+
+<!-- 顶栏 -->
+<div class="flex items-center gap-3 px-4 py-3 border-b border-white/5 flex-shrink-0">
+    <a href="/" class="p-2 -ml-2 rounded-lg hover:bg-white/5 text-slate-400 transition-colors">
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+    </a>
+    <h1 class="text-lg font-bold text-white">📡 事件总线</h1>
+    <span class="text-xs text-slate-500">EventBus · 模块间松耦合通信</span>
+    <div class="flex-1"></div>
+    <span id="dlq-badge" class="badge bg-white/5 text-slate-400 hidden">DLQ: 0</span>
+    <button onclick="loadAll()" class="btn-ghost text-xs">刷新</button>
+</div>
+
+<div class="flex-1 flex overflow-hidden">
+    <!-- 左栏：事件流 -->
+    <div class="flex-1 flex flex-col overflow-hidden border-r border-white/5">
+        <div class="px-4 py-2.5 border-b border-white/5 flex items-center gap-2 flex-shrink-0">
+            <span class="text-sm text-slate-300 font-medium">事件流</span>
+            <select id="ev-filter" class="bg-[#1a1a1a] border border-white/10 rounded px-2 py-1 text-xs text-slate-300" onchange="loadEvents()">
+                <option value="">全部事件</option>
+                <option value="notification">notification</option>
+                <option value="task.complete">task.complete</option>
+                <option value="fs.event">fs.event</option>
+            </select>
+            <div class="flex-1"></div>
+            <span class="text-xs text-slate-600">最多保留 100 条</span>
+        </div>
+        <div id="event-stream" class="flex-1 overflow-y-auto p-4 space-y-2"></div>
+    </div>
+
+    <!-- 右栏：死信队列 -->
+    <div class="w-[420px] flex-shrink-0 flex flex-col overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-white/5 flex items-center gap-2 flex-shrink-0">
+            <span class="text-sm text-slate-300 font-medium">💀 死信队列 (DLQ)</span>
+            <span class="text-xs text-slate-600">事件处理失败的记录</span>
+            <div class="flex-1"></div>
+            <button onclick="clearDlq()" class="text-xs text-slate-500 hover:text-red-400">清空</button>
+        </div>
+        <div id="dlq-list" class="flex-1 overflow-y-auto p-4 space-y-2"></div>
+    </div>
+</div>
+
+<div id="toast" class="toast bg-slate-800"></div>
+
+<script>
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function toast(msg) {
+    msg = __tpl(msg);
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 2200);
+}
+function fmtTime(iso) {
+    if (!iso) return '';
+    try {
+        const t = new Date(iso);
+        return t.toLocaleTimeString('zh-CN', {hour12:false});
+    } catch(e) { return iso; }
+}
+function typeColor(type) {
+    if (type.includes('notification')) return '#22d3ee';
+    if (type.includes('task.complete')) return '#10b981';
+    if (type.includes('fs.event')) return '#f59e0b';
+    return '#64748b';
+}
+
+// ── 事件流 ──
+async function loadEvents() {
+    const filter = document.getElementById('ev-filter').value;
+    const el = document.getElementById('event-stream');
+    try {
+        const r = await fetch('/api/events?limit=100');
+        const { events } = await r.json();
+        let list = events || [];
+        if (filter) list = list.filter(e => e.type === filter);
+        if (list.length === 0) {
+            el.innerHTML = '<div class="text-center text-slate-600 text-sm py-20">暂无事件</div>';
+            return;
+        }
+        el.innerHTML = list.map(e => {
+            const d = e.data || {};
+            const color = typeColor(e.type);
+            const title = d.title || d.name || (d.event_type ? `${d.event_type} ${d.relative||d.path||''}` : '');
+            const detail = JSON.stringify(d, null, 1);
+            return `
+            <div class="card p-3 space-y-1">
+                <div class="flex items-center gap-2">
+                    <span class="ev-type text-xs font-medium" style="color:${color}">${esc(e.type)}</span>
+                    <span class="text-xs text-slate-500">${fmtTime(e.timestamp)}</span>
+                    ${d.status ? `<span class="text-xs text-slate-500">${esc(d.status)}</span>` : ''}
+                </div>
+                ${title ? `<div class="text-xs text-slate-300 truncate">${esc(String(title).slice(0, 60))}</div>` : ''}
+                <details>
+                    <summary class="text-xs text-slate-500 cursor-pointer hover:text-slate-300">载荷</summary>
+                    <pre class="detail text-xs bg-black/30 rounded p-2 mt-1 text-slate-400">${esc(detail)}</pre>
+                </details>
+            </div>`;
+        }).join('');
+    } catch(e) {
+        el.innerHTML = '<div class="text-center text-red-400 text-sm py-20">加载失败: ' + e.message + '</div>';
+    }
+}
+
+// ── DLQ ──
+async function loadDlq() {
+    const el = document.getElementById('dlq-list');
+    try {
+        const r = await fetch('/api/events/dlq?limit=50');
+        const { dlq, size } = await r.json();
+        const badge = document.getElementById('dlq-badge');
+        badge.classList.toggle('hidden', !size);
+        badge.textContent = `DLQ: ${size || 0}`;
+        badge.className = 'badge ' + (size ? 'bg-red-500/10 text-red-400' : 'bg-white/5 text-slate-400 hidden');
+        if (!dlq || dlq.length === 0) {
+            el.innerHTML = '<div class="text-center text-slate-600 text-sm py-20">无死信记录</div>';
+            return;
+        }
+        el.innerHTML = dlq.map((d, i) => `
+            <div class="card p-3 border-red-500/20">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="text-xs text-red-400 font-medium">${esc(d.error_type || 'Error')}</span>
+                    <span class="text-xs text-slate-500">${fmtTime(d.timestamp)}</span>
+                </div>
+                <div class="text-xs text-slate-400 mb-1 truncate">handler: <span class="ev-type">${esc(d.handler)}</span></div>
+                <div class="text-xs text-red-300/80 truncate">${esc(d.error || '')}</div>
+                <details class="mt-1">
+                    <summary class="text-xs text-slate-500 cursor-pointer hover:text-slate-300">事件载荷</summary>
+                    <pre class="detail text-xs bg-black/30 rounded p-2 mt-1 text-slate-500">${esc(JSON.stringify(d.event, null, 1))}</pre>
+                </details>
+            </div>`).join('');
+    } catch(e) {
+        el.innerHTML = '<div class="text-center text-red-400 text-sm py-20">加载失败: ' + e.message + '</div>';
+    }
+}
+
+async function clearDlq() {
+    if (!confirm(__t('确认清空死信队列？'))) return;
+    try {
+        const r = await fetch('/api/events/dlq', { method: 'DELETE' });
+        const d = await r.json();
+        toast(__tpl(`已清空 ${d.cleared || 0} 条`));
+        loadDlq();
+    } catch(e) { toast('清空失败'); }
+}
+
+function loadAll() {
+    loadEvents();
+    loadDlq();
+}
+
+// 自动刷新事件流
+setInterval(() => { loadEvents(); loadDlq(); }, 5000);
+loadAll();
+</script>
+</body>
+</html>

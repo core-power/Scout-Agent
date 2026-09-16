@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>运行观测 · Scout Agent</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="/static/vendor/tailwind.js"></script>
+    <script>
+    tailwind.config = {
+        darkMode: 'class',
+        theme: { extend: { colors: { scout: {
+            50:'#ecfeff',100:'#cffafe',200:'#a5f3fc',300:'#67e8f9',
+            400:'#22d3ee',500:'#06b6d4',600:'#0891b2',700:'#0e7490',800:'#155e75',900:'#164e63',
+        }}}
+    }
+    }
+    </script>
+    <style>
+        * { -webkit-font-smoothing: antialiased; }
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        .span-bar { position: absolute; top: 6px; height: 14px; border-radius: 3px; min-width: 3px; cursor: pointer; opacity: 0.85; transition: opacity .15s; }
+        .span-bar:hover { opacity: 1; }
+        .span-type-llm { background: #06b6d4; }
+        .span-type-tool { background: #3b82f6; }
+        .span-type-tool-error { background: #ef4444; }
+        .span-type-reflection { background: #f59e0b; }
+        .span-type-conversation { background: #64748b; }
+        .span-type-goal { background: #a855f7; }
+        .span-type-heal { background: #10b981; }
+        .trace-card { transition: border-color .15s; }
+        .trace-card:hover { border-color: rgba(6,182,212,0.4); }
+        pre.detail-box { white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow-y: auto; }
+    </style>
+    <script src="/static/i18n.js"></script>
+</head>
+<body class="h-screen overflow-hidden bg-[#0a0a0a] text-slate-200 flex flex-col">
+    <script>renderLangToggle();</script>
+
+<!-- 顶栏 -->
+<div class="flex items-center gap-3 px-4 py-3 border-b border-white/5 flex-shrink-0">
+    <a href="/" class="p-2 -ml-2 rounded-lg hover:bg-white/5 text-slate-400 transition-colors">
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+    </a>
+    <h1 class="text-lg font-bold text-white">运行观测时间线</h1>
+    <div id="stats-cards" class="flex-1 flex items-center gap-2 justify-end text-xs text-slate-500"></div>
+    <button onclick="loadAll()" class="px-3 py-1.5 rounded-lg text-xs bg-white/5 hover:bg-white/10 text-slate-300 transition-colors">刷新</button>
+</div>
+
+<div class="flex-1 flex overflow-hidden">
+    <!-- 左栏：会话列表 -->
+    <div class="w-80 flex-shrink-0 border-r border-white/5 overflow-y-auto">
+        <div class="px-3 py-2 text-xs text-slate-500 border-b border-white/5 sticky top-0 bg-[#0a0a0a] z-10">最近会话（按 trace 聚合）</div>
+        <div id="session-list"></div>
+    </div>
+
+    <!-- 右栏：时间线 -->
+    <div class="flex-1 overflow-y-auto p-4" id="timeline-pane">
+        <div class="text-center text-slate-600 text-sm py-20">← 选择一个会话查看执行时间线</div>
+    </div>
+</div>
+
+<script>
+const TYPE_META = {
+    llm: { label: 'LLM', cls: 'span-type-llm', icon: '🧠' },
+    tool: { label: '工具', cls: 'span-type-tool', icon: '🔧' },
+    reflection: { label: '反思', cls: 'span-type-reflection', icon: '💭' },
+    conversation: { label: '对话', cls: 'span-type-conversation', icon: '💬' },
+    goal: { label: '目标', cls: 'span-type-goal', icon: '🎯' },
+};
+
+function fmtMs(ms) {
+    if (ms == null) return '-';
+    if (ms < 1000) return ms + 'ms';
+    if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+    return (ms / 60000).toFixed(1) + 'min';
+}
+function fmtTime(iso) {
+    if (!iso) return '';
+    return iso.slice(11, 19);
+}
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function typeMeta(span) {
+    if (span.type === 'tool' && span.status === 'error') return { label: '工具✗', cls: 'span-type-tool-error', icon: '❌' };
+    // 自愈尝试的 span（metadata 标记）
+    if (span.metadata && span.metadata.heal) return { label: '自愈', cls: 'span-type-heal', icon: '🩹' };
+    return TYPE_META[span.type] || { label: span.type, cls: 'span-type-conversation', icon: '·' };
+}
+
+async function loadAll() {
+    loadStats();
+    loadSessions();
+}
+
+async function loadStats() {
+    try {
+        const r = await fetch('/api/observability/stats?hours=24');
+        const { stats } = await r.json();
+        if (!stats) return;
+        const el = document.getElementById('stats-cards');
+        el.innerHTML = `
+            <span class="px-2 py-1 rounded bg-white/5">24h 对话 <b class="text-slate-300">${stats.total_traces}</b></span>
+            <span class="px-2 py-1 rounded bg-white/5">成功率 <b class="text-slate-300">${(stats.success_rate * 100).toFixed(0)}%</b></span>
+            <span class="px-2 py-1 rounded bg-white/5">Token <b class="text-slate-300">${(stats.total_tokens || 0).toLocaleString()}</b></span>
+            ${stats.total_cost ? `<span class="px-2 py-1 rounded bg-white/5">成本 <b class="text-scout-400">¥${stats.total_cost.toFixed(3)}</b></span>` : ''}
+        `;
+    } catch (e) { console.error(e); }
+}
+
+async function loadSessions() {
+    const list = document.getElementById('session-list');
+    try {
+        const r = await fetch('/api/traces/by-session?limit=30');
+        const { sessions } = await r.json();
+        if (!sessions || sessions.length === 0) {
+            list.innerHTML = '<div class="px-3 py-6 text-xs text-slate-600 text-center">暂无追踪数据</div>';
+            return;
+        }
+        list.innerHTML = sessions.map(s => `
+            <div class="session-item px-3 py-2.5 border-b border-white/5 cursor-pointer hover:bg-white/5 transition-colors"
+                 data-sid="${s.session_id}" onclick="selectSession('${s.session_id}')">
+                <div class="text-sm text-slate-300 truncate">${esc((s.first_message || '(空)').slice(0, 40))}</div>
+                <div class="text-xs text-slate-600 mt-0.5 flex items-center gap-2">
+                    <span>${__tpl(`${s.trace_count} 轮`)}</span>
+                    <span>${(s.tokens || 0).toLocaleString()} tok</span>
+                    <span>${fmtTime(s.last_time).slice(0,5) ? s.last_time.slice(5,16).replace('T',' ') : ''}</span>
+                    ${s.successes < s.trace_count ? '<span class="text-amber-500">⚠</span>' : ''}
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        list.innerHTML = '<div class="px-3 py-6 text-xs text-red-400 text-center">' + __tpl(`加载失败: ${e.message}`) + '</div>';
+    }
+}
+
+async function selectSession(sid) {
+    document.querySelectorAll('.session-item').forEach(el => {
+        el.classList.toggle('bg-white/5', el.dataset.sid === sid);
+    });
+    const pane = document.getElementById('timeline-pane');
+    pane.innerHTML = '<div class="text-center text-slate-600 text-sm py-20">加载中...</div>';
+    try {
+        const r = await fetch(`/api/traces/session/${sid}`);
+        const { traces } = await r.json();
+        renderTimeline(traces || []);
+    } catch (e) {
+        pane.innerHTML = '<div class="text-center text-red-400 text-sm py-20">' + __tpl(`加载失败: ${e.message}`) + '</div>';
+    }
+}
+
+function renderTimeline(traces) {
+    const pane = document.getElementById('timeline-pane');
+    if (!traces.length) {
+        pane.innerHTML = '<div class="text-center text-slate-600 text-sm py-20">该会话没有追踪数据</div>';
+        return;
+    }
+    pane.innerHTML = traces.map((t, ti) => {
+        const total = t.total_duration_ms || 1;
+        const traceStart = new Date(t.start_time).getTime();
+        const spansHtml = (t.spans || []).map((s, si) => {
+            const meta = typeMeta(s);
+            const start = new Date(s.start_time).getTime();
+            const offsetPct = Math.max(0, Math.min(99, ((start - traceStart) / total) * 100));
+            const widthPct = Math.max(0.6, Math.min(100 - offsetPct, (s.duration_ms / total) * 100));
+            const errBadge = s.error ? ' <span class="text-red-400">⚠</span>' : '';
+            const detailId = `d-${ti}-${si}`;
+            return `
+            <div class="border-b border-white/5 last:border-0">
+                <div class="flex items-center gap-2 px-2 py-1.5 hover:bg-white/[0.03]">
+                    <span class="w-12 flex-shrink-0 text-xs text-slate-500 text-right">${fmtTime(s.start_time)}</span>
+                    <span class="w-16 flex-shrink-0 text-xs truncate" title="${esc(meta.label)}: ${esc(s.name)}">${meta.icon} ${esc(s.name.split('(')[0].slice(0, 9))}</span>
+                    <div class="flex-1 relative h-6 bg-white/[0.02] rounded overflow-hidden">
+                        <div class="span-bar ${meta.cls}" style="left:${offsetPct}%; width:${widthPct}%;"
+                             title="${esc(s.name)} · ${fmtMs(s.duration_ms)}"
+                             onclick="toggleDetail('${detailId}')"></div>
+                    </div>
+                    <span class="w-14 flex-shrink-0 text-xs text-slate-500 text-right">${fmtMs(s.duration_ms)}${errBadge}</span>
+                </div>
+                <div id="${detailId}" class="hidden px-4 pb-3">
+                    <div class="text-xs text-slate-500 mb-1">${meta.label} · ${esc(s.name)} · ${__tpl(`状态 ${s.status}`)}${s.metadata && s.metadata.model ? ' · model=' + esc(s.metadata.model) : ''}</div>
+                    ${s.input && Object.keys(s.input).length ? `<div class="text-xs text-slate-400 mt-1">输入:</div><pre class="detail-box text-xs bg-black/40 rounded p-2 text-slate-300">${esc(JSON.stringify(s.input, null, 1))}</pre>` : ''}
+                    ${s.output && Object.keys(s.output).length ? `<div class="text-xs text-slate-400 mt-2">输出:</div><pre class="detail-box text-xs bg-black/40 rounded p-2 text-slate-300">${esc(JSON.stringify(s.output, null, 1))}</pre>` : ''}
+                    ${s.error ? `<div class="text-xs text-red-400 mt-2">${__tpl(`错误: ${esc(s.error)}`)}</div>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+
+        const statusIcon = t.status === 'success' ? '✅' : (t.status === 'error' ? '❌' : '⏳');
+        return `
+        <div class="trace-card border border-white/10 rounded-xl mb-4 bg-[#0d0d0d]">
+            <div class="px-3 py-2.5 border-b border-white/5 flex items-center gap-2 flex-wrap">
+                <span>${statusIcon}</span>
+                <span class="text-sm text-slate-200 flex-1 truncate" title="${esc(t.user_message)}">${esc((t.user_message || '').slice(0, 80) || '(无消息)')}</span>
+                <span class="text-xs text-slate-500">${fmtTime(t.start_time)}</span>
+                <span class="text-xs text-slate-500">⏱ ${fmtMs(t.total_duration_ms)}</span>
+                <span class="text-xs text-slate-500">🔤 ${(t.total_tokens || 0).toLocaleString()}</span>
+                ${t.total_cost ? `<span class="text-xs text-scout-400">¥${t.total_cost.toFixed(4)}</span>` : ''}
+                <span class="text-xs text-slate-600">${(t.spans || []).length} spans</span>
+            </div>
+            ${spansHtml || '<div class="px-3 py-3 text-xs text-slate-600">无 span 数据</div>'}
+        </div>`;
+    }).join('');
+}
+
+function toggleDetail(id) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('hidden');
+}
+
+loadAll();
+</script>
+</body>
+</html>

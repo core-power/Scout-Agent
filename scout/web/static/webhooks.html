@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webhook 管理 · Scout Agent</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="/static/vendor/tailwind.js"></script>
+    <script>
+    tailwind.config = {
+        darkMode: 'class',
+        theme: { extend: { colors: { scout: {
+            50:'#ecfeff',100:'#cffafe',200:'#a5f3fc',300:'#67e8f9',
+            400:'#22d3ee',500:'#06b6d4',600:'#0891b2',700:'#0e7490',800:'#155e75',900:'#164e63',
+        }}}}
+    }
+    </script>
+    <style>
+        * { -webkit-font-smoothing: antialiased; }
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        .card { background: #0d0d0d; border: 1px solid rgba(255,255,255,0.08); border-radius: 0.75rem; }
+        .field { width: 100%; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 0.5rem; padding: 0.5rem 0.75rem; color: #e2e8f0; font-size: 0.8rem; outline: none; }
+        .field:focus { border-color: rgba(6,182,212,0.5); }
+        .btn-primary { background: #0891b2; color: #fff; border-radius: 0.5rem; padding: 0.5rem 1rem; font-size: 0.8rem; transition: opacity .15s; }
+        .btn-primary:hover { opacity: 0.85; }
+        .btn-ghost { background: rgba(255,255,255,0.05); color: #cbd5e1; border-radius: 0.5rem; padding: 0.5rem 1rem; font-size: 0.8rem; transition: background .15s; }
+        .btn-ghost:hover { background: rgba(255,255,255,0.1); }
+        .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: 8px; font-size: 0.8rem; color: #fff; z-index: 100; opacity: 0; transition: opacity .3s; pointer-events: none; }
+        .toast.show { opacity: 1; }
+        .url-box { word-break: break-all; font-family: ui-monospace, monospace; font-size: 0.72rem; }
+    </style>
+    <script src="/static/i18n.js"></script>
+</head>
+<body class="h-screen overflow-hidden bg-[#0a0a0a] text-slate-200 flex flex-col">
+    <script>renderLangToggle();</script>
+
+<!-- 顶栏 -->
+<div class="flex items-center gap-3 px-4 py-3 border-b border-white/5 flex-shrink-0">
+    <a href="/" class="p-2 -ml-2 rounded-lg hover:bg-white/5 text-slate-400 transition-colors">
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+    </a>
+    <h1 class="text-lg font-bold text-white">🔗 Webhook 管理</h1>
+    <div class="flex-1"></div>
+    <button onclick="loadAll()" class="btn-ghost">刷新</button>
+</div>
+
+<div class="flex-1 overflow-y-auto p-6">
+    <!-- 新建 Webhook -->
+    <div class="card p-5 max-w-3xl mb-6">
+        <h2 class="text-sm font-semibold text-slate-200 mb-3">新建 Webhook</h2>
+        <div class="space-y-3">
+            <input id="wh-name" class="field" placeholder="名称（可选，如 部署通知）" data-i18n-placeholder="名称（可选，如 部署通知）">
+            <textarea id="wh-task" class="field min-h-[80px] resize-y" placeholder="任务描述（必填）——收到请求时 Agent 执行的任务。支持 {{event.xxx}} 占位符引用请求体字段。" data-i18n-placeholder="任务描述（必填）——收到请求时 Agent 执行的任务。支持 {{event.xxx}} 占位符引用请求体字段。"></textarea>
+            <div class="flex justify-end">
+                <button onclick="createWebhook()" class="btn-primary">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Webhook 列表 -->
+    <div class="max-w-3xl space-y-3" id="wh-list">
+        <div class="text-center text-slate-600 text-sm py-10">加载中...</div>
+    </div>
+</div>
+
+<div id="toast" class="toast bg-slate-800"></div>
+
+<script>
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function toast(msg) {
+    msg = __tpl(msg);
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 2200);
+}
+function fmtTime(iso) {
+    if (!iso) return '从未';
+    try { return new Date(iso).toLocaleString('zh-CN'); } catch(e) { return iso; }
+}
+
+async function loadAll() {
+    try {
+        const r = await fetch('/api/webhooks');
+        const { webhooks } = await r.json();
+        render(webhooks || []);
+    } catch (e) {
+        document.getElementById('wh-list').innerHTML = '<div class="text-center text-red-400 text-sm py-10">加载失败: ' + e.message + '</div>';
+    }
+}
+
+function render(hooks) {
+    const el = document.getElementById('wh-list');
+    if (hooks.length === 0) {
+        el.innerHTML = '<div class="text-center text-slate-600 text-sm py-10">暂无 Webhook</div>';
+        return;
+    }
+    el.innerHTML = hooks.map(h => {
+        const token = h.id;
+        return `
+        <div class="card p-4 space-y-2">
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-slate-200">${esc(h.name || '(未命名)')}</span>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-slate-500">${__tpl(`调用 ${h.call_count || 0} 次 · 最近 ${fmtTime(h.last_called)}`)}</span>
+                    <button onclick="testHook('${token}')" class="text-xs text-scout-400 hover:underline" title="测试触发" data-i18n-title="测试触发">测试</button>
+                    <button onclick="copyHook('${esc(h.url)}')" class="text-xs text-slate-400 hover:text-slate-200">复制 URL</button>
+                    <button onclick="deleteHook('${token}')" class="text-xs text-slate-500 hover:text-red-400">删除</button>
+                </div>
+            </div>
+            <div class="url-box bg-black/30 rounded p-2 text-slate-400">${esc(h.url)}</div>
+            <div class="text-xs text-slate-500 bg-white/[0.02] rounded p-2">${esc((h.task || '').slice(0, 120))}${(h.task||'').length > 120 ? '...' : ''}</div>
+        </div>`;
+    }).join('');
+}
+
+async function createWebhook() {
+    const task = document.getElementById('wh-task').value.trim();
+    const name = document.getElementById('wh-name').value.trim();
+    if (!task) { toast('请填写任务描述'); return; }
+    try {
+        const r = await fetch('/api/webhooks', {
+            method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, task })
+        });
+        const d = await r.json();
+        if (d.status === 'ok') {
+            toast('Webhook 已创建');
+            document.getElementById('wh-task').value = '';
+            document.getElementById('wh-name').value = '';
+            await loadAll();
+        } else { toast(d.error || '创建失败'); }
+    } catch(e) { toast('创建失败: ' + e.message); }
+}
+
+async function deleteHook(token) {
+    if (!confirm(__t('确认删除该 Webhook？'))) return;
+    try {
+        await fetch(`/api/webhooks/${token}`, { method: 'DELETE' });
+        toast('已删除');
+        loadAll();
+    } catch(e) { toast('删除失败'); }
+}
+
+async function testHook(token) {
+    try {
+        const r = await fetch(`/api/webhook/${token}`, {
+            method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ message: '来自 Webhook 管理页的测试触发' })
+        });
+        const d = await r.json();
+        toast(d.message || '已触发');
+        setTimeout(loadAll, 1500);
+    } catch(e) { toast('触发失败: ' + e.message); }
+}
+
+async function copyHook(url) {
+    try { await navigator.clipboard.writeText(url); toast('URL 已复制'); }
+    catch(e) { toast('复制失败，请手动复制'); }
+}
+
+loadAll();
+</script>
+</body>
+</html>
