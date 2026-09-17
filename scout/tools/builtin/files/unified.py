@@ -69,11 +69,13 @@ class UnifiedFileTool(ToolDefinition):
             },
             "start_line": {
                 "type": "integer",
-                "description": "起始行号，从1开始（read/delete 时使用）",
+                "description": "起始行号，从1开始（read/delete 时使用；read 时省略则从头读）",
             },
             "end_line": {
                 "type": "integer",
-                "description": "结束行号，包含（read/delete 时使用，默认与 start_line 相同）",
+                "description": "结束行号，包含。★ read 时省略 end_line 即读取整个文件——"
+                "≤2000 行的文件必须一次全读，严禁拆成多个行区间反复读取（每段都会"
+                "消耗一轮决策与 token）。仅超大文件定位后的精读才指定行区间。",
             },
             "line": {
                 "type": "integer",
