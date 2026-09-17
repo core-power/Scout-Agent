@@ -207,6 +207,7 @@ hiddenimports = [
     *collect_submodules("py7zr"),
     "chardet",
     "html5lib",
+    "uiautomation",
 ]
 
 # ── 打包配置 ─────────────────────────────────────────────
