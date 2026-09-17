@@ -462,139 +462,84 @@ html.dark .composer-model:hover { background: rgba(255, 255, 255, .08); color: #
         html:not(.dark) #update-banner .text-emerald-400 { color: #34d399 !important; }
         html:not(.dark) #update-banner .text-slate-400 { color: #94a3b8 !important; }
         html:not(.dark) #update-banner .text-slate-400:hover { color: #ffffff !important; }
-        /* ── Scout 推演轨道：垂直轨道线 + 状态节点（2026-09-17）──
-           每个中间步骤是轨道上的一个节点：进行中 = 旋转罗盘环，
-           完成 = 青色发光实心航点；轨道贯穿，像一条任务航迹。 */
+        /* ── 活动流（终版）：极简单行状态流 ──
+           全部中间步骤统一为 11px 灰阶单行，状态仅以小图标区分；
+           无底纹、无渐变、无发光；展开才显示输入输出详情。 */
         .agent-process {
-            position: relative !important;
-            background: color-mix(in srgb, currentColor 3%, transparent) !important;
-            border: 1px solid color-mix(in srgb, currentColor 8%, transparent) !important;
-            border-radius: 12px !important;
-            padding: 8px 10px 8px 30px !important;
-            margin-bottom: 8px !important;
-        }
-        .agent-process:empty { display: none !important; }
-        .agent-process::before {
-            content: '';
-            position: absolute;
-            left: 14px; top: 14px; bottom: 12px;
-            width: 2px; border-radius: 1px;
-            background: linear-gradient(180deg,
-                color-mix(in srgb, #38bdf8 45%, transparent),
-                color-mix(in srgb, currentColor 10%, transparent));
-        }
-        .agent-process > details[data-tool-name],
-        .agent-process > details.thinking-block,
-        .agent-process > div.thinking-block {
-            position: relative !important;
             background: transparent !important;
             border: none !important;
-            border-radius: 4px !important;
-            margin: 0 0 2px 0 !important;
+            border-radius: 8px !important;
+            padding: 0 2px 0 6px !important;
+            margin-bottom: 6px !important;
         }
-        /* 节点：进行中 = 旋转罗盘环 */
-        .agent-process > details[data-tool-name]::before,
-        .agent-process > details.thinking-block::before,
-        .agent-process > div.thinking-block::before {
-            content: '';
-            position: absolute;
-            left: -21px; top: 4px;
-            width: 10px; height: 10px;
-            border-radius: 50%;
-            border: 1.5px solid #38bdf8;
-            border-top-color: transparent;
-            background: transparent;
-            box-sizing: border-box;
-            animation: scoutSpin 1.1s linear infinite;
+        .agent-process:empty { display: none !important; }
+        .agent-process details[data-tool-name],
+        .agent-process details.thinking-block {
+            background: transparent !important;
+            border: none !important;
+            border-radius: 6px !important;
+            margin: 0 !important;
         }
-        /* 完成节点 = 青色发光实心航点 */
-        .agent-process > details[data-done]::before {
-            background: #38bdf8;
-            border-color: #38bdf8;
-            animation: none;
-            box-shadow: 0 0 6px color-mix(in srgb, #38bdf8 60%, transparent);
-        }
-        @keyframes scoutSpin { to { transform: rotate(360deg); } }
         .agent-process details[data-tool-name] > summary,
         .agent-process details.thinking-block > summary {
             padding: 2px 6px !important;
-            gap: 6px !important;
+            gap: 8px !important;
             font-size: 11px !important;
+            line-height: 1.5 !important;
+            color: rgb(148 163 184) !important;
+        }
+        :root:not(.dark) .agent-process details[data-tool-name] > summary,
+        :root:not(.dark) .agent-process details.thinking-block > summary {
+            color: rgb(100 116 139) !important;
+        }
+        /* 图标与工具名去彩去粗，统一灰 */
+        .agent-process details[data-tool-name] > summary .text-scout-400,
+        .agent-process details[data-tool-name] > summary svg.tool-icon,
+        .agent-process details[data-tool-name] > summary .text-sm {
+            color: rgb(148 163 184) !important;
+            font-weight: 400 !important;
         }
         .agent-process details[data-tool-name] > summary .text-sm {
-            width: 0 !important; height: 0 !important; display: none !important;
+            width: 13px !important;
+            height: 13px !important;
+        }
+        /* 状态色降饱和：完成淡绿 / 失败淡红 / 执行淡青 */
+        .agent-process details[data-tool-name] .tool-status.text-emerald-400,
+        .agent-process details[data-tool-name] svg.tool-icon.text-emerald-400 {
+            color: rgba(52, 211, 153, .75) !important;
+        }
+        .agent-process details[data-tool-name] .tool-status.text-red-400,
+        .agent-process details[data-tool-name] svg.tool-icon.text-red-400 {
+            color: rgba(248, 113, 113, .75) !important;
+        }
+        .agent-process details[data-tool-name] .tool-status.text-scout-400,
+        .agent-process details[data-tool-name] svg.tool-icon.text-scout-400 {
+            color: rgba(56, 189, 248, .7) !important;
+        }
+        /* hover 微亮；展开态极淡底 */
+        .agent-process details[data-tool-name] > summary:hover,
+        .agent-process details.thinking-block > summary:hover {
+            background: rgb(148 163 184 / .08) !important;
         }
         .agent-process details[data-tool-name][open],
         .agent-process details.thinking-block[open] {
-            background: color-mix(in srgb, currentColor 5%, transparent) !important;
+            background: rgb(148 163 184 / .04) !important;
         }
-        /* 推演文本呼吸 */
-        @keyframes scoutBreathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
-        .agent-process .breathe { animation: scoutBreathe 1.6s ease-in-out infinite; }
-        /* ── v2 增强：雷达网格底纹 + 航迹流光 + 节点亮核 + 箭头指示 ── */
-        .agent-process {
-            background:
-                linear-gradient(90deg, color-mix(in srgb, #38bdf8 8%, transparent), transparent 45%),
-                repeating-linear-gradient(0deg, transparent 0 13px, color-mix(in srgb, #38bdf8 3%, transparent) 13px 14px),
-                repeating-linear-gradient(90deg, transparent 0 25px, color-mix(in srgb, #38bdf8 3%, transparent) 25px 26px),
-                color-mix(in srgb, currentColor 2%, transparent) !important;
-            overflow: hidden;
-        }
-        .agent-process::before {
-            background:
-                linear-gradient(180deg, transparent 0%, color-mix(in srgb, #38bdf8 90%, transparent) 40%, transparent 90%) no-repeat,
-                color-mix(in srgb, #38bdf8 25%, transparent);
-            background-size: 100% 46px, 100% 100%;
-            animation: scoutFlow 2.2s linear infinite;
-        }
-        @keyframes scoutFlow {
-            0% { background-position: 0 -46px, 0 0; }
-            100% { background-position: 0 calc(100% + 46px), 0 0; }
-        }
-        /* 进行中节点中心亮核 */
-        .agent-process > details[data-tool-name]::after,
-        .agent-process > details.thinking-block::after,
-        .agent-process > div.thinking-block::after {
-            content: '';
-            position: absolute;
-            left: -18px; top: 7px;
-            width: 4px; height: 4px;
-            border-radius: 50%;
-            background: #38bdf8;
-            box-shadow: 0 0 5px #38bdf8;
-        }
-        .agent-process > details[data-done]::after { display: none; }
         /* 展开指示箭头（无文字） */
         .agent-process details[data-tool-name] > summary::after,
         .agent-process details.thinking-block > summary::after {
             content: '▸';
             margin-left: auto;
-            opacity: .55;
+            opacity: .5;
             transition: transform .15s ease;
         }
         .agent-process details[data-tool-name][open] > summary::after,
         .agent-process details.thinking-block[open] > summary::after {
             transform: rotate(90deg);
-            opacity: .85;
+            opacity: .75;
         }
         .agent-process details.thinking-block > summary { display: flex; align-items: center; }
-        /* ── 浅色主题降噪 + 行密度收敛（2026-09-17 用户反馈）── */
-        html:not(.dark) .agent-process {
-            background:
-                linear-gradient(90deg, color-mix(in srgb, #38bdf8 5%, transparent), transparent 45%),
-                color-mix(in srgb, currentColor 2%, transparent) !important;
-        }
-        .agent-process details[data-tool-name] > summary .text-scout-400 {
-            color: color-mix(in srgb, currentColor 62%, transparent) !important;
-            font-weight: 400 !important;
-        }
-        .agent-process details[data-tool-name] > summary,
-        .agent-process details.thinking-block > summary {
-            padding: 1px 6px !important;
-            font-size: 10.5px !important;
-            line-height: 1.4 !important;
-        }
-        .agent-process details.thinking-block > summary { display: flex; align-items: center; }
+        .agent-process .reasoning-count { opacity: .6; }
     </style>
     <script src="/static/i18n.js"></script>
     <script>
