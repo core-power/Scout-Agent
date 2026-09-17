@@ -229,6 +229,7 @@ class OpenAIProvider(LLMClient):
         except Exception:
             return None
 
+    @staticmethod
     def _estimate_usage(messages: list[dict], stream_chars: int, tool_acc: dict | None = None) -> dict:
         """估算 token 用量（DashScope 流式不返回 usage 时兜底）.
 

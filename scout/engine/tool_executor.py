@@ -1067,6 +1067,7 @@ class ToolExecutionMixin:
         except Exception:  # noqa: BLE001
             return obs
 
+    @staticmethod
     def _normalize_search_key(query: str) -> str:
         """把搜索 query 规范化成"目标 key"，用于检测重复搜索.
 
@@ -1102,6 +1103,7 @@ class ToolExecutionMixin:
         # 排序连接，保证词序变化（中英混排）不影响判定
         return " ".join(sorted(set(core)))[:60]
 
+    @staticmethod
     def _parse_heal_args(value) -> dict:
         """安全解析 heal 记录中的工具参数（兼容 dict 与 str 两种存储格式）.
 
