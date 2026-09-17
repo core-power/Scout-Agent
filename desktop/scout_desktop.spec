@@ -41,17 +41,12 @@ datas = [
     ("scout.ico", "."),                             # exe 图标（相对 spec 目录）
 ]
 
-# ── 本地 OCR 引擎（2026-09-11 启用进包）────────────────────
-# desktop find= 的 OCR 文本锚定兜底（T3 自绘应用定位）。
-# 2026-09-07 曾移除（当时是 vision 读图场景 + cv2 全家桶 160MB）；
-# 现在只收 rapidocr_onnxruntime 自身（onnxruntime 已在依赖树中，det/rec
-# 模型约 15MB），定位场景是刚需（微信 4.x 实测命中）。
-try:
-    import rapidocr_onnxruntime as _rapidocr  # noqa: F401
-    datas += collect_data_files("rapidocr_onnxruntime")
-    _ocr_hiddenimports = collect_submodules("rapidocr_onnxruntime")
-except Exception:
-    _ocr_hiddenimports = []
+# ── 本地 OCR 引擎（2026-09-17 移除）────────────────────────
+# 曾用于 desktop find= 的文本锚定兜底（2026-09-11 启用进包）。
+# 应用户要求移除 rapidocr_onnxruntime 依赖：desktop 工具内为惰性导入
+# （importlib + 单例缓存），包缺失时返回 None 优雅降级，不影响其他功能。
+# 如需恢复：datas += collect_data_files("rapidocr_onnxruntime") 并还原下方列表。
+_ocr_hiddenimports = []
 
 # ── WebView2 程序集（原生窗口方案，2026-08-29） ────────────
 # launcher.py 直接 AddReference 加载，须放到 _internal 根目录；
