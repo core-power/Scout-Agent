@@ -462,19 +462,26 @@ html.dark .composer-model:hover { background: rgba(255, 255, 255, .08); color: #
         html:not(.dark) #update-banner .text-emerald-400 { color: #34d399 !important; }
         html:not(.dark) #update-banner .text-slate-400 { color: #94a3b8 !important; }
         html:not(.dark) #update-banner .text-slate-400:hover { color: #ffffff !important; }
-        /* ── Cow 风格：中间步骤（工具/思考）压成单行状态条（2026-09-17）──
-           信息降噪：默认只有一行小字，展开才看详情；颜色跟随主题。 */
+        /* ── Cow 风格：活动容器卡片 + 状态行（2026-09-17）──
+           一个圆角卡片包住全部中间步骤；行内状态动效；颜色随主题。 */
+        .agent-process {
+            background: color-mix(in srgb, currentColor 3%, transparent) !important;
+            border: 1px solid color-mix(in srgb, currentColor 8%, transparent) !important;
+            border-radius: 12px !important;
+            padding: 6px 8px !important;
+            margin-bottom: 8px !important;
+        }
+        .agent-process:empty { display: none !important; }
         .agent-process details[data-tool-name],
         .agent-process details.thinking-block {
             background: transparent !important;
             border: none !important;
-            border-left: 2px solid color-mix(in srgb, currentColor 14%, transparent) !important;
-            border-radius: 0 !important;
-            margin: 0 0 1px 0 !important;
+            border-radius: 6px !important;
+            margin: 0 !important;
         }
         .agent-process details[data-tool-name] > summary,
         .agent-process details.thinking-block > summary {
-            padding: 1px 8px !important;
+            padding: 2px 6px !important;
             gap: 6px !important;
             font-size: 11px !important;
         }
@@ -484,10 +491,11 @@ html.dark .composer-model:hover { background: rgba(255, 255, 255, .08); color: #
         }
         .agent-process details[data-tool-name][open],
         .agent-process details.thinking-block[open] {
-            background: color-mix(in srgb, currentColor 4%, transparent) !important;
-            border-radius: 6px !important;
-            border: none !important;
+            background: color-mix(in srgb, currentColor 5%, transparent) !important;
         }
+        /* 进行中动效：💡 脉动 */
+        @keyframes scoutBulbPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+        .agent-process .bulb-running { animation: scoutBulbPulse 1.2s ease-in-out infinite; }
     </style>
     <script src="/static/i18n.js"></script>
     <script>
@@ -2193,7 +2201,7 @@ class AgentBubble {
         if (this.thinkingEl) return;
         this.thinkingEl = document.createElement('div');
         this.thinkingEl.className = 'flex items-center gap-2 text-slate-500';
-        this.thinkingEl.innerHTML = `<svg class="w-4 h-4 text-scout-400 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 2a10 10 0 100 20 10 10 0 000-20z M12 6v6l4 2"/></svg><span class="text-xs">正在思考...</span>`;
+        this.thinkingEl.innerHTML = `<span class="bulb-running text-xs" style="color:#fbbf24">💡 正在思考...</span>`;
         this.processEl.appendChild(this.thinkingEl);
         scrollToBottom(true);
     }
@@ -2394,6 +2402,7 @@ class AgentBubble {
         tool.dataset.toolName = name;
         tool.dataset.callCount = '1';
         if (callId) tool.dataset.callId = callId;
+        tool.dataset.startTs = String(Date.now());
         // 子代理工具卡片：紫色边框 + 左侧缩进，视觉区别主 agent 编排
         tool.className = isSub
             ? 'bg-[#150d24] border border-violet-500/30 rounded-lg text-xs ml-3'
@@ -2498,7 +2507,9 @@ class AgentBubble {
             svg.classList.remove('animate-spin');
             svg.classList.add('text-emerald-400');
             svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>';
-            status.textContent = message;
+            const _st = Number(targetEl.dataset.startTs || 0);
+            const _dur = _st ? ` · ${((Date.now() - _st) / 1000).toFixed(1)}s` : '';
+            status.textContent = message + _dur;
             status.className = 'tool-status text-emerald-400 ml-1';
             if (r) {
                 const outDiv = document.createElement('div');
@@ -2512,7 +2523,9 @@ class AgentBubble {
             svg.classList.remove('animate-spin');
             svg.classList.add('text-red-400');
             svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>';
-            status.textContent = message;
+            const _ste = Number(targetEl.dataset.startTs || 0);
+            const _dure = _ste ? ` · ${((Date.now() - _ste) / 1000).toFixed(1)}s` : '';
+            status.textContent = message + _dure;
             status.className = 'tool-status text-red-400 ml-1';
             if (r) {
                 const outDiv = document.createElement('div');
