@@ -2586,7 +2586,7 @@ class AgentBubble {
             svg.classList.remove('animate-spin');
             svg.classList.add('text-scout-400');
             svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>';
-            status.textContent = message;
+            status.textContent = '';
             status.className = 'tool-status text-emerald-400 ml-1';
             
             // 工具完成（图片/文件另由 file 事件单独渲染，不再重复收集）
@@ -2595,8 +2595,13 @@ class AgentBubble {
             svg.classList.remove('animate-spin');
             svg.classList.add('text-red-400');
             svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>';
-            status.textContent = message;
+            status.textContent = '';
             status.className = 'tool-status text-red-400 ml-1';
+            if (r) {
+                const outDiv = document.createElement('div');
+                outDiv.innerHTML = `<span class="text-slate-600">error</span><pre class="text-red-400 whitespace-pre-wrap break-all mt-0.5">${escapeHtml(message)}</pre>`;
+                r.appendChild(outDiv);
+            }
         } else if (stage === 'output') {
             // 工具实际输出内容
             if (r) {
