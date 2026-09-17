@@ -2358,34 +2358,48 @@ class AgentBubble {
     }
 
     collapseReasoning() {
-        // 同一回合并入唯一的推演行（×N 段计数，段间分隔线标注序号）——
-        // 配合同名工具合并，整回合活动流收敛为几行，不再逐段刷屏。
+        // 价值分层（2026-09-17）：≥500 字的深度推演独立成行显示在发生位置
+        // （标注字数便于识别），小碎片静默并入推演记录行不占行位——
+        // 既不 28 行刷屏，也不是全部堆在第一条。
         if (!this._reasoningBlock) return;
         const text = (this._reasoningText || '').trim();
         const block = this._reasoningBlock;
         this._reasoningBlock = null;
         if (!text) { block.remove(); return; }
-        const existing = this.processEl.querySelector('details[data-reasoning]');
-        if (existing) {
-            block.remove();
-            const n = (parseInt(existing.dataset.segCount || '1', 10) + 1);
-            existing.dataset.segCount = String(n);
-            const cnt = existing.querySelector('.reasoning-count');
-            if (cnt) cnt.textContent = ` ×${n}`;
-            const body = existing.querySelector('.reasoning-body');
-            if (body) body.insertAdjacentHTML('beforeend',
-                '<div class="mt-2 pt-1.5 border-t border-white/10 text-[10px] opacity-50 mb-1">── 推演 ' + n + ' ──</div>' + safeMarked(text));
+        const n = this.processEl.querySelectorAll('details[data-reasoning]').length + 1;
+        if (text.length >= 500) {
+            const d = document.createElement('details');
+            d.className = 'thinking-block text-xs text-slate-400 leading-relaxed mb-0.5';
+            d.dataset.done = '1';
+            d.dataset.reasoning = '1';
+            d.innerHTML =
+                `<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演 · 第 ${n} 段 · ${(text.length / 1000).toFixed(1)}k 字</summary>` +
+                '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
+            block.replaceWith(d);
             return;
         }
-        const d = document.createElement('details');
-        d.className = 'thinking-block text-xs text-slate-400 leading-relaxed mb-0.5';
-        d.dataset.done = '1';
-        d.dataset.reasoning = '1';
-        d.dataset.segCount = '1';
-        d.innerHTML =
-            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程<span class="reasoning-count"></span></summary>' +
-            '<div class="reasoning-body pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
-        block.replaceWith(d);
+        // 小碎片 → 并入推演记录行
+        let rec = this.processEl.querySelector('details[data-reasoning-frag]');
+        if (!rec) {
+            rec = document.createElement('details');
+            rec.className = 'thinking-block text-xs text-slate-400 leading-relaxed mb-0.5';
+            rec.dataset.done = '1';
+            rec.dataset.reasoningFrag = '1';
+            rec.dataset.segCount = '0';
+            rec.innerHTML =
+                '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💭 推演记录<span class="reasoning-count"></span></summary>' +
+                '<div class="reasoning-body pl-3 pr-2 pb-1 whitespace-pre-wrap break-words"></div>';
+            block.replaceWith(rec);
+        } else {
+            block.remove();
+        }
+        const n2 = (parseInt(rec.dataset.segCount || '0', 10) + 1);
+        rec.dataset.segCount = String(n2);
+        const cnt = rec.querySelector('.reasoning-count');
+        if (cnt) cnt.textContent = ` ×${n2}`;
+        const body = rec.querySelector('.reasoning-body');
+        if (body) body.insertAdjacentHTML('beforeend',
+            '<div class="mt-2 pt-1.5 border-t border-white/10 text-[10px] opacity-50 mb-1">── 推演 ' + n2 + ' ──</div>' + safeMarked(text));
     }
 
     // 按 call_id 查找当前气泡内的工具卡片（多 tool_calls 并行时精确归属 tool 输出）
