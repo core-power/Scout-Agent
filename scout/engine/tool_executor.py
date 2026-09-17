@@ -125,7 +125,13 @@ class ToolExecutionMixin:
         # 避免陷入"搜不到就换关键词重试"的无效循环。
         if tc.name == "web_search":
             _q = (tc.arguments or {}).get("query", "")
-            _norm = self._normalize_search_key(_q)
+            # 2026-09-17：守卫自身故障时放行搜索（fail-open），不让异常冲垮回合
+            # （当日 _normalize_search_key 漏 self 曾致 40+ 轮空转、7 分钟无响应）
+            try:
+                _norm = self._normalize_search_key(_q)
+            except Exception:  # noqa: BLE001
+                logger.exception("搜索重试守卫内部异常，放行本次搜索: q=%r", _q)
+                _norm = None
             if _norm:
                 _cur_tokens = set(_norm.split())
                 _hist = self._search_history.setdefault(session.id, [])
@@ -886,6 +892,40 @@ class ToolExecutionMixin:
 
 
     async def _execute_single_tool(
+        self,
+        session: Session,
+        tc: ToolCall,
+        call_id: str,
+    ) -> None:
+        """执行单个工具调用的兜底包装（2026-09-17）.
+
+        守卫/编排抛出的未捕获异常不再冒泡冲垮整个回合，而是落为一条失败的
+        tool 消息 → 交给现有 _guard_repeat_failure（同参连续失败硬拦截）与
+        防空转看门狗完成熔断收尾（修复搜索守卫崩溃导致的 40+ 轮空转）。
+        """
+        try:
+            await self._execute_single_tool_inner(session, tc, call_id)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "工具编排未捕获异常（session=%s tool=%s call=%s）",
+                session.id, tc.name, call_id,
+            )
+            err = f"⚠️ 工具调用内部错误（已记录，请勿以相同参数重试）: {tc.name}"
+            obs = Observation(tool_name=tc.name, success=False, output=err)
+            session.observations.append(obs)
+            session.messages.append(
+                Message(
+                    role=Role.TOOL,
+                    content=err,
+                    metadata={"tool_name": tc.name, "success": False, "call_id": call_id},
+                )
+            )
+            self._record_tool_result(session.id, tc.name, False, err)
+            await self.callbacks.on_tool_progress(
+                tc.name, "error", err, metadata={"call_id": call_id}
+            )
+
+    async def _execute_single_tool_inner(
         self,
         session: Session,
         tc: ToolCall,
