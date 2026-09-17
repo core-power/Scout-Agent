@@ -252,7 +252,7 @@ Scout Agent 是一个智能个人助手 AI 智能体，支持持久记忆、工�
 
 不想折腾环境？直接用**绿色便携版**，双击即用：
 
-1. 到 **GitHub Releases** 下载 **Windows 绿色版**：[v1.0.0.0 发布页](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.0)（直接下载 [scout-agent-1.0.0.0-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.0/scout-agent-1.0.0.0-win-x64.zip)，或到 [全部 Releases](https://github.com/core-power/Scout-Agent/releases) 找更新版本）。
+1. 到 **GitHub Releases** 下载 **Windows 绿色版**：[v1.0.0.3 发布页](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.3)（直接下载 [scout-agent-1.0.0.3-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.3/scout-agent-1.0.0.3-win-x64.zip)，或到 [全部 Releases](https://github.com/core-power/Scout-Agent/releases) 找更新版本）。
 2. 解压后把**整个文件夹**拷到任意 Windows 10/11 电脑即可运行——免安装、免注册表、免管理员权限。
 3. 打开解压目录，双击 **`ScoutDesktop\ScoutAgent.exe`**，对话窗口立即弹出。
 4. 首次使用打开**设置**页，填入你的 LLM API Key 即可（支持通义/DeepSeek/OpenAI 等任意 OpenAI 兼容端点）。

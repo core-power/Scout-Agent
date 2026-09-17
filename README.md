@@ -251,7 +251,7 @@ Net effect: after days, machine switches or restarts, it still remembers where y
 
 Don't want to set up Python? Use the **portable green build** — double-click and go:
 
-1. Download the **Windows portable build** from **GitHub Releases**: [v1.0.0.0](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.0) — direct link: [scout-agent-1.0.0.0-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.0/scout-agent-1.0.0.0-win-x64.zip) (check [all releases](https://github.com/core-power/Scout-Agent/releases) for newer versions).
+1. Download the **Windows portable build** from **GitHub Releases**: [v1.0.0.3](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.3) — direct link: [scout-agent-1.0.0.3-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.3/scout-agent-1.0.0.3-win-x64.zip) (check [all releases](https://github.com/core-power/Scout-Agent/releases) for newer versions).
 2. Unzip it, then copy the **whole folder** to any Windows 10/11 machine — no installation, no registry, no admin rights.
 3. Open the unzipped folder and double-click **`ScoutDesktop\ScoutAgent.exe`** — the chat window opens instantly.
 4. On first use, open **Settings** and paste your LLM API key (dashscope / DeepSeek / OpenAI / any OpenAI-compatible endpoint).
