@@ -462,6 +462,37 @@ html.dark .composer-model:hover { background: rgba(255, 255, 255, .08); color: #
         html:not(.dark) #update-banner .text-emerald-400 { color: #34d399 !important; }
         html:not(.dark) #update-banner .text-slate-400 { color: #94a3b8 !important; }
         html:not(.dark) #update-banner .text-slate-400:hover { color: #ffffff !important; }
+        /* ── Cow 风格：中间步骤（工具/思考）压成单行状态条（2026-09-17）──
+           信息降噪：默认只有一行小字，展开才看详情；颜色跟随主题。 */
+        .agent-process details[data-tool-name],
+        .agent-process details.thinking-block {
+            background: transparent !important;
+            border: none !important;
+            border-left: 2px solid color-mix(in srgb, currentColor 14%, transparent) !important;
+            border-radius: 0 !important;
+            margin: 0 0 1px 0 !important;
+        }
+        .agent-process details[data-tool-name] > summary,
+        .agent-process details.thinking-block > summary {
+            padding: 1px 8px !important;
+            gap: 6px !important;
+            font-size: 11px !important;
+            opacity: .78;
+        }
+        .agent-process details[data-tool-name] > summary .text-sm {
+            width: 13px !important;
+            height: 13px !important;
+        }
+        .agent-process details[data-tool-name] > summary .font-semibold {
+            font-weight: 400 !important;
+            color: color-mix(in srgb, currentColor 80%, transparent) !important;
+        }
+        .agent-process details[data-tool-name][open],
+        .agent-process details.thinking-block[open] {
+            background: color-mix(in srgb, currentColor 4%, transparent) !important;
+            border-radius: 6px !important;
+            border: none !important;
+        }
     </style>
     <script src="/static/i18n.js"></script>
     <script>
