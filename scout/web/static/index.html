@@ -578,6 +578,23 @@ html.dark .composer-model:hover { background: rgba(255, 255, 255, .08); color: #
             opacity: .85;
         }
         .agent-process details.thinking-block > summary { display: flex; align-items: center; }
+        /* ── 浅色主题降噪 + 行密度收敛（2026-09-17 用户反馈）── */
+        html:not(.dark) .agent-process {
+            background:
+                linear-gradient(90deg, color-mix(in srgb, #38bdf8 5%, transparent), transparent 45%),
+                color-mix(in srgb, currentColor 2%, transparent) !important;
+        }
+        .agent-process details[data-tool-name] > summary .text-scout-400 {
+            color: color-mix(in srgb, currentColor 62%, transparent) !important;
+            font-weight: 400 !important;
+        }
+        .agent-process details[data-tool-name] > summary,
+        .agent-process details.thinking-block > summary {
+            padding: 1px 6px !important;
+            font-size: 10.5px !important;
+            line-height: 1.4 !important;
+        }
+        .agent-process details.thinking-block > summary { display: flex; align-items: center; }
     </style>
     <script src="/static/i18n.js"></script>
     <script>
@@ -2367,19 +2384,34 @@ class AgentBubble {
     }
 
     collapseReasoning() {
-        // Cow 风格（2026-09-17）：流式思考结束后塌缩为一行"💡 思考完毕"，
-        // 全文收进 <details>，点开可回看。
+        // 同一回合并入唯一的"推演过程"折叠行：后续思考追加到同一块内
+        // （带 ×N 段计数），避免长任务产生几十行刷屏（2026-09-17 用户反馈）。
         if (!this._reasoningBlock) return;
         const text = (this._reasoningText || '').trim();
-        if (!text) { this._reasoningBlock.remove(); this._reasoningBlock = null; return; }
-        const d = document.createElement('details');
-        d.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
-        d.dataset.done = '1';
-        d.innerHTML =
-            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
-            '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
-        this._reasoningBlock.replaceWith(d);
+        const block = this._reasoningBlock;
         this._reasoningBlock = null;
+        if (!text) { block.remove(); return; }
+        const existing = this.processEl.querySelector('details[data-reasoning]');
+        if (existing) {
+            block.remove();
+            const body = existing.querySelector('.reasoning-body');
+            if (body) body.insertAdjacentHTML('beforeend',
+                '<div class="my-1.5 border-t border-white/5"></div>' + safeMarked(text));
+            const n = (parseInt(existing.dataset.segCount || '1', 10) + 1);
+            existing.dataset.segCount = String(n);
+            const cnt = existing.querySelector('.reasoning-count');
+            if (cnt) cnt.textContent = ` ×${n}`;
+            return;
+        }
+        const d = document.createElement('details');
+        d.className = 'thinking-block text-xs text-slate-400 leading-relaxed mb-0.5';
+        d.dataset.done = '1';
+        d.dataset.reasoning = '1';
+        d.dataset.segCount = '1';
+        d.innerHTML =
+            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程<span class="reasoning-count"></span></summary>' +
+            '<div class="reasoning-body pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
+        block.replaceWith(d);
     }
 
     // 按 call_id 查找当前气泡内的工具卡片（多 tool_calls 并行时精确归属 tool 输出）
