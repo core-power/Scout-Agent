@@ -264,6 +264,42 @@ _DEDUP_HINT = (
 )
 
 
+_VISION_MAX_EDGE = 1280  # 问答路径 vision 输入最长边（token 与分辨率正相关）
+
+
+def _downscale_for_vision(image: str, max_edge: int = _VISION_MAX_EDGE) -> str:
+    """等比缩小超大截图再发给 VL（2026-09-17 token 优化）.
+
+    全屏截图（如 1888×1150）直发单张 2~4K token，GUI 任务二十轮即数万。
+    仅处理本地 png/jpg/webp 且最长边超限的图；原图不动，缩放副本以
+    _vision_ds_ 前缀写同目录（带 mtime 缓存，避免每步重复缩放）。
+    URL / data: / 已达标图片原样返回。定位链路（需要精确坐标）不走此函数。
+    """
+    from pathlib import Path
+
+    if not image or image.startswith(("http://", "https://", "data:")):
+        return image
+    p = Path(image)
+    if not p.exists() or p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+        return image
+    try:
+        from PIL import Image
+
+        with Image.open(p) as im:
+            w, h = im.size
+            if max(w, h) <= max_edge:
+                return image
+            scale = max_edge / max(w, h)
+            out = p.with_name(f"_vision_ds_{p.name}")
+            if out.exists() and out.stat().st_mtime >= p.stat().st_mtime:
+                return str(out)
+            im.resize((max(1, int(w * scale)), max(1, int(h * scale))),
+                      Image.LANCZOS).save(out)
+            return str(out)
+    except Exception:
+        return image
+
+
 def _image_fingerprint(image: str) -> str | None:
     """本地图片内容 SHA-256；URL/缺失/读取失败一律返回 None（不参与去重，放行）. """
     if image.startswith(("http://", "https://")):
@@ -447,6 +483,11 @@ class VisionTool(ToolDefinition):
             from scout.config.paths import DATA_DIR
             cfg_hint = str(DATA_DIR / "config.json")
             return Observation(tool_name="vision", success=False, output=f"未配置 API Key（请检查 {cfg_hint} 或 OPENAI_API_KEY/DASHSCOPE_API_KEY）")
+        # 2026-09-17 token 优化：无 crop 的整屏截图降采样后再发（vision token 与
+        # 分辨率正相关；原图不动，缩放副本 _vision_ds_* 写同目录）。desktop 定位
+        # 链路需要精确坐标，不走此处、不受影响。
+        if not crop:
+            image = _downscale_for_vision(image)
         obs = await _call_vision(api_key, base_url, model, image, question, crop)
         if obs.success:
             return obs
