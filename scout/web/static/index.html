@@ -3691,24 +3691,29 @@ async function loadSession(sid, opts = {}) {
                     continue;
                 }
 
-                // 思考过程（reasoning）——无论中间步骤还是最终回复，有值就渲染
+                // 思考过程（reasoning）——有值就渲染，但默认折叠（2026-09-17：
+                // GUI 任务的长思考全文摊开在气泡顶部，刷屏且难定位正文）
                 if (reasoningText) {
                     agentBubble._ensure();
                     agentBubble.hideThinking();
-                    const thinkBlock = document.createElement('div');
-                    thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed pl-3 border-l-2 border-scout-500/30';
-                    thinkBlock.innerHTML = safeMarked(reasoningText);
+                    const thinkBlock = document.createElement('details');
+                    thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
+                    thinkBlock.innerHTML =
+                        '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💭 思考过程（点击展开）</summary>' +
+                        '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(reasoningText) + '</div>';
                     agentBubble.processEl.appendChild(thinkBlock);
                 }
                 if (hasToolCalls) {
                     // 中间步骤：创建气泡 + 工具卡片（tool 输出后续追加），不 finalize
                     agentBubble._ensure();
                     agentBubble.hideThinking();
-                    // 兼容旧数据：旧版本思考存在 content 里（且无 reasoning 字段时）
+                    // 兼容旧数据：旧版本思考存在 content 里（且无 reasoning 字段时）——同样折叠
                     if (!reasoningText && contentText) {
-                        const thinkBlock = document.createElement('div');
-                        thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed pl-3 border-l-2 border-scout-500/30';
-                        thinkBlock.innerHTML = safeMarked(m.content);
+                        const thinkBlock = document.createElement('details');
+                        thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
+                        thinkBlock.innerHTML =
+                            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💭 思考过程（点击展开）</summary>' +
+                            '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(m.content) + '</div>';
                         agentBubble.processEl.appendChild(thinkBlock);
                     }
                     for (const tc of toolCalls) {
