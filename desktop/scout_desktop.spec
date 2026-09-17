@@ -194,6 +194,24 @@ hiddenimports = [
     # web 适配器包（2026-09-14 W1 拆分）：模块 → 包，路由 mixin 按域分文件，
     # 显式收集保证打包不漏子模块
     *collect_submodules("scout.adapters.web"),
+    # 桌面办公文档处理库（2026-09-17）：xlsx/docx/pptx/pdf/html/odf 等。
+    # pptx/docx/openpyxl 内部存在动态导入，纯靠 Analysis 自动收集有漏包风险，
+    # 显式收集；PyMuPDF 1.28+ 推荐以 pymupdf 名导入（fitz 旧名仍可用）
+    *collect_submodules("openpyxl"),
+    *collect_submodules("docx"),
+    *collect_submodules("pptx"),
+    *collect_submodules("lxml"),
+    "xlrd",
+    "pypdf",
+    "pymupdf",
+    "fitz",
+    *collect_submodules("bs4"),
+    "odf",
+    "striprtf",
+    "extract_msg",
+    *collect_submodules("py7zr"),
+    "chardet",
+    "html5lib",
 ]
 
 # ── 打包配置 ─────────────────────────────────────────────
