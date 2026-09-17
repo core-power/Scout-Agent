@@ -2358,33 +2358,22 @@ class AgentBubble {
     }
 
     collapseReasoning() {
-        // 同一回合并入唯一的"推演过程"折叠行：后续思考追加到同一块内
-        // （带 ×N 段计数），避免长任务产生几十行刷屏（2026-09-17 用户反馈）。
+        // 每步思考独立塌缩在原位置（对应工具卡之前），思维链保持步骤对应；
+        // 刷屏问题由外层 activity-wrap 解决：回合结束后整体收起为一行摘要。
+        // （2026-09-17 修正：此前全部并入第一条，思维链无法按步骤对应。）
         if (!this._reasoningBlock) return;
         const text = (this._reasoningText || '').trim();
         const block = this._reasoningBlock;
         this._reasoningBlock = null;
         if (!text) { block.remove(); return; }
-        const existing = this.processEl.querySelector('details[data-reasoning]');
-        if (existing) {
-            block.remove();
-            const body = existing.querySelector('.reasoning-body');
-            if (body) body.insertAdjacentHTML('beforeend',
-                '<div class="my-1.5 border-t border-white/5"></div>' + safeMarked(text));
-            const n = (parseInt(existing.dataset.segCount || '1', 10) + 1);
-            existing.dataset.segCount = String(n);
-            const cnt = existing.querySelector('.reasoning-count');
-            if (cnt) cnt.textContent = ` ×${n}`;
-            return;
-        }
+        const n = this.processEl.querySelectorAll('details[data-reasoning]').length + 1;
         const d = document.createElement('details');
         d.className = 'thinking-block text-xs text-slate-400 leading-relaxed mb-0.5';
         d.dataset.done = '1';
         d.dataset.reasoning = '1';
-        d.dataset.segCount = '1';
         d.innerHTML =
-            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程<span class="reasoning-count"></span></summary>' +
-            '<div class="reasoning-body pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
+            `<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演 · 第 ${n} 段</summary>` +
+            '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
         block.replaceWith(d);
     }
 
