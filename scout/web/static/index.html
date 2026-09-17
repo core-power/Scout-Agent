@@ -2281,6 +2281,21 @@ class AgentBubble {
         scrollToBottom(true);
     }
 
+    collapseReasoning() {
+        // Cow 风格（2026-09-17）：流式思考结束后塌缩为一行"💡 思考完毕"，
+        // 全文收进 <details>，点开可回看。
+        if (!this._reasoningBlock) return;
+        const text = (this._reasoningText || '').trim();
+        if (!text) { this._reasoningBlock.remove(); this._reasoningBlock = null; return; }
+        const d = document.createElement('details');
+        d.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
+        d.innerHTML =
+            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💡 思考完毕（点击展开）</summary>' +
+            '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
+        this._reasoningBlock.replaceWith(d);
+        this._reasoningBlock = null;
+    }
+
     // 按 call_id 查找当前气泡内的工具卡片（多 tool_calls 并行时精确归属 tool 输出）
     findToolCardByCallId(callId) {
         if (!callId || !this.el) return null;
@@ -2318,11 +2333,13 @@ class AgentBubble {
             return c;
         };
         args = cleanArgs(args);
-        // 把回复区已显示的文本移到思考区（LLM 工具调用前的推理文本）
+        // 把回复区已显示的文本移到思考区（LLM 工具调用前的推理文本）——折叠为一行
         if (this.text) {
-            const thinkBlock = document.createElement('div');
-            thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed pl-3 border-l-2 border-scout-500/30';
-            thinkBlock.innerHTML = this.text;
+            const thinkBlock = document.createElement('details');
+            thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
+            thinkBlock.innerHTML =
+                '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💡 思考完毕（点击展开）</summary>' +
+                '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + this.text + '</div>';
             this.processEl.appendChild(thinkBlock);
             // 清空回复区
             this.text = '';
@@ -2797,6 +2814,7 @@ class AgentBubble {
 
     appendText(delta) {
         this._ensure();
+        this.collapseReasoning();
         this.text += delta;
         // 实时 Markdown 渲染 — 处理未闭合的代码块
         let html = this.text;
@@ -2811,6 +2829,7 @@ class AgentBubble {
 
     finalize(steps, usage) {
         this.hideThinking();
+        this.collapseReasoning();
         if (this.text) {
             this.contentEl.innerHTML = safeMarked(this.text);
             postProcessMarkdown(this.contentEl);
@@ -3730,7 +3749,7 @@ async function loadSession(sid, opts = {}) {
                     const thinkBlock = document.createElement('details');
                     thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
                     thinkBlock.innerHTML =
-                        '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💭 思考过程（点击展开）</summary>' +
+                        '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💡 思考完毕（点击展开）</summary>' +
                         '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(reasoningText) + '</div>';
                     agentBubble.processEl.appendChild(thinkBlock);
                 }
@@ -3743,7 +3762,7 @@ async function loadSession(sid, opts = {}) {
                         const thinkBlock = document.createElement('details');
                         thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
                         thinkBlock.innerHTML =
-                            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💭 思考过程（点击展开）</summary>' +
+                            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💡 思考完毕（点击展开）</summary>' +
                             '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(m.content) + '</div>';
                         agentBubble.processEl.appendChild(thinkBlock);
                     }
