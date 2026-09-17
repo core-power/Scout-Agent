@@ -3644,26 +3644,9 @@ async function loadSession(sid, opts = {}) {
         document.getElementById('welcome-screen').classList.add('hidden');
         document.getElementById('messages').classList.remove('hidden');
         document.getElementById('messages').innerHTML = '';
-        // ★ 2026-09-15：展示被压缩摘要替换掉的早期原文 —— 此前这些消息从界面上
-        // 直接"凭空消失"，用户以为丢数据（数据其实一直在 compressed_history 里）。
-        try {
-            const _ch = Array.isArray(d.compressed_history) ? d.compressed_history : [];
-            if (_ch.length) {
-                const _esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
-                const _rows = _ch.map(function (m) {
-                    const _who = (m.role === 'user') ? '你' : (m.role === 'assistant' ? 'Scout' : (m.role || ''));
-                    return '<div class="px-3 py-1.5 border-l-2 border-slate-300 dark:border-white/10 mb-1.5">' +
-                        '<div class="text-[10px] text-slate-400 mb-0.5">' + _who + '</div>' +
-                        '<div class="text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap break-words">' +
-                        _esc((m.content || '').slice(0, 1500)) + '</div></div>';
-                }).join('');
-                document.getElementById('messages').insertAdjacentHTML('beforeend',
-                    '<details class="mx-auto max-w-3xl mb-3 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5">' +
-                    '<summary class="cursor-pointer select-none px-3 py-2 text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">已压缩 ' +
-                    _ch.length + ' 条早期对话为摘要（点击查看原文）</summary>' +
-                    '<div class="px-2 pb-2">' + _rows + '</div></details>');
-            }
-        } catch (_) { /* 展示失败不影响主流程 */ }
+        // 2026-09-17：不再渲染"已压缩 N 条早期对话"横幅（用户要求）。
+        // 早期原文仍完整保存在 d.compressed_history / session.extra.compressed_history，
+        // 如需恢复展示，回退本次提交即可。
         msgCount = 0;
         msgSeqCounter = 0;
         agentBubble.reset();
