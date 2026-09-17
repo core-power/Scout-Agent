@@ -540,6 +540,33 @@ html.dark .composer-model:hover { background: rgba(255, 255, 255, .08); color: #
         }
         .agent-process details.thinking-block > summary { display: flex; align-items: center; }
         .agent-process .reasoning-count { opacity: .6; }
+        /* 折叠摘要行（Codex/WorkBuddy 式） */
+        .activity-wrap {
+            background: transparent !important;
+            border: none !important;
+            margin-bottom: 6px !important;
+        }
+        .activity-wrap > summary {
+            padding: 2px 6px !important;
+            font-size: 11px !important;
+            line-height: 1.5 !important;
+            color: rgb(148 163 184) !important;
+            cursor: pointer;
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        html:not(.dark) .activity-wrap > summary { color: rgb(100 116 139) !important; }
+        .activity-wrap > summary::-webkit-details-marker { display: none; }
+        .activity-wrap > summary::before {
+            content: '▸';
+            opacity: .5;
+            transition: transform .15s ease;
+        }
+        .activity-wrap[open] > summary::before { transform: rotate(90deg); opacity: .8; }
+        .activity-wrap > summary:hover { background: rgb(148 163 184 / .08) !important; border-radius: 6px; }
+        .activity-wrap[open] > summary { margin-bottom: 2px; }
     </style>
     <script src="/static/i18n.js"></script>
     <script>
@@ -2155,6 +2182,7 @@ class AgentBubble {
 
     reset() {
         this.el = null;
+        this._turnStart = 0;
         this.processEl = null;   // 思考/步骤/工具区
         this.contentEl = null;   // 文本回复区
         this.text = '';
@@ -2198,6 +2226,7 @@ class AgentBubble {
 
     _ensure() {
         if (this.el) return;
+        if (!this._turnStart) this._turnStart = Date.now();
         document.getElementById('welcome-screen').classList.add('hidden');
         document.getElementById('messages').classList.remove('hidden');
         const time = new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
@@ -2900,6 +2929,16 @@ class AgentBubble {
     finalize(steps, usage) {
         this.hideThinking();
         this.collapseReasoning();
+        // ── Codex/WorkBuddy 式收尾：过程区自动折叠为一行摘要（2026-09-17）──
+        if (this.processEl && this.processEl.children.length > 0
+            && !this.processEl.closest('.activity-wrap')) {
+            const dur = this._turnStart ? ` · ${((Date.now() - this._turnStart) / 1000).toFixed(0)}s` : '';
+            const wrap = document.createElement('details');
+            wrap.className = 'activity-wrap';
+            wrap.innerHTML = `<summary>◈ 已完成 ${steps || this.toolCount || 0} 步推演 · ${this.toolCount} 次工具调用${dur}</summary>`;
+            this.processEl.parentNode.insertBefore(wrap, this.processEl);
+            wrap.appendChild(this.processEl);
+        }
         if (this.text) {
             this.contentEl.innerHTML = safeMarked(this.text);
             postProcessMarkdown(this.contentEl);
@@ -3924,6 +3963,18 @@ async function loadSession(sid, opts = {}) {
                 '#messages .agent-process details[data-tool-name]:not([data-done]), ' +
                 '#messages .agent-process details.thinking-block:not([data-done])'
             ).forEach(el => { el.dataset.done = '1'; });
+        } catch (_) { /* 非致命 */ }
+        // 历史过程区同样折叠为一行摘要
+        try {
+            document.querySelectorAll('#messages .agent-process').forEach(p => {
+                if (!p.children.length || p.closest('.activity-wrap')) return;
+                const n = p.querySelectorAll('details[data-tool-name]').length;
+                const wrap = document.createElement('details');
+                wrap.className = 'activity-wrap';
+                wrap.innerHTML = `<summary>◈ ${n ? n + ' 次工具调用' : '过程记录'}</summary>`;
+                p.parentNode.insertBefore(wrap, p);
+                wrap.appendChild(p);
+            });
         } catch (_) { /* 非致命 */ }
         // 恢复未能按 call_id 归位的文件（旧数据无 call_id / 对应工具卡片缺失），
         // 兜底挂到最后一个气泡
