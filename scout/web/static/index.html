@@ -2597,16 +2597,8 @@ class AgentBubble {
             svg.classList.remove('animate-spin');
             svg.classList.add('text-scout-400');
             svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>';
-            const _st = Number(targetEl.dataset.startTs || 0);
-            const _dur = _st ? ` · ${((Date.now() - _st) / 1000).toFixed(1)}s` : '';
-            status.textContent = message + _dur;
+            status.textContent = message;
             status.className = 'tool-status text-emerald-400 ml-1';
-            if (r) {
-                const outDiv = document.createElement('div');
-                let outputHtml = `<span class="text-slate-600">output</span><pre class="text-slate-400 whitespace-pre-wrap break-all mt-0.5">${escapeHtml(message)}</pre>`;
-                outDiv.innerHTML = outputHtml;
-                r.appendChild(outDiv);
-            }
             
             // 工具完成（图片/文件另由 file 事件单独渲染，不再重复收集）
         } else if (stage === 'error') {
@@ -2614,15 +2606,8 @@ class AgentBubble {
             svg.classList.remove('animate-spin');
             svg.classList.add('text-red-400');
             svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>';
-            const _ste = Number(targetEl.dataset.startTs || 0);
-            const _dure = _ste ? ` · ${((Date.now() - _ste) / 1000).toFixed(1)}s` : '';
-            status.textContent = message + _dure;
+            status.textContent = message;
             status.className = 'tool-status text-red-400 ml-1';
-            if (r) {
-                const outDiv = document.createElement('div');
-                outDiv.innerHTML = `<span class="text-slate-600">output</span><pre class="text-red-400 whitespace-pre-wrap break-all mt-0.5">${escapeHtml(message)}</pre>`;
-                r.appendChild(outDiv);
-            }
         } else if (stage === 'output') {
             // 工具实际输出内容
             if (r) {
