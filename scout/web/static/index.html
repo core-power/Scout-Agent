@@ -2374,6 +2374,7 @@ class AgentBubble {
         if (!text) { this._reasoningBlock.remove(); this._reasoningBlock = null; return; }
         const d = document.createElement('details');
         d.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
+        d.dataset.done = '1';
         d.innerHTML =
             '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
             '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
@@ -2603,6 +2604,7 @@ class AgentBubble {
             
             // 工具完成（图片/文件另由 file 事件单独渲染，不再重复收集）
         } else if (stage === 'error') {
+            targetEl.dataset.done = '1';
             svg.classList.remove('animate-spin');
             svg.classList.add('text-red-400');
             svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>';
