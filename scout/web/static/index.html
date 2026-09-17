@@ -531,6 +531,53 @@ html.dark .composer-model:hover { background: rgba(255, 255, 255, .08); color: #
         /* 推演文本呼吸 */
         @keyframes scoutBreathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
         .agent-process .breathe { animation: scoutBreathe 1.6s ease-in-out infinite; }
+        /* ── v2 增强：雷达网格底纹 + 航迹流光 + 节点亮核 + 箭头指示 ── */
+        .agent-process {
+            background:
+                linear-gradient(90deg, color-mix(in srgb, #38bdf8 8%, transparent), transparent 45%),
+                repeating-linear-gradient(0deg, transparent 0 13px, color-mix(in srgb, #38bdf8 3%, transparent) 13px 14px),
+                repeating-linear-gradient(90deg, transparent 0 25px, color-mix(in srgb, #38bdf8 3%, transparent) 25px 26px),
+                color-mix(in srgb, currentColor 2%, transparent) !important;
+            overflow: hidden;
+        }
+        .agent-process::before {
+            background:
+                linear-gradient(180deg, transparent 0%, color-mix(in srgb, #38bdf8 90%, transparent) 40%, transparent 90%) no-repeat,
+                color-mix(in srgb, #38bdf8 25%, transparent);
+            background-size: 100% 46px, 100% 100%;
+            animation: scoutFlow 2.2s linear infinite;
+        }
+        @keyframes scoutFlow {
+            0% { background-position: 0 -46px, 0 0; }
+            100% { background-position: 0 calc(100% + 46px), 0 0; }
+        }
+        /* 进行中节点中心亮核 */
+        .agent-process > details[data-tool-name]::after,
+        .agent-process > details.thinking-block::after,
+        .agent-process > div.thinking-block::after {
+            content: '';
+            position: absolute;
+            left: -18px; top: 7px;
+            width: 4px; height: 4px;
+            border-radius: 50%;
+            background: #38bdf8;
+            box-shadow: 0 0 5px #38bdf8;
+        }
+        .agent-process > details[data-done]::after { display: none; }
+        /* 展开指示箭头（无文字） */
+        .agent-process details[data-tool-name] > summary::after,
+        .agent-process details.thinking-block > summary::after {
+            content: '▸';
+            margin-left: auto;
+            opacity: .55;
+            transition: transform .15s ease;
+        }
+        .agent-process details[data-tool-name][open] > summary::after,
+        .agent-process details.thinking-block[open] > summary::after {
+            transform: rotate(90deg);
+            opacity: .85;
+        }
+        .agent-process details.thinking-block > summary { display: flex; align-items: center; }
     </style>
     <script src="/static/i18n.js"></script>
     <script>
@@ -2328,7 +2375,7 @@ class AgentBubble {
         const d = document.createElement('details');
         d.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
         d.innerHTML =
-            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演完毕（点击展开）</summary>' +
+            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
             '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
         this._reasoningBlock.replaceWith(d);
         this._reasoningBlock = null;
@@ -2376,7 +2423,7 @@ class AgentBubble {
             const thinkBlock = document.createElement('details');
             thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
             thinkBlock.innerHTML =
-                '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演完毕（点击展开）</summary>' +
+                '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
                 '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + this.text + '</div>';
             this.processEl.appendChild(thinkBlock);
             // 清空回复区
@@ -3793,7 +3840,7 @@ async function loadSession(sid, opts = {}) {
                     const thinkBlock = document.createElement('details');
                     thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
                     thinkBlock.innerHTML =
-                        '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演完毕（点击展开）</summary>' +
+                        '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
                         '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(reasoningText) + '</div>';
                     agentBubble.processEl.appendChild(thinkBlock);
                 }
@@ -3806,7 +3853,7 @@ async function loadSession(sid, opts = {}) {
                         const thinkBlock = document.createElement('details');
                         thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
                         thinkBlock.innerHTML =
-                            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演完毕（点击展开）</summary>' +
+                            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
                             '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(m.content) + '</div>';
                         agentBubble.processEl.appendChild(thinkBlock);
                     }
