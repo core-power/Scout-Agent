@@ -2350,7 +2350,7 @@ class AgentBubble {
         if (fenceCount % 2 === 1) html += '\n```';
         if (!this._reasoningBlock) {
             this._reasoningBlock = document.createElement('div');
-            this._reasoningBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed pl-3 border-l-2 border-scout-500/30';
+            this._reasoningBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed';
             this.processEl.appendChild(this._reasoningBlock);
         }
         this._reasoningBlock.innerHTML = safeMarked(html);
@@ -2373,8 +2373,8 @@ class AgentBubble {
             d.dataset.done = '1';
             d.dataset.reasoning = '1';
             d.innerHTML =
-                `<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演 · 第 ${n} 段 · ${(text.length / 1000).toFixed(1)}k 字</summary>` +
-                '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
+                `<summary class="cursor-pointer select-none py-0.5 text-slate-400 hover:text-slate-200">🧭 推演 · 第 ${n} 段 · ${(text.length / 1000).toFixed(1)}k 字</summary>` +
+                '<div class="pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(text) + '</div>';
             block.replaceWith(d);
             return;
         }
@@ -2387,8 +2387,8 @@ class AgentBubble {
             rec.dataset.reasoningFrag = '1';
             rec.dataset.segCount = '0';
             rec.innerHTML =
-                '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">💭 推演记录<span class="reasoning-count"></span></summary>' +
-                '<div class="reasoning-body pl-3 pr-2 pb-1 whitespace-pre-wrap break-words"></div>';
+                '<summary class="cursor-pointer select-none py-0.5 text-slate-400 hover:text-slate-200">💭 推演记录<span class="reasoning-count"></span></summary>' +
+                '<div class="reasoning-body pr-2 pb-1 whitespace-pre-wrap break-words"></div>';
             block.replaceWith(rec);
         } else {
             block.remove();
@@ -2442,10 +2442,10 @@ class AgentBubble {
         // 把回复区已显示的文本移到思考区（LLM 工具调用前的推理文本）——折叠为一行
         if (this.text) {
             const thinkBlock = document.createElement('details');
-            thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
+            thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed mb-1';
             thinkBlock.innerHTML =
-                '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
-                '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + this.text + '</div>';
+                '<summary class="cursor-pointer select-none py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
+                '<div class="pr-2 pb-1 whitespace-pre-wrap break-words">' + this.text + '</div>';
             this.processEl.appendChild(thinkBlock);
             // 清空回复区
             this.text = '';
@@ -2979,7 +2979,7 @@ class AgentBubble {
         this._ensure();
         // 创建反思指示器（小标签形式，不干扰主内容）
         const reflectionEl = document.createElement('div');
-        reflectionEl.className = 'reflection-hint text-xs text-amber-400/70 italic mt-2 pl-3 border-l-2 border-amber-400/30';
+        reflectionEl.className = 'reflection-hint text-xs text-amber-400/70 italic mt-2';
         reflectionEl.innerHTML = `<span class="text-amber-500">💭</span> ${escapeHtml(hint)}`;
         // 插入到内容区后面
         if (this.processEl) {
@@ -3860,10 +3860,10 @@ async function loadSession(sid, opts = {}) {
                     agentBubble._ensure();
                     agentBubble.hideThinking();
                     const thinkBlock = document.createElement('details');
-                    thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
+                    thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed mb-1';
                     thinkBlock.innerHTML =
-                        '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
-                        '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(reasoningText) + '</div>';
+                        '<summary class="cursor-pointer select-none py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
+                        '<div class="pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(reasoningText) + '</div>';
                     agentBubble.processEl.appendChild(thinkBlock);
                 }
                 if (hasToolCalls) {
@@ -3873,10 +3873,10 @@ async function loadSession(sid, opts = {}) {
                     // 兼容旧数据：旧版本思考存在 content 里（且无 reasoning 字段时）——同样折叠
                     if (!reasoningText && contentText) {
                         const thinkBlock = document.createElement('details');
-                        thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed border-l-2 border-scout-500/30 mb-1';
+                        thinkBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed mb-1';
                         thinkBlock.innerHTML =
-                            '<summary class="cursor-pointer select-none pl-3 py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
-                            '<div class="pl-3 pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(m.content) + '</div>';
+                            '<summary class="cursor-pointer select-none py-0.5 text-slate-400 hover:text-slate-200">🧭 推演过程</summary>' +
+                            '<div class="pr-2 pb-1 whitespace-pre-wrap break-words">' + safeMarked(m.content) + '</div>';
                         agentBubble.processEl.appendChild(thinkBlock);
                     }
                     for (const tc of toolCalls) {
@@ -3912,7 +3912,7 @@ async function loadSession(sid, opts = {}) {
                 if (!toolCard) {
                     // 兜底：无对应工具卡片（历史数据缺失/中断），渲染为纯输出块，避免创建空 input 卡片污染 UI
                     const outBlock = document.createElement('div');
-                    outBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed pl-3 border-l-2 border-amber-500/30';
+                    outBlock.className = 'thinking-block text-xs text-slate-400 leading-relaxed';
                     outBlock.innerHTML = `<div class="text-slate-600">${escapeHtml(m.metadata?.tool_name || 'tool')} 输出</div><pre class="text-slate-400 whitespace-pre-wrap break-all mt-0.5">${escapeHtml((m.content || '').slice(0,2000))}</pre>`;
                     agentBubble.processEl.appendChild(outBlock);
                 } else {
