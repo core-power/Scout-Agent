@@ -32,7 +32,7 @@ from scout.core.types import (
     ToolCall,
 )
 
-from scout.engine.budget import IterationBudget
+from scout.engine.budget import AdaptiveBudget, IterationBudget, make_budget
 
 from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 
@@ -92,6 +92,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         # 安全层
         enable_security: bool = True,
         auto_approve: bool = False,
+        permission_mode: str = "ask",  # ask / auto / strict（输入框权限开关，2026-09-21）
         # 自修复
         enable_self_heal: bool = True,
         max_heal_retries: int = 2,
@@ -370,6 +371,14 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
         self.max_turns = max_turns
 
+        # ── 2026-09-20 自适应步数预算 ──
+        # 旧模型：max_turns 一把梭（用户被逼到 500），简单任务也有 500 步空转空间，
+        # 真长任务撞到硬墙又被腰斩。改为：小基准起步 + 有进展续期 + 无进展早停。
+        # 关法：SCOUT_ADAPTIVE_BUDGET=0（退回固定 max_turns，行为与旧版一致）。
+        self.adaptive_budget = str(
+            os.environ.get("SCOUT_ADAPTIVE_BUDGET", "1")
+        ).strip().lower() not in ("0", "false", "no", "off")
+
         self.max_loop_seconds = max(1, int(max_loop_seconds or 3600))
 
         # ── 2026-09-06 回合输入 token 熔断阈值 ──
@@ -389,6 +398,15 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         # 可用环境变量 SCOUT_MILESTONE_EVERY 调整。
         self._milestone_every = int(os.environ.get("SCOUT_MILESTONE_EVERY", "15"))
 
+        # ★ 2026-09-19 压缩冷却：两次压缩之间至少间隔 N 步（可用
+        # SCOUT_COMPRESS_COOLDOWN 调整，0 = 不冷却）。
+        # 背景：压缩本身是一次**完整 LLM 摘要调用**。实测会话 4126a066（454 步）
+        # 触发了 215 次压缩——视图里堆积的孤儿摘要让 needs_compression 恒为真，
+        # 于是「每 2 步压一次」，光摘要调用就吃掉一大块预算。任何判据抖动都可能
+        # 复现这种高频压缩，冷却是最省事的兜底闸。
+        # 例外：真实 token 已超预算时不冷却（该压就得压），见 _context_govern。
+        self._compress_cooldown = int(os.environ.get("SCOUT_COMPRESS_COOLDOWN", "3"))
+        self._last_compress_step: dict[str, int] = {}
 
         self.temperature = temperature
 
@@ -469,6 +487,17 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         else:
             self.context_mgr = None
 
+        # ★ 2026-09-19 省 token 开关（都是「体验功能 / 后台沉淀」，不是主链路）
+        #   SCOUT_MEMORY_EXTRACT_EVERY : 记忆抽取每几个回合跑一次（默认 3，1=每回合）
+        #   SCOUT_SUGGEST_ENABLED      : 追问建议（每回合 1 次 LLM 调用，0=关闭）
+        try:
+            self._memory_extract_every = max(
+                1, int(os.getenv("SCOUT_MEMORY_EXTRACT_EVERY", "1") or 1)
+            )
+        except ValueError:
+            self._memory_extract_every = 3
+        self._suggest_enabled = os.getenv("SCOUT_SUGGEST_ENABLED", "1") not in ("0", "false", "no")
+
         # 会话持久化
 
         self.enable_persistence = enable_persistence
@@ -540,7 +569,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         if enable_security:
             from scout.security.policy import SecurityManager
 
-            self.security = SecurityManager(auto_approve=auto_approve)
+            self.security = SecurityManager(auto_approve=auto_approve, permission_mode=permission_mode)
 
         else:
             self.security = None
@@ -916,11 +945,74 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
     def _prepare_turn_state(self, session: Session) -> IterationBudget:
         """公共前置：本轮 budget 初始化 + 工具统计计数器重置（run/stream 共用）."""
 
-        budget = IterationBudget(max_turns=self.max_turns)
+        budget = make_budget(self.max_turns, adaptive=self.adaptive_budget)
+        self._budget_hint_stage = 0  # 2026-09-20：自适应预算提示阶段（0/1/2）
         self._tool_stats[session.id] = {
             "total": 0, "ok": 0, "fail": 0, "tools": {}, "fail_tools": {}, "snippets": [],
         }
         return budget
+
+    def _budget_step_hint(self, budget: IterationBudget) -> str | None:
+        """自适应预算的进度提示（2026-09-20）：把步数决策权交给模型.
+
+        旧模型里模型对步数一无所知——它不知道自己跑了 24 步还是 90 步，
+        于是"该收尾了"只能靠外部硬墙来判。这里在关键节点注入一次提示，
+        让模型自己判断"任务是否已完成 / 还需几步 / 是否在原地打转"。
+
+        两个时机各注入一次（用 _budget_hint_stage 防重复，避免每步都塞消息）：
+        1) 首次续期后：告知已用步数、已续期，请评估是否接近完成；
+        2) 逼近 hard_max：只剩最后几步，请基于已有成果收尾。
+        """
+        if not isinstance(budget, AdaptiveBudget):
+            return None
+        stage = getattr(self, "_budget_hint_stage", 0)
+        remaining = budget.max_turns - budget.current
+
+        if stage < 1 and budget.granted >= 1 and budget.max_turns < budget.hard_max:
+            self._budget_hint_stage = 1
+            return (
+                f"【步数提示】本轮已执行 {budget.current} 步（预算已按需续期至 "
+                f"{budget.max_turns} 步，硬上限 {budget.hard_max}）。"
+                "请评估当前进度：若目标已达成，直接给出最终成果不要再调用工具；"
+                "若仍有明确且必要的剩余步骤，简要说明还差什么再继续；"
+                "若发现自己在重复类似操作而没有新信息，立即换路线或如实汇报卡点。"
+            )
+        if stage < 2 and remaining <= 5:
+            self._budget_hint_stage = 2
+            return (
+                f"【步数提示·最后 {max(1, remaining)} 步】本轮步数即将用尽"
+                f"（已执行 {budget.current} / {budget.max_turns}）。"
+                "立即停止开启新的探索，直接基于已获取的信息输出最终成果或当前进度；"
+                "未完成的剩余部分请明确列出，用户回复「继续」可在新回合接着做。"
+            )
+        return None
+
+    def _step_progress_calls(
+        self, session: Session, mark: int
+    ) -> list[tuple[str, bool, str]]:
+        """取本步新增的 TOOL 消息作为进展信号（供 AdaptiveBudget.observe）.
+
+        mark: 本步工具执行前的 ``len(session.messages)``。必须在上下文治理
+        （_context_govern 会剪枝删旧消息）**之前**取增量，否则索引错位。
+        """
+        out: list[tuple[str, bool, str]] = []
+        try:
+            from scout.core.types import Role as _Role
+
+            for m in session.messages[mark:]:
+                if getattr(m, "role", None) != _Role.TOOL:
+                    continue
+                md = getattr(m, "metadata", None) or {}
+                out.append(
+                    (
+                        str(md.get("tool_name", "") or ""),
+                        bool(md.get("success", False)),
+                        (getattr(m, "content", "") or "")[:300],
+                    )
+                )
+        except Exception:  # noqa: BLE001 - 观测失败不应影响主流程
+            return out
+        return out
 
     async def resume_from_checkpoint(self, session_id: str) -> dict[str, Any] | None:
         """从 checkpoint 恢复执行.
@@ -1131,7 +1223,9 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
             budget.tick()
 
-            await self.callbacks.on_step(budget.current, budget.max_turns)
+            await self.callbacks.on_step(budget.current, getattr(
+                budget, "display_max", budget.max_turns
+            ))
 
             # 1. Think: 构建 API 消息并调用 LLM
 
@@ -1297,6 +1391,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                     else:
                         _write_tcs.append((_i, _tc))
 
+                _msg_mark = len(session.messages)  # 2026-09-20：进展观测基线（剪枝前）
+
                 if _read_tcs:
                     await asyncio.gather(
                         *[
@@ -1307,6 +1403,19 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
                 for idx, tc in sorted(_write_tcs, key=lambda x: x[0]):
                     await self._execute_single_tool(session, tc, f"call_{budget.current}_{idx}")
+
+                # ── 2026-09-20 自适应预算观测：有进展→按需续期；连续无进展→判死循环 ──
+                if isinstance(budget, AdaptiveBudget):
+                    budget.observe(self._step_progress_calls(session, _msg_mark))
+                    _bh = self._budget_step_hint(budget)
+                    if _bh:
+                        session.messages.append(
+                            Message(
+                                role=Role.SYSTEM,
+                                content=_bh,
+                                metadata={"type": "budget_hint"},
+                            )
+                        )
 
                 # ── 防空转看门狗（2026-09-05）：同参重试/零进展 → 注入中断提示 ──
                 _wd_hint = self._watchdog_hint(session.id)
@@ -1356,7 +1465,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                             pending_tools=[],
                             completed_tools=_ckpt_tools,
                             budget_used=budget.current,
-                            budget_max=budget.max_turns,
+                            budget_max=getattr(budget, "display_max", budget.max_turns),
                             context_summary=f"已执行 {len(_ckpt_tools)} 个工具调用",
                         )
                     except Exception as _ckpt_err:
@@ -1497,6 +1606,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         _reason = finish_reason(
             _fused_by_token, _wd_trips,
             time.monotonic() > _turn_deadline, self._cancelled,
+            stalled=getattr(budget, "stalled", False),
         )
 
         budget_msg = self._build_budget_exhausted_msg(session, budget.current, reason=_reason)
@@ -1524,9 +1634,12 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         elif forced:
             final_text = (
                 forced
-                + "\n\n---\n\n⚠️ 本轮已达到步数上限（"
-                + str(self.max_turns)
-                + " 步），以上成果已基于本轮获取的信息生成。如需继续完善可回复「继续」。"
+                + "\n\n---\n\n⚠️ 本轮已执行 "
+                + str(budget.current)
+                + " 步后收尾（"
+                + ("检测到连续无进展，判定为原地打转" if _reason == "stalled"
+                   else "达到步数上限 " + str(getattr(budget, "display_max", self.max_turns)) + " 步")
+                + "），以上成果已基于本轮获取的信息生成。如需继续完善可回复「继续」。"
             )
         else:
             final_text = budget_msg
@@ -1980,6 +2093,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
                 # 见策略④：read 工具 gather 并发）。
 
+                _msg_mark = len(session.messages)  # 2026-09-20：进展观测基线（剪枝前）
+
                 for idx, tc in enumerate(collected_tool_calls):
                     call_id = f"call_{budget.current}_{idx}"
 
@@ -2176,7 +2291,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                                 pending_tools=[],
                                 completed_tools=completed_tools,
                                 budget_used=budget.current,
-                                budget_max=budget.max_turns,
+                                budget_max=getattr(budget, "display_max", budget.max_turns),
                                 context_summary=f"已执行 {len(completed_tools)} 个工具调用",
                             )
 
@@ -2187,6 +2302,19 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                     # 让 WebSocket 排空 tool_progress(done) 事件
 
                     yield Delta()
+
+                # ── 2026-09-20 自适应预算观测：有进展→按需续期；连续无进展→判死循环 ──
+                if isinstance(budget, AdaptiveBudget):
+                    budget.observe(self._step_progress_calls(session, _msg_mark))
+                    _bh = self._budget_step_hint(budget)
+                    if _bh:
+                        session.messages.append(
+                            Message(
+                                role=Role.SYSTEM,
+                                content=_bh,
+                                metadata={"type": "budget_hint"},
+                            )
+                        )
 
                 # ── 防空转看门狗（2026-09-05，与 _run_react 一致）──
                 # 回合内工具全失败 ≥8 次，或最近 4 次同工具同失败文本 ≥3 → 注入中断提示；
@@ -2299,7 +2427,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
                 # 生成追问建议（best-effort，失败绝不影响主回复）
 
-                if not self._cancelled and final_text and len(final_text.strip()) >= 20:
+                if (self._suggest_enabled and not self._cancelled
+                        and final_text and len(final_text.strip()) >= 20):
                     try:
                         suggestions = await self._generate_suggestions(
                             user_message, final_text, session.id
@@ -2333,6 +2462,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         _reason = finish_reason(
             _fused_by_token, _wd_trips,
             time.monotonic() > _turn_deadline, self._cancelled,
+            stalled=getattr(budget, "stalled", False),
         )
 
         budget_msg = "\n\n" + self._build_budget_exhausted_msg(session, budget.current, reason=_reason)
@@ -2363,9 +2493,12 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         elif forced:
             final_text = (
                 forced
-                + "\n\n---\n\n⚠️ 本轮已达到步数上限（"
-                + str(self.max_turns)
-                + " 步），以上成果已基于本轮获取的信息生成。如需继续完善可回复「继续」。"
+                + "\n\n---\n\n⚠️ 本轮已执行 "
+                + str(budget.current)
+                + " 步后收尾（"
+                + ("检测到连续无进展，判定为原地打转" if _reason == "stalled"
+                   else "达到步数上限 " + str(getattr(budget, "display_max", self.max_turns)) + " 步")
+                + "），以上成果已基于本轮获取的信息生成。如需继续完善可回复「继续」。"
             )
         else:
             final_text = budget_msg
@@ -2531,9 +2664,32 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
         可选能力：仅在注入 ``memory_extractor`` 时生效；任何失败只记录日志，
         绝不影响主流程返回。
+
+        ★ 2026-09-19 节流（默认关闭）：抽取是一次**完整 LLM 调用**（prompt 数百
+        token、completion 常见 500~2000 token），挂在**每个回合**的收尾路径上。
+        实测 usage.db 里 987/4917 次调用是这类小 prompt 调用，合计 87 万 token
+        （其中记忆抽取典型区间约占 45 万）。
+        但它同时承担「会话结束必沉淀用户偏好」的语义（单测
+        test_agent_extracts_memory_on_conversation_end 即覆盖），默认降频会丢掉
+        单轮会话的记忆 → **默认 1（保持原行为）**，需要省 token 时设
+        SCOUT_MEMORY_EXTRACT_EVERY=3 之类（每 3 回合抽一次）。
         """
         if not self.memory_extractor or not session or not session.messages:
             return
+
+        _turn_gap = self._memory_extract_every
+        if _turn_gap > 1:
+            try:
+                extra = getattr(session, "extra", None)
+                if not isinstance(extra, dict):
+                    extra = {}
+                    session.extra = extra
+                _seen = int(extra.get("_mem_extract_turns", 0) or 0) + 1
+                extra["_mem_extract_turns"] = _seen
+                if _seen % _turn_gap != 0:
+                    return
+            except Exception:  # noqa: BLE001 - 计数失败就按原行为抽取
+                pass
 
         # ★ 2026-09-16：本方法现在运行在后台任务里，可能与本会话的下一回合并发。
         # 先对消息取浅拷贝快照，避免迭代过程中消息列表被并发改写。
@@ -2843,6 +2999,30 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
             return
         cm = self.context_mgr
 
+        # 0.5) ★ 2026-09-19：把 API 回传的真实 prompt token 回喂给治理器。
+        #    本地 estimate_tokens 对代码/路径/JSON 类内容低估约 2 倍，实测出现
+        #    「真实 48k、估算仍判未超 19.6k」→ 整个长回合从不压缩。真实值来自
+        #    usage 表最近一次调用，是唯一可信标尺（只在开启 token 预算时查询）。
+        if cm.max_tokens > 0:
+            try:
+                from scout.llm.tracker import token_tracker
+
+                # 取「最近 5 次调用的最大值」而非最近一次：一个回合里混杂着
+                # 记忆抽取/标题生成等小 prompt 辅助调用（实测最小 228 token），
+                # 若恰好取到它们会把真实上下文规模严重低估、治理再次失效。
+                # 主循环调用的 prompt 恒为同回合最大值，取 max 即稳定命中它。
+                _rows = token_tracker._query(
+                    "SELECT MAX(prompt_tokens) AS p FROM ("
+                    "  SELECT prompt_tokens FROM llm_usage WHERE session_id = ? "
+                    "  ORDER BY id DESC LIMIT 5)",
+                    (session.id,),
+                )
+                _real = int((_rows[0] or {}).get("p") or 0) if _rows else 0
+                if _real > 0:
+                    cm.observe_real_tokens(session.id, _real)
+            except Exception:
+                pass
+
         # 1) 剪枝 —— ★ 2026-09-14（视图分离）：不再物理删除真相消息，改为
         #    通过「视图差异」得出本轮移出视图的工具消息（供归档 + 运行笔记）。
         try:
@@ -2874,10 +3054,28 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         except Exception:
             logging.getLogger(__name__).debug("运行笔记更新失败", exc_info=True)
 
+        # ★ 2026-09-19 压缩冷却判据：
+        #   - 实测 prompt 确已超预算（硬信号）→ 不受冷却限制，该压就压；
+        #   - 其余（条数触发 / 估算触发）→ 距上次压缩不足 cooldown 步则跳过，
+        #     避免判据抖动造成「每步一次摘要调用」（实测 454 步压了 215 次）。
+        _real_now = cm.real_prompt_tokens(session.id)
+        _hard_over = bool(
+            cm.max_tokens > 0
+            and _real_now
+            and _real_now >= int(cm.max_tokens * cm.compress_ratio)
+        )
+
+        def _cooled() -> bool:
+            if self._compress_cooldown <= 0 or _hard_over:
+                return False
+            _last = self._last_compress_step.get(session.id)
+            return _last is not None and (step - _last) < self._compress_cooldown
+
         # 2) token 超预算即时压缩
-        if cm.needs_compression(session):
+        if cm.needs_compression(session) and not _cooled():
             try:
                 _info = await cm.compress(session, self.llm, memory_flush=self.memory_flush)
+                self._last_compress_step[session.id] = step
                 await self._archive_replaced(session, _info)
             except Exception:
                 logging.getLogger(__name__).debug("turn 内上下文压缩失败", exc_info=True)
@@ -2885,6 +3083,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
         # 3) 里程碑压缩（长链按步数兜底，compress 内部会再校验是否有可压缩区间）
         if step > 0 and self._milestone_every > 0 and step % self._milestone_every == 0:
+            if _cooled():
+                return
             try:
                 _m_info = await cm.compress(
                     session,
@@ -2892,6 +3092,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                     memory_flush=self.memory_flush,
                     min_total=cm.keep_recent + 6,
                 )
+                self._last_compress_step[session.id] = step
                 await self._archive_replaced(session, _m_info)
             except Exception:
                 logging.getLogger(__name__).debug("里程碑摘要压缩失败", exc_info=True)
@@ -3073,8 +3274,14 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
             lines = ["⚠️ 检测到连续无进展（防空转看门狗连续触发），已强制收尾。", ""]
         elif reason == "cancelled":
             lines = ["⏹ 已按取消指令停止本轮执行。", ""]
+        elif reason == "stalled":
+            lines = [
+                "⚠️ 检测到连续多步没有产生新进展（工具反复失败，或反复返回相同结果），"
+                "已判定为原地打转并提前停止，避免继续空耗。",
+                "",
+            ]
         else:
-            lines = [f"⚠️ 本轮执行已达到步数上限（{self.max_turns} 步），暂先在这里停下。", ""]
+            lines = [f"⚠️ 本轮已执行 {llm_steps} 步并达到步数上限，暂先在这里停下。", ""]
 
         if has_stats:
             # 主展示大模型决策步数（与 max_turns 同口径），工具操作数作为补充

@@ -5,7 +5,12 @@ W4 拆分（2026-09-14）：自 adapter.py 原样下沉（WebAdapter mixin），
 
 from fastapi.responses import JSONResponse, Response
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from scout.security.policy import ALLOWED_PATH_PREFIXES, DANGEROUS_PATTERNS, SYSTEM_DIRS
+from scout.security.policy import (
+    ALLOWED_PATH_PREFIXES,
+    DANGEROUS_PATTERNS,
+    PERMISSION_MODES,
+    SYSTEM_DIRS,
+)
 
 # logger 归一：与原 web.py 日志器名一致（行为不变）
 import logging
@@ -117,6 +122,14 @@ class ConfigRoutes:
                 config.sandbox_mode = req["sandbox_mode"]
             if "auto_approve" in req:
                 config.auto_approve = bool(req["auto_approve"])
+            if "permission_mode" in req:
+                # 权限开关（输入框）：ask=高危询问 / auto=全部放行 / strict=逐条询问
+                mode = str(req["permission_mode"] or "ask").strip().lower()
+                if mode in PERMISSION_MODES:
+                    config.permission_mode = mode
+                    # 立即生效：同步运行时安全层，无需重启 Agent
+                    if self._agent and getattr(self._agent, "security", None):
+                        self._agent.security.set_permission_mode(mode)
             if "allow_app_launch" in req:
                 config.allow_app_launch = bool(req["allow_app_launch"])
             if "language" in req:
@@ -667,12 +680,19 @@ class ConfigRoutes:
                     sandbox_info = self._agent.sandbox_mgr.to_dict()
                 return {
                     "auto_approve": s.auto_approve,
+                    "permission_mode": getattr(s, "permission_mode", "ask"),
                     "allow_tools": list(s.allow_tools),
                     "deny_tools": list(s.deny_tools),
                     "dangerous_patterns": len(DANGEROUS_PATTERNS),
                     "sandbox": sandbox_info,
                 }
-            return {"auto_approve": True, "allow_tools": [], "deny_tools": [], "sandbox": {}}
+            return {
+                "auto_approve": True,
+                "permission_mode": "ask",
+                "allow_tools": [],
+                "deny_tools": [],
+                "sandbox": {},
+            }
 
         @self.app.post("/api/security")
         async def set_security(req: dict):
@@ -681,6 +701,10 @@ class ConfigRoutes:
                 s = self._agent.security
                 if "auto_approve" in req:
                     s.auto_approve = bool(req["auto_approve"])
+                if "permission_mode" in req:
+                    mode = str(req["permission_mode"] or "ask").strip().lower()
+                    if mode in PERMISSION_MODES:
+                        s.set_permission_mode(mode)
                 if "allow_tools" in req:
                     s.allow_tools = set(req["allow_tools"])
                 if "deny_tools" in req:

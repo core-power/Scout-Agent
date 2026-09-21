@@ -11,7 +11,7 @@ r"""Shell 工具 — 安全增强的 Shell 命令执行.
   元字符时才降级为 bash -c（此时参数中的注入模式已在校验阶段拦截）
 - 超时保护，防止命令挂死
 - 跨平台输出解码（UTF-8→GBK→latin-1）
-- 路径遍历防护 + 系统目录访问拦截（SYSTEM_DIRS / ALLOWED_PATH_PREFIXES）
+- 路径遍历防护（相对 `..` 按风险分级放行，见 _check_path_traversal）+ 系统目录访问拦截（SYSTEM_DIRS / ALLOWED_PATH_PREFIXES）
 - 参数注入检测（INJECTION_PATTERNS，同时覆盖 command 与 args）
 - 解释器载荷深度检查（2026-08-31）：powershell/python/cmd 的 -Command/-c 参数是任意
   代码执行面，参数中出现"启动外部程序"载荷（Start-Process / subprocess / .exe 路径等）
@@ -79,6 +79,11 @@ def _win_quote(arg: str) -> str:
     return '"' + arg.replace('"', '""') + '"'
 
 
+def _ps_q(s: str) -> str:
+    """PowerShell 单引号字符串转义：内部单引号写成两个（避免路径带引号时被截断）。"""
+    return (s or "").replace("'", "''")
+
+
 _META_ONLY = re.compile(r'^[|><;&]+$')
 
 # ★ 2026-09-01 修复「打开本地软件报错」——完整 PowerShell 解释器名单:
@@ -135,6 +140,102 @@ _PY_FAMILY = {"python", "python3", "py", "python.exe", "python3.exe", "py.exe"}
 #   "../etc"、"a/../b"、"path/.." → 拦截。
 _PATH_TRAVERSAL_RE = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
 _py_ok_cache: bool | None = None
+
+# ── 相对上级路径（..）的风险分级（2026-09-21 放宽）──────────────────────
+# 旧规则「只要出现 .. 段就拒绝」误杀了大量完全正常的本地操作：
+#   cd ..\上层目录   dir ..\兄弟目录   type ..\配置.ini   cat ../README.md
+# 相对上级路径本身不构成越权（cwd 白名单与系统目录黑名单仍在），因此改为
+# 只对「明显危险」的用法硬拦截，共四类：
+#   A. 落点命中系统敏感目录（Windows 关键目录，任意深度）
+#   B. 上跳 ≥2 级后首个落点是 Unix 系统目录（../../etc/passwd 这类越界读取）
+#   C. 病态深逃逸（连续上跳 ≥ _MAX_TRAVERSAL_DEPTH 级，正常操作不会这么写）
+#   D. 破坏性命令（del/rm/rmdir/move…）+ ..：最多上跳 1 级、禁通配符、禁裸 `..`
+_TRAVERSAL_WIN_SENSITIVE = frozenset({
+    "windows", "winnt", "system32", "syswow64", "systemroot",
+    "programdata", "perflogs", "recovery", "$recycle.bin",
+})
+# 含空格的目录名无法靠"段相等"命中（引号+空格会被切成多个词），整串比对
+_TRAVERSAL_WIN_SENSITIVE_PHRASES = (
+    "program files", "program files (x86)",
+    "system volume information", "documents and settings",
+)
+_TRAVERSAL_UNIX_SENSITIVE = frozenset({
+    "etc", "usr", "bin", "sbin", "lib", "lib64",
+    "boot", "proc", "sys", "dev", "root", "var",
+})
+# 破坏性命令取"翻译后"的基名（Windows 下 rm→del/rmdir、mv→move 已在此列）
+_TRAVERSAL_DESTRUCTIVE_CMDS = frozenset({
+    "rm", "rmdir", "rd", "del", "erase", "mv", "move",
+    "dd", "shred", "format", "mkfs", "diskpart", "robocopy",
+})
+_MAX_TRAVERSAL_DEPTH = 4
+
+# 遍历风险中"用户批准后可执行"的那一类：删除/移动上级内容（D 类，见 _check_path_traversal）。
+# 其余（落点系统目录、病态深逃逸）属不可逆/不可审计，不进审批通道。
+_APPROVABLE_TRAVERSAL_MARK = "删除/移动类命令"
+
+# 校验失败信息前缀：带此前缀表示"高危但可审批"，执行器据此改为弹窗询问而非直接拒绝
+_NEED_APPROVAL_PREFIX = "需要审批: "
+
+
+def _traversal_path_words(token: str) -> list[list[str]]:
+    """取出 token 中所有含 `..` 独立段的路径词，按分隔符切成段（已剥离引号）。
+
+    只切空白，不切引号内的空格 —— 因此 `"..\\Program Files\\x"` 会被切成两个词，
+    含空格的敏感目录名改由 _TRAVERSAL_WIN_SENSITIVE_PHRASES 整串兜底比对。
+    """
+    if not token or not _PATH_TRAVERSAL_RE.search(token):
+        return []
+    result: list[list[str]] = []
+    for word in token.split():
+        segs = [s.strip("\"'") for s in re.split(r"[\\/]+", word) if s.strip("\"'")]
+        if ".." in segs:
+            result.append(segs)
+    return result
+
+
+def _traversal_escape_depth(segs: list[str]) -> int:
+    """连续上跳层级：`../../a` → 2；`a/../../b` → 0（先进入子目录再回来）。"""
+    depth = 0
+    for s in segs:
+        if s == "..":
+            depth += 1
+        else:
+            break
+    return depth
+
+
+def _check_path_traversal(token: str, base_cmd: str = "") -> str:
+    """相对上级路径（..）的风险判定 —— 返回拦截原因，空串表示放行。"""
+    paths = _traversal_path_words(token)
+    if not paths:
+        return ""
+    low = token.lower()
+    base = os.path.basename((base_cmd or "").strip().strip('"').lower())
+    destructive = base in _TRAVERSAL_DESTRUCTIVE_CMDS
+    for segs in paths:
+        depth = _traversal_escape_depth(segs)
+        tail = [s for s in segs if s != ".."]
+        # A. 落点命中 Windows 系统关键目录（任意深度都拦）
+        if any(s.lower() in _TRAVERSAL_WIN_SENSITIVE for s in tail):
+            return "落点指向 Windows 系统目录"
+        if any(p in low for p in _TRAVERSAL_WIN_SENSITIVE_PHRASES):
+            return "落点指向 Windows 系统目录"
+        # B. 上跳 ≥2 级后直接落到 Unix 系统目录（../../etc/passwd 形态）
+        if depth >= 2 and tail and tail[0].lower() in _TRAVERSAL_UNIX_SENSITIVE:
+            return "上跳多级后落点指向系统目录"
+        # C. 病态深逃逸
+        if depth >= _MAX_TRAVERSAL_DEPTH:
+            return f"连续上跳 {depth} 级（上限 {_MAX_TRAVERSAL_DEPTH - 1} 级）"
+        # D. 破坏性命令 + ..
+        if destructive:
+            if depth >= 2:
+                return "删除/移动类命令配合 .. 最多只允许上跳 1 级"
+            if not tail:
+                return "删除/移动类命令的目标不能是上级目录本身（..）"
+            if any(ch in t for t in tail for ch in "*?"):
+                return "删除/移动类命令配合 .. 不允许使用通配符"
+    return ""
 
 
 def _is_python_cmd(cmd0: str) -> bool:
@@ -528,6 +629,11 @@ _WIN_ALIASES: dict[str, tuple[str, tuple[str, ...]]] = {
     "uname": ("ver", ()),
     "diff": ("fc", ()),
     "unzip": ("tar", ("-xf",)),        # Win10 自带 tar 支持 zip
+    # ── 2026-09-20 补充：无开关形态下的一一对应（此前这些命令在 Windows 直接被拦）──
+    "ps": ("tasklist", ()),
+    "env": ("set", ()),                # env → set（列出环境变量）
+    "printenv": ("set", ()),
+    "export": ("set", ()),             # export A=1 → set A=1
 }
 
 _UNIX_ALIASES: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -582,30 +688,611 @@ _PLATFORM_HINT_EXAMPLES: dict[str, str] = {
 }
 
 
+# ── 2026-09-19：带开关命令的等价改写 ──────────────────────────────────
+# 背景：旧逻辑只要参数里出现 -/ 开头就返回 None → shell 工具直接失败，
+# 模型必须**再发一整轮**（带着已经涨到几千甚至上万 token 的上下文）才能改对。
+# `ls -la` / `grep -rn "x" .` / `rm -rf dir` 是模型最强的 Linux 肌肉记忆，
+# 在 Windows 上每次都会先栽一次 —— 历史会话里 36 次「安全拦截」大多来自这里，
+# 每一次都是一轮完整的 prompt 重发。
+# 现在对形态确定的命令做等价改写并直接执行；认不出的形态仍返回 None 走提示。
+_WIN_SWITCH_CMDS = {
+    "ls", "grep", "rm", "cp", "mv", "mkdir", "head", "tail", "wc", "find",
+    # ── 2026-09-20 新增：此前 Windows 下这些命令一律被白名单拦下，
+    #    只能回提示让 LLM 重试一轮（每次都烧一轮 token + 步数）。
+    #    形态确定时直接改写成 cmd / PowerShell 等价命令。
+    "ps", "kill", "du", "df", "sort", "tee",
+}
+
+# ★ 2026-09-20：这批命令即使【不带开关】也要改写（不能走 alias 表）——
+#   例如 `kill 1234` 若走 alias 会得到 `taskkill 1234`（缺 /PID 语法必然失败）。
+_WIN_REWRITE_ANY = {"ps", "kill", "du", "df", "tee"}
+
+
+def _split_flags(args: list[str]) -> tuple[set[str], list[str]]:
+    """拆分短开关与操作数：['-la', 'x'] → ({'l','a'}, ['x'])。长开关(--x)归操作数。"""
+    flagset: set[str] = set()
+    rest: list[str] = []
+    for a in args:
+        if a.startswith("-") and not a.startswith("--") and len(a) > 1:
+            flagset.update(a[1:])
+        else:
+            rest.append(a)
+    return flagset, rest
+
+
+def _win_rewrite_switches(base: str, args: list[str], stdin: bool = False) -> tuple[str, list[str]] | None:
+    """Windows 侧：把带开关的 POSIX 命令改写为 cmd / PowerShell 等价命令。
+
+    只在形态确定时改写，任何不确定都返回 None（回退到平台化提示，行为不变）。
+
+    stdin=True 表示该命令位于管道右侧（数据来自上游而非文件）——仅此时允许
+    生成 `$input | ...` 形态；独立命令缺文件名时仍返回 None（原行为不变）。
+    """
+    # 长选项（--color / --exclude ...）语义各异，一律不猜 —— 回退到平台化提示
+    if any(a.startswith("--") for a in args):
+        return None
+
+    if base == "find":
+        # 只认 find <dir> -name "<glob>"（-iname 同义）
+        name = None
+        for i, a in enumerate(args):
+            if a in ("-name", "-iname") and i + 1 < len(args):
+                name = args[i + 1]
+        if name is None:
+            return None
+        root = args[0] if args and not args[0].startswith("-") else "."
+        return "dir", ["/s", "/b", os.path.join(root, name)]
+
+    fs, rest = _split_flags(args)
+
+    if base == "ls":
+        out: list[str] = []
+        if "a" in fs or "A" in fs:
+            out.append("/a")
+        if "R" in fs:
+            out.append("/s")
+        out.extend(rest)
+        return "dir", out
+
+    if base == "grep":
+        if not rest:
+            return None
+        pat, paths = rest[0], rest[1:]
+        out = []
+        if "r" in fs or "R" in fs:
+            out.append("/s")
+        if "i" in fs:
+            out.append("/i")
+        if "n" in fs:
+            out.append("/n")
+        if "v" in fs:
+            out.append("/v")
+        # /c: 强制按字面量匹配 —— findstr 默认会把空格/点号当正则，容易匹配错。
+        # 注意不要自己塞引号：_win_quote 会把含引号的参数转义成 "" 导致 cmd 解析错乱，
+        # 交给它在整参数层面按需加引号即可（/c:hello world → "/c:hello world"）。
+        out.append("/c:" + pat)
+        # 目录参数要补通配符，否则 findstr 把 "." 当文件规格、什么都搜不到。
+        # ★ 管道右侧（数据来自上游）绝对不能补 `*` —— 否则 findstr 会丢掉 stdin
+        #   转去搜当前目录，ls|grep x 这类写法直接失效。
+        if not paths and stdin:
+            return "findstr", out
+        _targets = []
+        for p in (paths or ["*"]):
+            if not any(ch in p for ch in "*?"):
+                try:
+                    if os.path.isdir(p):
+                        p = os.path.join(p, "*")
+                except Exception:  # noqa: BLE001
+                    pass
+            _targets.append(p)
+        out.extend(_targets)
+        return "findstr", out
+
+    if base == "rm":
+        if not rest:
+            return None
+        if "r" in fs or "R" in fs:
+            # rmdir 只能删目录、del 只能删文件 —— 目标类型不一致就别硬凑
+            _is_dir = [os.path.isdir(p) for p in rest]
+            if all(_is_dir):
+                return "rmdir", ["/s", "/q"] + rest
+            if not any(_is_dir):
+                return "del", ["/f", "/q"] + rest
+            return None
+        return "del", (["/f"] if "f" in fs else []) + rest
+
+    if base == "cp":
+        if "r" in fs or "R" in fs:
+            if len(rest) < 2:
+                return None
+            return "xcopy", ["/e", "/i", "/y", rest[0], rest[1]]
+        return "copy", rest
+
+    if base == "mv":
+        return "move", rest
+
+    if base == "mkdir":
+        # -p 无意义：Windows 的 mkdir 本身就递归创建中间目录。
+        # 但 cmd 的 mkdir 不接受正斜杠（报「命令语法不正确」），统一换成反斜杠。
+        return "mkdir", [p.replace("/", "\\") for p in rest]
+
+    if base in ("head", "tail"):
+        # 用原始 args 扫描：-n 20 / -20 / -5 三种形态都要认，且不能把 20 当成文件名
+        n = None
+        target = None
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a in ("-n", "-c") and i + 1 < len(args):
+                n = args[i + 1]
+                i += 2
+                continue
+            if a.startswith("-") and len(a) > 1 and a[1:].isdigit():
+                n = a[1:]
+                i += 1
+                continue
+            if a.startswith("-") and len(a) > 1:
+                i += 1          # 其余开关忽略
+                continue
+            if target is None:
+                target = a
+            i += 1
+        if target is None:
+            if not stdin:
+                return None
+            # 管道：cat a.txt | head -20 / tail -5 —— 数据来自上游
+            if base == "head":
+                ps = f"$input | Select-Object -First {n or '10'}"
+            else:
+                ps = f"$input | Select-Object -Last {n or '10'}"
+            return "powershell", ["-NoProfile", "-Command", ps]
+        flag = "-TotalCount" if base == "head" else "-Tail"
+        ps = f"Get-Content -LiteralPath '{_ps_q(target)}' {flag} {n or '10'}"
+        return "powershell", ["-NoProfile", "-Command", ps]
+
+    if base == "wc":
+        if "l" not in fs:
+            return None
+        if not rest:
+            if not stdin:
+                return None
+            return "powershell", ["-NoProfile", "-Command", "$input | Measure-Object -Line"]
+        ps = f"(Get-Content -LiteralPath '{_ps_q(rest[0])}').Count"
+        return "powershell", ["-NoProfile", "-Command", ps]
+
+    # ── 2026-09-20：进程/磁盘/文本类高频命令（此前 Windows 下全靠提示重试）──
+    if base == "ps":
+        # ps aux / ps -ef / ps auxww：形态虽多，Windows 侧一律用 tasklist
+        # 就列结果而言等价；只要没冒出不认识的长选项（已在函数开头拦截）即可。
+        return "tasklist", []
+
+    if base == "kill":
+        # 只认 PID 形态：kill [-9] <pid>... ；进程名/-s 信号等不猜，回退提示。
+        pids = [a for a in rest if a.isdigit()]
+        if not rest or len(pids) != len(rest):
+            return None
+        out: list[str] = []
+        if "9" in fs or any(a.upper() == "-KILL" for a in args):
+            out.append("/F")
+        for p in pids:
+            out += ["/PID", p]
+        return "taskkill", out
+
+    if base == "du":
+        # du [-s] [-h] <dir> —— 汇总该目录占用（-h 只是显示单位，忽略即可）
+        target = rest[-1] if rest else "."
+        ps = (
+            "$s=(Get-ChildItem -LiteralPath '%s' -Recurse -File -ErrorAction SilentlyContinue "
+            "| Measure-Object -Property Length -Sum).Sum; if($null -eq $s){$s=0}; "
+            "'{0:N1}M' -f ($s/1MB)" % _ps_q(target)
+        )
+        return "powershell", ["-NoProfile", "-Command", ps]
+
+    if base == "df":
+        ps = (
+            "Get-PSDrive -PSProvider FileSystem | "
+            "Select-Object Name,@{n='Used_GB';e={[math]::Round($_.Used/1GB,1)}},"
+            "@{n='Free_GB';e={[math]::Round($_.Free/1GB,1)}}"
+        )
+        return "powershell", ["-NoProfile", "-Command", ps]
+
+    if base == "tee":
+        # 独立使用（无上游管道）的 tee 没有输入源，翻译了也是空操作 → 不猜
+        if not rest or not stdin:
+            return None
+        return "powershell", ["-NoProfile", "-Command",
+                              f"$input | Tee-Object -FilePath '{_ps_q(rest[0])}'"]
+
+    if base == "sort":
+        # 只认 sort [-u] [-r] [file]：cmd 的 sort.exe 没有去重能力，转 PowerShell
+        if fs - {"u", "r"}:
+            return None
+        src = f"Get-Content -LiteralPath '{_ps_q(rest[0])}'" if rest else "$input"
+        if not rest and not stdin:
+            return None
+        steps = "Sort-Object"
+        if "r" in fs:
+            steps += " -Descending"
+        if "u" in fs:
+            steps += " -Unique"
+        return "powershell", ["-NoProfile", "-Command", f"{src} | {steps}"]
+
+    return None
+
+
+# ── 2026-09-20：Windows 复合命令（管道 / 重定向 / && / ;）分段翻译 ──────────
+# 此前只要命令串含空格就原样透传 → cmd 里没有 ls/cat/grep，`ls | grep x` 必失败，
+# LLM 每次都要重试一轮改写成 PowerShell（烧一轮 token + 步数，还常改错）。
+# 现在按分隔符切段，逐段翻译后用 cmd 语法拼回；任一段认不出就整串放弃（保守）。
+_COMPOUND_SEPS = {"||", "&&", ">>", "|", ">", "<", "&", ";"}
+
+
+def _split_compound(cmd: str) -> list[str]:
+    """按 shell 分隔符切分，分隔符本身作为独立片段保留；引号内的分隔符不切。"""
+    segs: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    i = 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        pair = cmd[i:i + 2]
+        if pair in ("||", "&&", ">>", "2>", "1>"):
+            if "".join(buf).strip():
+                segs.append("".join(buf).strip())
+            segs.append(pair)
+            buf = []
+            i += 2
+            continue
+        if ch in "|><&;":
+            if "".join(buf).strip():
+                segs.append("".join(buf).strip())
+            segs.append(ch)
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        segs.append(tail)
+    return segs
+
+
+def _has_win_switch(args: list[str]) -> bool:
+    return any(a.startswith("-") or a.startswith("/") for a in args)
+
+
+def _join_win_cmd(base: str, args: list[str]) -> str:
+    """拼回 cmd 命令串；PowerShell 的 -Command 必须整段引起来，不能被拆开。"""
+    if base.lower() in _WIN_PS_EXES:
+        return " ".join([base] + [_win_quote(a) for a in args])
+    return " ".join([base] + [(_win_quote(a) if _needs_win_quote(a, args) else a) for a in args])
+
+
+def _needs_win_quote(arg: str, args: list[str]) -> bool:
+    """cmd 重写后：开关原样输出，仅对含空白/元字符的操作数加引号。"""
+    if arg.startswith("/") or arg.startswith("-"):
+        return False
+    return bool(re.search(r'[\s"&|<>]', arg))
+
+
+# ── 2026-09-20：PowerShell 表达式模式 ────────────────────────────────────────
+# 复合命令里一旦出现 head/tail/wc/sort 这类需要 PowerShell 的段，整条再交给
+# cmd.exe 拼接就会踩两层引号解析（cmd /d /s /c 会剥掉 PowerShell -Command 的双
+# 引号，表现为命令被 PowerShell 当字符串原样回显 —— e2e 实测确认）。
+# 这类命令改成整体走 `powershell -NoProfile -Command "<表达式>"`（不经 cmd），
+# 既保住管道语义，又避开引号嵌套。
+# 返回 (需要上游输入, 表达式)；不支持返回 None。
+def _win_ps_expr(base: str, args: list[str], stdin: bool = False) -> tuple[bool, str] | None:
+    def path_of(p: str) -> str:
+        return f"Get-Content -LiteralPath '{_ps_q(p)}'"
+
+    if base == "cat":
+        if not args or stdin:
+            return (True, "$_") if stdin else None
+        return (False, path_of(args[0]))
+
+    if base in ("head", "tail", "sort", "wc", "tee"):
+        if base == "head":
+            n = _take_count_arg(args) or "10"
+        elif base == "tail":
+            n = _take_count_arg(args) or "10"
+        files = [a for a in args if not a.startswith("-") and not a.isdigit()]
+
+        if base == "head":
+            core = None if not files else f"{path_of(files[0])} -TotalCount {n}"
+            return (False, core) if core else ((True, f"Select-Object -First {n}") if stdin else None)
+        if base == "tail":
+            core = None if not files else f"{path_of(files[0])} -Tail {n}"
+            return (False, core) if core else ((True, f"Select-Object -Last {n}") if stdin else None)
+        if base == "wc":
+            if "l" not in _fs_of(args):
+                return None
+            if files:
+                return (False, f"({path_of(files[0])}).Count")
+            return (True, "Measure-Object -Line | ForEach-Object { $_.Lines }") if stdin else None
+        if base == "sort":
+            fs = _fs_of(args)
+            if fs - {"u", "r"}:
+                return None
+            tail = "Sort-Object" + (" -Descending" if "r" in fs else "") + (" -Unique" if "u" in fs else "")
+            if files:
+                return (False, f"{path_of(files[0])} | {tail}")
+            return (True, tail) if stdin else None
+        if base == "tee":
+            return (True, f"Tee-Object -FilePath '{_ps_q(args[0])}'") if args and stdin else None
+
+    if base == "ls":
+        fs = _fs_of(args)
+        files = [a for a in args if not a.startswith("-")]
+        opts = ""
+        if "a" in fs or "A" in fs:
+            opts += " -Force"
+        if "R" in fs:
+            opts += " -Recurse"
+        # -l 的长格式 PS 没有等价物，忽略（信息不丢，只是列格式不同）
+        tgt = (" -LiteralPath '%s'" % _ps_q(files[0])) if files else ""
+        return (False, f"Get-ChildItem{tgt}{opts}")
+
+    if base == "grep":
+        rest = [a for a in args if not a.startswith("-")]
+        fs = _fs_of(args)
+        if not rest or "v" in fs or "r" in fs or "R" in fs:
+            return None  # -v / -r 语义差异大，不猜
+        pat, files = rest[0], rest[1:]
+        core = "Select-String -SimpleMatch -Pattern '%s'" % _ps_q(pat)
+        if files:
+            return (False, f"{path_of(files[0])} | {core}")
+        return (True, core) if stdin else None
+
+    if base == "ps":
+        return (False, "Get-Process")
+
+    if base == "du":
+        target = args[-1] if args else "."
+        return (False, "('{0:N1}M' -f ((Get-ChildItem -LiteralPath '%s' -Recurse -File "
+                       "-ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum/1MB))"
+                       % _ps_q(target))
+
+    if base == "df":
+        return (False, "Get-PSDrive -PSProvider FileSystem | "
+                       "Select-Object Name,@{n='Used_GB';e={[math]::Round($_.Used/1GB,1)}},"
+                       "@{n='Free_GB';e={[math]::Round($_.Free/1GB,1)}}")
+
+    if base == "kill":
+        pids = [a for a in args if a.isdigit()]
+        if not args or len(pids) != len(args):
+            return None
+        force = " -Force" if "9" in _fs_of(args) or "-KILL" in [a.upper() for a in args] else ""
+        return (False, "Stop-Process -Id %s%s" % (",".join(pids), force))
+
+    if base == "env":
+        return (False, "Get-ChildItem Env:")
+
+    # 其余命令（cmd 内建/exe）在 PowerShell 里通常也能直呼其名（type/dir 为别名，
+    # findstr/tasklist 为外部程序）；保守起见只对白名单内的放行
+    if base in ("type", "dir", "findstr", "tasklist", "where", "hostname", "find"):
+        return (False, " ".join([base] + args))
+
+    return None
+
+
+def _take_count_arg(args: list[str]) -> str | None:
+    """取 head/tail 的 -n 20 / -20 / -5 形态。"""
+    for i, a in enumerate(args):
+        if a in ("-n", "-c") and i + 1 < len(args) and args[i + 1].isdigit():
+            return args[i + 1]
+        if a.startswith("-") and len(a) > 1 and a[1:].isdigit():
+            return a[1:]
+    return None
+
+
+def _fs_of(args: list[str]) -> set[str]:
+    fs, _ = _split_flags(args)
+    return fs
+
+
+def _win_compound_ps(segs: list[str]) -> tuple[str, list[str]] | None:
+    """把复合命令整体翻译为单条 PowerShell -Command 表达式。
+
+    返回 ("powershell", ["-NoProfile", "-Command", expr]) 或 None（认不出）。
+    """
+    pieces: list[str] = []
+    expect: str | None = None       # "pipe" / "out" / "append"
+    redir: tuple[str, str] | None = None
+    for seg in segs:
+        if seg in ("||", "&&", "&", ";"):
+            return None             # 控制流语义不同，不猜
+        if seg == "|":
+            expect = "pipe"
+            continue
+        if seg in (">", ">>"):
+            expect = "out" if seg == ">" else "append"
+            continue
+        if expect in ("out", "append"):
+            tgt = _win_split_args(seg)
+            if not tgt:
+                return None
+            redir = (tgt[0], "append" if expect == "append" else "out")
+            expect = None
+            continue
+        parts = _win_split_args(seg)
+        if not parts:
+            continue
+        if pieces and expect is None:
+            return None             # 两个命令段相邻却无分隔符：不猜
+        base = os.path.basename(parts[0]).lower()
+        got = _win_ps_expr(base, parts[1:], stdin=bool(pieces))
+        if got is None:
+            return None
+        _needs_input, piece = got
+        pieces.append(piece)
+        expect = None
+
+    if not pieces:
+        return None
+    expr = " | ".join(pieces)
+    if redir:
+        target, mode = redir
+        expr += " | Out-File -Encoding utf8 '%s'%s" % (_ps_q(target), " -Append" if mode == "append" else "")
+    return "powershell", ["-NoProfile", "-Command", expr]
+
+
+def _win_translate_compound(full: str) -> str | None:
+    """把整条 Windows 复合命令翻译成可执行写法。
+
+    - 全部是 cmd 系命令 → 拼成 `dir /a | findstr /c:x`（仍走 cmd /c）；
+    - 任一段需要 PowerShell（head/tail/wc/sort/tee…）→ 整体走 powershell -Command，
+      避免 cmd /d /s /c 剥掉引号导致命令被当字符串回显。
+    认不出 / 无需翻译 → None。
+    """
+    segs = _split_compound(full)
+    if not segs:
+        return None
+
+    # 先判断是否至少需要翻译（第一段本身就是 Unix 命令？后续段呢？）
+    out: list[str] = []
+    changed = False
+    ps_used = False
+    for idx, seg in enumerate(segs):
+        if seg in _COMPOUND_SEPS:
+            out.append(seg)
+            continue
+        parts = _win_split_args(seg)
+        if not parts:
+            continue
+        base = os.path.basename(parts[0]).lower()
+        arg_list = parts[1:]
+        # 该段是否位于管道某段的右侧（数据来自上游而非文件）
+        has_upstream = any(s in ("|", "||") for s in segs[:idx])
+
+        rw = None
+        if base in _WIN_SWITCH_CMDS or base in _WIN_REWRITE_ANY:
+            try:
+                rw = _win_rewrite_switches(base, arg_list, stdin=has_upstream)
+            except Exception:  # noqa: BLE001 — 改写失败就当不认识
+                rw = None
+        if rw:
+            new_base, new_args = rw
+        elif base in _WIN_ALIASES and not _has_win_switch(arg_list):
+            nb, extra = _WIN_ALIASES[base]
+            new_base, new_args = nb, list(extra) + arg_list
+        else:
+            # Windows 原生命令 / 未知命令：原样保留（后者交给白名单提示）
+            new_base, new_args = None, None
+        if new_base is None:
+            out.append(seg)
+            continue
+        if new_base != base or new_args != arg_list:
+            changed = True
+        if new_base.lower() in _WIN_PS_EXES:
+            ps_used = True
+        out.append(_join_win_cmd(new_base, new_args))
+
+    result = " ".join(out)
+    # 分隔符与相邻片段之间不留空格（dir | findstr x 而非 dir  |  findstr）
+    result = re.sub(r"\s*(\|\||&&|>>|[|><&;])\s*", r" \1 ", result)
+    result = re.sub(r"\s{2,}", " ", result).strip()
+    if not changed or not result:
+        return None
+
+    # 若某段翻译出了 PowerShell（-Command 里的引号会被 cmd /d /s /c 剥掉，
+    # 表现为命令被原样回显），整条升级为单个 PowerShell 调用。
+    if ps_used:
+        ps = _win_compound_ps(segs)
+        if ps:
+            base_ps, args_ps = ps
+            return _join_win_cmd(base_ps, args_ps)
+        return None
+    return result
+
+
 def _map_platform_command(command: str, args: list[str] | None) -> tuple[str, list[str] | None] | None:
     """把另一平台风格的命令翻译为当前平台等价命令（透明，LLM 无感知）.
 
     返回:
       - (new_command, new_args): 翻译成功或无需翻译，直接使用；
-      - None: 命中跨平台命令但参数不兼容（带 - / / 开关），调用方应给平台化提示。
+      - None: 命中跨平台命令但参数不兼容（带 - / / 开关且无法改写），
+        调用方应给平台化提示。
     """
     if not command or not command.strip():
         return command, args
+    full = " ".join([command] + list(args or [])).strip()
     parts = command.strip().split(None, 1)
     if len(parts) > 1:
-        # 整串命令（含空格/复合命令）：保留 shell 语义，不翻译
+        # ★ 2026-09-20：整串命令（含管道/重定向）在 Windows 下先做分段翻译，
+        #   翻译成功就整串返回（args=None，由 _build_proc_cmd 走 cmd /c 或 persistent 会话）。
+        if IS_WINDOWS and any(t in _COMPOUND_SEPS for t in _split_compound(full)):
+            translated = _win_translate_compound(full)
+            if translated:
+                return translated, None
+        # 非 Windows / 未命中：保留 shell 语义，不翻译
         return command, args
     base = os.path.basename(parts[0]).lower()
+    arg_list = list(args or [])
+    has_switch = any(a.startswith("-") or a.startswith("/") for a in arg_list)
+
+    # args 里夹着分隔符的形态（command="ls", args=["|","grep","txt"]）同样走复合翻译
+    if IS_WINDOWS and any(a in _COMPOUND_SEPS for a in arg_list):
+        translated = _win_translate_compound(full)
+        if translated:
+            return translated, None
+
+    # ★ 2026-09-19：带开关时先尝试等价改写，命中就直接执行（省掉一轮重试）
+    # ★ 2026-09-20：ps/kill/du/df/tee 即使不带开关也要改写（走 alias 会生成错误语法）
+    if IS_WINDOWS and (has_switch or base in _WIN_REWRITE_ANY) and base in _WIN_SWITCH_CMDS:
+        rw = _win_rewrite_switches(base, arg_list)
+        if rw:
+            return rw
+
     table = _WIN_ALIASES if IS_WINDOWS else _UNIX_ALIASES
     entry = table.get(base)
     if entry is None:
         return command, args
     new_base, extra = entry
-    if args:
-        for a in args:
-            if a.startswith("-") or a.startswith("/"):
-                return None
-    return new_base, list(extra) + list(args or [])
+    if has_switch:
+        return None
+    return new_base, list(extra) + arg_list
+
+
+# ── 2026-09-20：Windows 侧「逐命令精确配方」──────────────────────────────
+# 这些命令语义与 Windows 差异大（或有权限/副作用），不做自动改写，
+# 但给出可直接照抄的 PowerShell 写法，避免 LLM 自己猜一轮再失败一轮。
+_WIN_PS_RECIPES: dict[str, str] = {
+    "kill": "结束进程用 taskkill /PID 进程号 /F（强制）；按进程名用 taskkill /IM notepad.exe /F",
+    "sed": "就地替换请用 PowerShell："
+           "(Get-Content 文件 -Raw) -replace '旧','新' | Set-Content 文件 -NoNewline；"
+           "仅打印替换结果用 (Get-Content 文件) -replace '旧','新'",
+    "awk": "取列请用 PowerShell：Get-Content 文件 | ForEach-Object { ($_ -split '\\s+')[0] }"
+           "（[0] 换成所需列序号）",
+    "chmod": "Windows 无 chmod；设置权限用 icacls 文件 /grant 用户名:F（撤销用 /remove）",
+    "chown": "Windows 无 chown；修改所有者用 icacls 文件 /setowner 用户名",
+    "ln": "创建链接用 mklink 链接名 目标（文件符号链接）、mklink /D 链接名 目标（目录符号链接，"
+          "通常需管理员权限）；无需管理员时用 mklink /J 联接名 目标（目录联接）",
+    "xargs": "遍历输入请用 PowerShell：Get-Content 列表文件 | ForEach-Object { 命令 $_ }",
+    "uniq": "去重请用 PowerShell：Get-Content 文件 | Select-Object -Unique"
+            "（等价于 sort -u；只去相邻重复请改用 Sort-Object -Unique 后再处理）",
+    "nohup": "后台运行请用 Start-Process -FilePath 程序 -ArgumentList '参数' -WindowStyle Hidden",
+    "systemctl": "Windows 服务用 sc query 服务名 查询、net start/stop 服务名 启停",
+    "tail": "tail -f 请用 Get-Content 文件 -Wait -Tail 20",
+    "watch": "周期性执行请用 PowerShell：while ($true) { Clear-Host; 命令; Start-Sleep -Seconds 2 }",
+    "grep": "递归搜索请用 findstr /s /n /c:\"关键词\" 目录\\* 或 "
+            "PowerShell：Get-ChildItem -Recurse | Select-String \"关键词\"",
+    "jq": "处理 JSON 请用 PowerShell：Get-Content 文件 | ConvertFrom-Json",
+    "curl": "Windows 自带 curl.exe 可直接用；复杂请求推荐 PowerShell："
+            "Invoke-WebRequest -Uri URL -Method POST -Body $body",
+}
 
 
 def _platform_hint(base_cmd: str) -> str:
@@ -619,6 +1306,14 @@ def _platform_hint(base_cmd: str) -> str:
             return (
                 f"安全拦截: '{base_cmd}' 是 Linux/macOS 命令，当前 Windows 环境没有该命令。\n"
                 f"💡 请改用 Windows 命令 '{target}'：{ex}"
+            )
+        # ★ 2026-09-20：命令级精确配方（此前一律回「请用 PowerShell 对应命令」，
+        #   LLM 还得自己想一遍怎么写，常常写错 → 再失败一轮）
+        recipe = _WIN_PS_RECIPES.get(base)
+        if recipe:
+            return (
+                f"安全拦截: '{base_cmd}' 是 Linux/macOS 命令，当前 Windows 环境没有该命令。\n"
+                f"💡 {recipe}"
             )
         if base in _POSIX_ONLY_CMDS:
             return (
@@ -691,6 +1386,97 @@ INJECTION_PATTERNS = [
     r'\\x[0-9a-fA-F]{2}',  # \x hex escape
     r'\\[0-7]{1,3}',  # \octal escape
 ]
+
+# ── Windows 路径 vs 转义序列的甄别（2026-09-21）────────────────────────
+# \xNN / \NNN 是 bash/printf 的转义语义，用来拦 POSIX shell 的编码绕过载荷；
+# 但 Windows 路径分隔符同样是反斜杠，于是这些完全正常的本地操作被判为"注入攻击"：
+#   C:\Windows\Temp\1.tmp        \1   → 命中 \NNN
+#   D:\归档\2024\报告.txt          \202 → 命中 \NNN
+#   C:\Program Files\7-Zip       \7   → 命中 \NNN
+#   D:\test\x64\config.ini       \x64 → 命中 \xNN
+# cmd.exe 与 PowerShell 本就不解析 \xNN / \NNN（那是 POSIX 的语法），因此路径形态
+# 的 token 在扫描前先把分隔符归一化为 '/'，纯转义串（无任何真实路径文字）不豁免。
+_WIN_PATH_LIKE = re.compile(
+    r"^(?:[A-Za-z]:[\\/]"          # C:\ 或 C:/
+    r"|\\\\[^\\]+\\[^\\]+"         # \\server\share（UNC）
+    r"|[\\/][^\\/]+[\\/])"         # \dir\ 或 /dir/
+)
+_WIN_ESCAPE_SEQ_RE = re.compile(r"\\x[0-9a-fA-F]{2}|\\[0-7]{1,3}")
+
+
+def _scan_injection_token(token: str) -> str:
+    """返回用于注入扫描的 token 副本；Windows 路径语义下反斜杠归一化为 '/'。"""
+    if not IS_WINDOWS or "\\" not in token:
+        return token
+    if not _WIN_PATH_LIKE.search(token):
+        return token
+    # 纯转义串（如 \x6b\x69\x6c\x6c、\151\144）去掉转义后不剩真实路径文字 → 不豁免
+    residue = _WIN_ESCAPE_SEQ_RE.sub("", token).replace("\\", "/").strip(" /")
+    if len(residue) < 2:
+        return token
+    return token.replace("\\", "/")
+
+
+# ── Windows cmd 内置命令的"隐形失败"（2026-09-21）──────────────────────
+# cmd.exe 的部分内置命令失败时【不设置 ERRORLEVEL】，实测：
+#   del 目标不存在         → 输出「找不到 <路径>」，退出码 0
+#   del / type 目标被占用  → 输出「另一个程序正在使用此文件」，退出码 0
+#   rmdir 不存在           → 输出「系统找不到指定的文件」，退出码 0
+# 于是工具回报 success=True，LLM 以为操作已完成并据此推进后续步骤 ——
+# 这比"报错"危险得多：错误前提会一路传播且难以回溯（例如以为旧文件已删，
+# 后面却一直读到它）。与 2026-09-01 对 explorer 退出码=1 的补偿同源。
+_WIN_NO_ERRORLEVEL_CMDS = frozenset({
+    "del", "erase", "type", "copy", "xcopy", "move", "ren", "rename",
+    "rmdir", "rd", "mkdir", "md",
+})
+_WIN_CMD_ERROR_TEXT = (
+    "另一个程序正在使用此文件",
+    "另一个程序已锁定文件的一部分",
+    "系统找不到指定的文件",
+    "系统找不到指定的路径",
+    "拒绝访问",
+    "找不到网络路径",
+    "命令语法不正确",
+    "文件名、目录名或卷标语法不正确",
+    "不是内部或外部命令",
+    "无效驱动器规格",
+    "Access is denied",
+    "The system cannot find",
+    "The process cannot access",
+    "being used by another process",
+)
+# del/rmdir 删除不存在目标时的专属文案，整行以它开头
+_WIN_CMD_ERROR_PREFIX = ("找不到 ", "无法找到 ")
+
+
+def _win_cmd_real_status(cmd_list: list[str], output: str, code: int) -> bool | None:
+    """cmd 内置命令隐形失败检测：退出码 0 但输出通篇是错误文案 → 判失败。
+
+    Returns:
+        False —— 已判定为失败；None —— 无法判定，交给退出码决定。
+    """
+    if not IS_WINDOWS or code != 0 or not cmd_list:
+        return None
+    base = os.path.basename(cmd_list[0].strip().strip('"').lower())
+    if base not in _WIN_NO_ERRORLEVEL_CMDS:
+        return None
+    lines: list[str] = []
+    for raw in (output or "").splitlines():
+        ln = raw.strip()
+        if not ln:
+            continue
+        # cmd 的 del/rmdir 报错时会先回显一行目标路径（如 C:\a\b.txt），
+        # 它不是错误文本，需剔除后再判断，否则两行结构会被误认为真实输出。
+        if re.fullmatch(r"[A-Za-z]:[\\/].*", ln) or re.fullmatch(r"\\\\[^\s]+", ln):
+            continue
+        lines.append(ln)
+    if not lines or len(lines) > 3:
+        return None  # 多行输出通常是真实数据，不做猜测
+    for ln in lines:
+        hit = any(e in ln for e in _WIN_CMD_ERROR_TEXT) or ln.startswith(_WIN_CMD_ERROR_PREFIX)
+        if not hit:
+            return None  # 存在一行不像错误信息 → 认定为真实输出
+    return False
 
 # ── 解释器载荷深度检查（2026-08-31 补强）────────────────────
 # 背景：白名单允许 powershell/python/cmd 等解释器，但其 -Command/-c 参数是任意
@@ -1280,11 +2066,21 @@ def _app_launch_hint(exe_name: str) -> str:
     )
 
 
-def _validate_command(command: str, args: list[str] | None = None, allow_app_launch: bool = False) -> tuple[bool, str]:
+def _validate_command(
+    command: str,
+    args: list[str] | None = None,
+    allow_app_launch: bool = False,
+    approved: bool = False,
+) -> tuple[bool, str]:
     """三重安全校验：白名单 + 黑名单 + 注入检测.
 
     allow_app_launch=True（Windows 个人版，配置文件开关）：放行"启动本地应用"载荷
     （start xxx.exe / Start-Process / 引号内 .exe 等），仍保留 -EncodedCommand 编码命令拦截。
+
+    approved=True（2026-09-21 权限开关）：用户已在弹窗中批准，或在输入框把权限切到
+    "全部放行"。此时**高危但可撤销/用户可判断后果**的操作（`rm -rf build`、
+    `del ..\旧目录`…）予以放行；不可逆与结构性拦截（rm -rf /、mkfs、注入载荷、
+    系统目录落点、非白名单命令）**不受 approved 影响**，仍然拦截。
 
     Returns:
         (is_safe, error_message)
@@ -1292,18 +2088,25 @@ def _validate_command(command: str, args: list[str] | None = None, allow_app_lau
     if not command or not command.strip():
         return False, "命令为空"
 
-    # 0. 危险命令硬拦截（强安全层，总是生效，不受 auto_approve 影响）
-    # 个人版策略：危险操作不被动执行，而是引导用户到终端手动执行
-    from scout.security.policy import DANGEROUS_PATTERNS as _policy_patterns
+    # 0. 危险命令分级拦截（2026-09-21 由"一律硬拦"改为两级）
+    #   NEVER：不可逆/不可审计 → 永远拦（连"全部放行"也不放行）
+    #   RISKY：高危但用户可判断 → 未批准时拦（引导审批），已批准时放行
+    from scout.security.policy import RISK_NEVER, classify_command_risk
     full_cmd0 = command + " " + " ".join(args or [])
-    for _pat, _desc in _policy_patterns:
-        if re.search(_pat, full_cmd0, re.IGNORECASE):
-            return False, (
-                f"\u26d4 危险操作（{_desc}）已被安全保护拦截，我不会替你在后台执行。\n"
-                f"如果你确实需要执行此操作，请自己在服务器的终端中手动运行以下命令：\n"
-                f"    {full_cmd0}\n"
-                f"请向我说明你需要执行的原因，或确认后由你亲自在终端完成。"
-            )
+    _level, _desc = classify_command_risk(full_cmd0)
+    if _level == RISK_NEVER:
+        return False, (
+            f"\u26d4 危险操作（{_desc}）已被安全保护拦截，我不会替你在后台执行。\n"
+            f"这类操作后果不可逆，即使把权限切到「全部放行」也不会执行。\n"
+            f"如果你确实需要执行，请自己在终端中手动运行：\n"
+            f"    {full_cmd0}"
+        )
+    if _level != "normal" and not approved:
+        return False, (
+            f"{_NEED_APPROVAL_PREFIX}高危操作（{_desc}）需要你确认后才会执行。\n"
+            f"    {full_cmd0}\n"
+            f"（也可在输入框把权限切到「全部放行」，之后同类操作不再询问）"
+        )
 
     # 1. 检查 Shell 元字符（仅拦截注入/编码攻击模式；管道/重定向属正常用法，见 SHELL_META 注释）
     full_cmd = command + " " + " ".join(args or [])
@@ -1360,19 +2163,26 @@ def _validate_command(command: str, args: list[str] | None = None, allow_app_lau
         return False, "安全拦截: 命令不能包含换行符（禁止多行命令走私）"
 
     for token in [command] + list(args or []):
+        # ★ 2026-09-21：Windows 路径先做反斜杠归一化，避免 C:\tmp\1.tmp 被当成转义攻击
+        _scan = _scan_injection_token(token)
         for pattern in INJECTION_PATTERNS:
-            if re.search(pattern, token):
+            if re.search(pattern, _scan):
                 return False, "安全拦截: 参数包含可疑的注入模式"
 
-        # 检查路径遍历（★ 2026-09-14 修复误杀：改为路径段语义）
-        # 旧判定 `".." in token and "/" in token` 会误杀一切"省略号+斜杠"
-        # 共存的 token（如 "v1.2.../next"、说明文本、Python 切片示例）。
-        # 真正的路径遍历是 `..` 作为独立路径段：../..、a/../b、path/..，
-        # 用正则锚定段边界（前后是分隔符或 token 边界）精准判定。
-        if _PATH_TRAVERSAL_RE.search(token):
+        # 检查路径遍历（★ 2026-09-14 段语义修复误杀 → ★ 2026-09-21 放宽）
+        # 段语义：`..` 仅作为独立路径段才算遍历（".../next"、说明文字不误伤）。
+        # 放宽：普通 .. 一律放行（cd ..\上层 / dir ..\兄弟 / cat ../README.md 等日常操作），
+        # 只拦落点命中系统目录、病态深逃逸、破坏性命令越级删除这三类明显危险用法。
+        _trav_risk = _check_path_traversal(token, base_cmd)
+        if _trav_risk:
+            if approved and _trav_risk.startswith(_APPROVABLE_TRAVERSAL_MARK):
+                # 已批准：放行"删除/移动上级内容"这类用户可判断后果的操作
+                continue
             return False, (
-                "安全拦截: 参数包含路径遍历 (..) —— 如需访问上级目录请改用绝对路径，"
-                "或在说明文字中避免 ../ 写法"
+                f"{_NEED_APPROVAL_PREFIX if _trav_risk.startswith(_APPROVABLE_TRAVERSAL_MARK) else '安全拦截: '}"
+                f"参数包含路径遍历 (..) —— {_trav_risk}。\n"
+                "需要访问上级目录时请用绝对路径（如 D:\\project\\x 或 /home/u/x）；"
+                "确需删除/移动上级目录内容的可在弹窗中批准，或把权限切到「全部放行」。"
             )
 
         # 检查绝对路径中的敏感目录
@@ -1382,6 +2192,43 @@ def _validate_command(command: str, args: list[str] | None = None, allow_app_lau
                     return False, f"安全拦截: 不允许访问系统目录 {sensitive}"
 
     return True, ""
+
+
+def classify_shell_risk(
+    command: str, args: list[str] | None = None, allow_app_launch: bool = False
+) -> tuple[str, str]:
+    """shell 命令的风险分级（供执行器决定"直接跑 / 弹窗问 / 硬拦截"）.
+
+    Returns:
+        ("never", 原因)：不可逆或结构性违规 —— 任何权限模式都不执行；
+        ("risky", 原因)：高危但用户可判断 —— 默认弹窗，权限全开时直接执行；
+        ("normal", "")：常规操作。
+    """
+    from scout.security.policy import RISK_NEVER, RISK_NORMAL, RISK_RISKY, classify_command_risk
+
+    # 与执行时一致：先做跨平台命令翻译（ls→dir、rm→del…），否则未翻译的形态
+    # 会因"不在白名单"被误判为 never。
+    _raw = command + " " + " ".join(args or [])
+    # 先按**原始写法**判不可逆：翻译会改写命令形态（Windows 下 `rm -rf /`
+    # → `rmdir /s /q /`），只看译文会漏掉 rm -rf / 这类根目录删除。
+    _lvl, _desc = classify_command_risk(_raw)
+    if _lvl == RISK_NEVER:
+        return RISK_NEVER, _desc
+
+    _mapped = _map_platform_command(command, args)
+    if _mapped is not None:
+        command, args = _mapped
+    else:
+        # 无法翻译（不支持的开关等）：执行层会给出平台化提示，此处只保留
+        # 不可逆命令的硬拦截，避免"未翻译 → 不在白名单"被当成结构性违规。
+        return RISK_NORMAL, ""
+
+    ok, msg = _validate_command(command, args, allow_app_launch=allow_app_launch, approved=False)
+    if ok:
+        return RISK_NORMAL, ""
+    if msg.startswith(_NEED_APPROVAL_PREFIX):
+        return RISK_RISKY, msg[len(_NEED_APPROVAL_PREFIX):].strip()
+    return RISK_NEVER, msg
 
 
 class ShellTool(ToolDefinition):
@@ -1735,7 +2582,10 @@ class ShellTool(ToolDefinition):
                 output=_platform_hint(os.path.basename(command.strip().split(None, 1)[0])),
             )
         command, args = _mapped
-        is_safe, error = _validate_command(command, args, allow_app_launch=_allow_launch)
+        # _approved：执行器在用户弹窗批准后（或权限=全部放行时）注入，
+        # 使"高危但可判断后果"的命令真正跑起来（不可逆类仍被拦截，见 _validate_command）。
+        _approved = bool(kwargs.pop("_approved", False))
+        is_safe, error = _validate_command(command, args, allow_app_launch=_allow_launch, approved=_approved)
         if not is_safe:
             if interactive and not command.strip() and session_keys:
                 pass  # 走 interactive 分支处理按键注入
@@ -1743,7 +2593,7 @@ class ShellTool(ToolDefinition):
                 # 复合命令自动拆分（2026-08-29）：命令含 && / ; 且被安全校验拦截时，
                 # 尝试拆成单条序列逐条执行（每条仍走完整安全校验，不拆管道/重定向）。
                 # 避免"整条命令被拦 → 反思"的无效循环。
-                split_obs = await self._try_split_execute(command, args, timeout, cwd, allow_app_launch=_allow_launch)
+                split_obs = await self._try_split_execute(command, args, timeout, cwd, allow_app_launch=_allow_launch, approved=_approved)
                 if split_obs is not None:
                     return split_obs
                 return Observation(tool_name=self.name, success=False, output=error)
@@ -1763,9 +2613,13 @@ class ShellTool(ToolDefinition):
                 output = output[:25000] + "\n... [输出截断] ...\n" + output[-25000:]
             if on_output and output:
                 on_output(output[-3000:])
+            _p_ok = code == 0
+            # ★ 2026-09-21：持久会话同样纠偏 cmd 内置命令的隐形失败
+            if IS_WINDOWS and _p_ok and _win_cmd_real_status([command] + (args or []), output, code) is False:
+                _p_ok = False
             return Observation(
                 tool_name=self.name,
-                success=code == 0,
+                success=_p_ok,
                 output=output or f"(无输出, exit={code})",
                 metadata={"persistent": True, "session_key": session_key or "default", "exit_code": code},
             )
@@ -2008,6 +2862,10 @@ class ShellTool(ToolDefinition):
                 _base = os.path.basename(cmd_list[0].strip().lower()).strip('"')
                 if _base in ("explorer", "explorer.exe", "start") or _base.endswith(".msc"):
                     _ok = True
+            # ★ 2026-09-21：cmd 内置命令隐形失败纠偏（del/type 失败仍返回 0，
+            #   详见 _win_cmd_real_status 注释），避免向 LLM 谎报成功。
+            if IS_WINDOWS and _ok and _win_cmd_real_status(cmd_list, full_output, _rc) is False:
+                _ok = False
 
             # ★ 2026-09-08：空输出标注 —— 空输出≠失败（脚本可能只是没打印），
             #   但直接返回空串时，反思层只能瞎猜"运行环境不可用"。
@@ -2049,7 +2907,7 @@ class ShellTool(ToolDefinition):
             )
 
     # ── 复合命令自动拆分（2026-08-29）──────────────────────────
-    async def _try_split_execute(self, command: str, args: list[str] | None, timeout: int, cwd: str, allow_app_launch: bool = False) -> Observation | None:
+    async def _try_split_execute(self, command: str, args: list[str] | None, timeout: int, cwd: str, allow_app_launch: bool = False, approved: bool = False) -> Observation | None:
         """把被安全校验拦截的复合命令拆成单条序列逐条执行；无法安全拆分返回 None.
 
         拆分规则：
@@ -2113,7 +2971,7 @@ class ShellTool(ToolDefinition):
             tokens = _win_split_args(p) if IS_WINDOWS else shlex.split(p)
             if not tokens:
                 return None
-            ok, _ = _validate_command(tokens[0], tokens[1:] if len(tokens) > 1 else None, allow_app_launch=allow_app_launch)
+            ok, _ = _validate_command(tokens[0], tokens[1:] if len(tokens) > 1 else None, allow_app_launch=allow_app_launch, approved=approved)
             if not ok:
                 return None
 

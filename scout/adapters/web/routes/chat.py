@@ -117,41 +117,52 @@ class ChatRoutes:
                 agent_task = asyncio.create_task(
                     agent_copy.run_conversation(user_msg, session)
                 )
-                while not agent_task.done():
-                    try:
-                        event = await asyncio.wait_for(callbacks.events.get(), timeout=0.1)
-                        yield {"event": "message", "data": json.dumps(event, ensure_ascii=False)}
-                    except asyncio.TimeoutError:
-                        continue
-
-                # ★ 2026-09-09：任务结束后清空残留事件队列 —— on_file 等在 task
-                # 收尾阶段才入队的事件（文件卡片等）此前被直接丢弃，SSE 客户端
-                # 收不到 file 事件。done 之前先 drain，保证事件完整。
-                while not callbacks.events.empty():
-                    event = callbacks.events.get_nowait()
-                    yield {"event": "message", "data": json.dumps(event, ensure_ascii=False)}
-
-                # 获取最终结果
                 try:
-                    result = await agent_task
-                    yield {
-                        "event": "message",
-                        "data": json.dumps({
-                            "type": "done",
-                            "data": {"response": result["response"], "steps": result["steps"]},
-                            "timestamp": datetime.now().isoformat(),
-                        }, ensure_ascii=False),
-                    }
-                except Exception as e:
-                    yield {
-                        "event": "message",
-                        "data": json.dumps({
-                            "type": "error",
-                            "data": {"error": str(e)},
-                            "timestamp": datetime.now().isoformat(),
-                        }, ensure_ascii=False),
-                    }
+                    while not agent_task.done():
+                        try:
+                            event = await asyncio.wait_for(callbacks.events.get(), timeout=0.1)
+                            yield {"event": "message", "data": json.dumps(event, ensure_ascii=False)}
+                        except asyncio.TimeoutError:
+                            continue
+
+                    # ★ 2026-09-09：任务结束后清空残留事件队列 —— on_file 等在 task
+                    # 收尾阶段才入队的事件（文件卡片等）此前被直接丢弃，SSE 客户端
+                    # 收不到 file 事件。done 之前先 drain，保证事件完整。
+                    while not callbacks.events.empty():
+                        event = callbacks.events.get_nowait()
+                        yield {"event": "message", "data": json.dumps(event, ensure_ascii=False)}
+
+                    # 获取最终结果
+                    try:
+                        result = await agent_task
+                        yield {
+                            "event": "message",
+                            "data": json.dumps({
+                                "type": "done",
+                                "data": {"response": result["response"], "steps": result["steps"]},
+                                "timestamp": datetime.now().isoformat(),
+                            }, ensure_ascii=False),
+                        }
+                    except Exception as e:
+                        yield {
+                            "event": "message",
+                            "data": json.dumps({
+                                "type": "error",
+                                "data": {"error": str(e)},
+                                "timestamp": datetime.now().isoformat(),
+                            }, ensure_ascii=False),
+                        }
                 finally:
+                    # ★ 2026-09-20：客户端断开/生成器被关闭时取消 agent 任务。
+                    # 此前 agent_task 既不 cancel 也从不 retrieve 异常 → 断开后 agent
+                    # 继续跑完整回合白烧 LLM 配额，并留下 "Task was destroyed but it
+                    # is pending!"。cancel + await 保证任务终止且异常被取回。
+                    if not agent_task.done():
+                        agent_task.cancel()
+                        try:
+                            await agent_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
                     # 恢复主 Agent 引用（防止并发请求串扰）
                     try:
                         ToolRegistry._main_agent = _prev_main_agent

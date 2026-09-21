@@ -395,6 +395,16 @@ class WsRoutes:
                     finally:
                         if cancel_task and not cancel_task.done():
                             cancel_task.cancel()
+                        # ★ 2026-09-20：客户端断开后显式取消 agent，避免后台继续烧 LLM。
+                        # run_stream 在 ws.send_json 抛 RuntimeError 时只是 return，
+                        # async for 会自动 aclose 生成器，但 agent 内部循环（LLM 流式 /
+                        # 工具执行）未必感知到生成器关闭 → 继续跑到结束。
+                        # 正常 cancel 路径（listen_cancel）已调过 agent_copy.cancel()，
+                        # 这里重复调用无害（仅重设标志位 + executor.cancel_all）。
+                        try:
+                            agent_copy.cancel()
+                        except Exception:
+                            pass
                         # 恢复主 Agent 引用（防止并发请求串扰）
                         try:
                             from scout.tools.registry import ToolRegistry

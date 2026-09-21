@@ -97,6 +97,10 @@ INITIAL_CONFIG = {
     # 允许 shell 启动本地应用（QQ/微信等 exe）。Windows 个人版默认开启，
     # 放行 start/Start-Process 等启动载荷（仍保留 -EncodedCommand 编码命令拦截）
     "allow_app_launch": False,
+    # 权限模式（输入框开关，2026-09-21）：
+    #   ask=标准：仅高危操作弹窗询问；auto=全部放行：高危也不问直接执行；
+    #   strict=谨慎：每条 shell / 代码执行都先询问
+    "permission_mode": "ask",
 }
 
 # Windows 个人版默认允许启动本地应用（QQ/微信等）；其他平台保持保守默认关闭
@@ -141,6 +145,9 @@ class LLMConfig(BaseModel):
     request_timeout: int = 0
     sandbox_mode: str = "off"  # off / non-main / all
     auto_approve: bool = True  # 自动审批工具执行
+    # 权限模式（2026-09-21，输入框开关）：
+    #   ask=标准（仅高危操作弹窗询问）/ auto=全部放行（高危也不问）/ strict=谨慎（每条 shell 都问）
+    permission_mode: str = "ask"
     allow_app_launch: bool = False  # 允许 shell 启动本地应用（QQ/微信等 exe）；Windows 个人版默认开启
     language: str = "auto"  # auto=跟随用户 / zh=中文 / en=英文
     restore_last_session: bool = True  # 恢复上次会话

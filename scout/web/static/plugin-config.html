@@ -1,67 +1,38 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>插件配置编辑 - Scout Agent</title>
+    <title>鎻掍欢閰嶇疆缂栬緫 - Scout Agent</title>
+    <script src="/static/theme.js"></script>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <script src="/static/vendor/tailwind.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
-    <style>
-        .editor-container {
-            height: 500px;
-            border: 1px solid #374151;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        .template-card {
-            transition: all 0.2s;
-        }
-        .template-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        }
-        .toast {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 9999;
-            animation: slideIn 0.3s ease-out;
-        }
-        @keyframes slideIn {
-            from {
-                transform: translateX(400px);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-    </style>
     <script src="/static/i18n.js"></script>
+<!-- 鏋勫缓浜х墿锛歠rontend/src/app.css锛屾敼鏍峰紡璇锋敼閭ｉ噷鍐?npm run build -->
+<link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/theme-workbuddy.css">
 </head>
-<body class="bg-gray-900 text-gray-100">
+<body class="bg-surface-0 text-ink-1">
     <script>renderLangToggle();</script>
-    <!-- 顶部导航 -->
-    <nav class="bg-gray-800 border-b border-gray-700">
+    <!-- 椤堕儴瀵艰埅 -->
+    <nav class="bg-surface-3 border-b border-line">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-16">
                 <div class="flex items-center">
-                    <a href="/plugins" class="flex items-center text-gray-300 hover:text-white">
+                    <a href="/plugins" class="flex items-center text-ink-2 hover:text-ink-1">
                         <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
                         </svg>
-                        返回插件列表
+                        杩斿洖鎻掍欢鍒楄〃
                     </a>
-                    <span class="ml-6 text-xl font-semibold">插件配置编辑</span>
+                    <span class="ml-6 text-xl font-semibold">鎻掍欢閰嶇疆缂栬緫</span>
                 </div>
                 <div class="flex items-center space-x-4">
-                    <button onclick="validateConfig()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
-                        验证配置
+                    <button onclick="validateConfig()" class="px-4 py-2 bg-info hover:bg-info rounded-lg transition-colors">
+                        楠岃瘉閰嶇疆
                     </button>
-                    <button onclick="saveConfig()" class="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors">
-                        保存配置
+                    <button onclick="saveConfig()" class="px-4 py-2 bg-success hover:bg-success rounded-lg transition-colors">
+                        淇濆瓨閰嶇疆
                     </button>
                 </div>
             </div>
@@ -69,38 +40,38 @@
     </nav>
 
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <!-- 插件信息 -->
-        <div class="bg-gray-800 rounded-lg p-6 mb-6">
-            <h2 class="text-2xl font-bold mb-4" id="plugin-name">加载中...</h2>
+        <!-- 鎻掍欢淇℃伅 -->
+        <div class="bg-surface-3 rounded-lg p-6 mb-6">
+            <h2 class="text-2xl font-bold mb-4" id="plugin-name">鍔犺浇涓?..</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                 <div>
-                    <span class="text-gray-400">版本：</span>
+                    <span class="text-ink-3">鐗堟湰锛?/span>
                     <span id="plugin-version">-</span>
                 </div>
                 <div>
-                    <span class="text-gray-400">作者：</span>
+                    <span class="text-ink-3">浣滆€咃細</span>
                     <span id="plugin-author">-</span>
                 </div>
                 <div>
-                    <span class="text-gray-400">状态：</span>
+                    <span class="text-ink-3">鐘舵€侊細</span>
                     <span id="plugin-status" class="px-2 py-1 rounded text-xs">-</span>
                 </div>
             </div>
-            <p class="mt-4 text-gray-300" id="plugin-description"></p>
+            <p class="mt-4 text-ink-2" id="plugin-description"></p>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <!-- 左侧：配置编辑器 -->
+            <!-- 宸︿晶锛氶厤缃紪杈戝櫒 -->
             <div class="lg:col-span-2">
-                <div class="bg-gray-800 rounded-lg p-6">
+                <div class="bg-surface-3 rounded-lg p-6">
                     <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-lg font-semibold">配置文件 (config.json)</h3>
+                        <h3 class="text-lg font-semibold">閰嶇疆鏂囦欢 (config.json)</h3>
                         <div class="flex space-x-2">
-                            <button onclick="formatJSON()" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">
-                                格式化
+                            <button onclick="formatJSON()" class="px-3 py-1 bg-surface-4 hover:bg-surface-5 rounded text-sm transition-colors">
+                                鏍煎紡鍖?
                             </button>
-                            <button onclick="resetConfig()" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors">
-                                重置
+                            <button onclick="resetConfig()" class="px-3 py-1 bg-surface-4 hover:bg-surface-5 rounded text-sm transition-colors">
+                                閲嶇疆
                             </button>
                         </div>
                     </div>
@@ -109,54 +80,54 @@
                 </div>
             </div>
 
-            <!-- 右侧：配置模板和说明 -->
+            <!-- 鍙充晶锛氶厤缃ā鏉垮拰璇存槑 -->
             <div class="space-y-6">
-                <!-- 配置模板 -->
-                <div class="bg-gray-800 rounded-lg p-6">
-                    <h3 class="text-lg font-semibold mb-4">配置模板</h3>
+                <!-- 閰嶇疆妯℃澘 -->
+                <div class="bg-surface-3 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">閰嶇疆妯℃澘</h3>
                     <div class="space-y-3">
-                        <div class="template-card bg-gray-700 rounded-lg p-4 cursor-pointer" onclick="loadTemplate('basic')">
-                            <h4 class="font-semibold text-blue-400">基础模板</h4>
-                            <p class="text-sm text-gray-400 mt-1">空配置，适合自定义</p>
+                        <div class="template-card bg-surface-4 rounded-lg p-4 cursor-pointer" onclick="loadTemplate('basic')">
+                            <h4 class="font-semibold text-info">鍩虹妯℃澘</h4>
+                            <p class="text-sm text-ink-3 mt-1">绌洪厤缃紝閫傚悎鑷畾涔?/p>
                         </div>
-                        <div class="template-card bg-gray-700 rounded-lg p-4 cursor-pointer" onclick="loadTemplate('keyword')">
-                            <h4 class="font-semibold text-green-400">关键词插件</h4>
-                            <p class="text-sm text-gray-400 mt-1">关键词-响应映射配置</p>
+                        <div class="template-card bg-surface-4 rounded-lg p-4 cursor-pointer" onclick="loadTemplate('keyword')">
+                            <h4 class="font-semibold text-success">鍏抽敭璇嶆彃浠?/h4>
+                            <p class="text-sm text-ink-3 mt-1">鍏抽敭璇?鍝嶅簲鏄犲皠閰嶇疆</p>
                         </div>
-                        <div class="template-card bg-gray-700 rounded-lg p-4 cursor-pointer" onclick="loadTemplate('filter')">
-                            <h4 class="font-semibold text-yellow-400">过滤插件</h4>
-                            <p class="text-sm text-gray-400 mt-1">敏感词过滤配置</p>
+                        <div class="template-card bg-surface-4 rounded-lg p-4 cursor-pointer" onclick="loadTemplate('filter')">
+                            <h4 class="font-semibold text-warn">杩囨护鎻掍欢</h4>
+                            <p class="text-sm text-ink-3 mt-1">鏁忔劅璇嶈繃婊ら厤缃?/p>
                         </div>
-                        <div class="template-card bg-gray-700 rounded-lg p-4 cursor-pointer" onclick="loadTemplate('greeting')">
-                            <h4 class="font-semibold text-purple-400">问候插件</h4>
-                            <p class="text-sm text-gray-400 mt-1">时间段问候配置</p>
+                        <div class="template-card bg-surface-4 rounded-lg p-4 cursor-pointer" onclick="loadTemplate('greeting')">
+                            <h4 class="font-semibold text-agent">闂€欐彃浠?/h4>
+                            <p class="text-sm text-ink-3 mt-1">鏃堕棿娈甸棶鍊欓厤缃?/p>
                         </div>
                     </div>
                 </div>
 
-                <!-- 配置说明 -->
-                <div class="bg-gray-800 rounded-lg p-6">
-                    <h3 class="text-lg font-semibold mb-4">配置说明</h3>
-                    <div class="text-sm text-gray-300 space-y-3">
+                <!-- 閰嶇疆璇存槑 -->
+                <div class="bg-surface-3 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">閰嶇疆璇存槑</h3>
+                    <div class="text-sm text-ink-2 space-y-3">
                         <div>
-                            <h4 class="font-semibold text-blue-400 mb-1">配置格式</h4>
-                            <p>配置文件必须是有效的 JSON 格式</p>
+                            <h4 class="font-semibold text-info mb-1">閰嶇疆鏍煎紡</h4>
+                            <p>閰嶇疆鏂囦欢蹇呴』鏄湁鏁堢殑 JSON 鏍煎紡</p>
                         </div>
                         <div>
-                            <h4 class="font-semibold text-green-400 mb-1">常用字段</h4>
-                            <ul class="list-disc list-inside space-y-1 text-gray-400">
-                                <li><code class="bg-gray-700 px-1 rounded">enabled</code> - 是否启用插件</li>
-                                <li><code class="bg-gray-700 px-1 rounded">priority</code> - 优先级 (0-100)</li>
-                                <li><code class="bg-gray-700 px-1 rounded">keywords</code> - 关键词列表</li>
-                                <li><code class="bg-gray-700 px-1 rounded">responses</code> - 响应映射</li>
+                            <h4 class="font-semibold text-success mb-1">甯哥敤瀛楁</h4>
+                            <ul class="list-disc list-inside space-y-1 text-ink-3">
+                                <li><code class="bg-surface-4 px-1 rounded">enabled</code> - 鏄惁鍚敤鎻掍欢</li>
+                                <li><code class="bg-surface-4 px-1 rounded">priority</code> - 浼樺厛绾?(0-100)</li>
+                                <li><code class="bg-surface-4 px-1 rounded">keywords</code> - 鍏抽敭璇嶅垪琛?/li>
+                                <li><code class="bg-surface-4 px-1 rounded">responses</code> - 鍝嶅簲鏄犲皠</li>
                             </ul>
                         </div>
                         <div>
-                            <h4 class="font-semibold text-yellow-400 mb-1">注意事项</h4>
-                            <ul class="list-disc list-inside space-y-1 text-gray-400">
-                                <li>保存后插件会自动重新加载</li>
-                                <li>配置错误会导致插件无法加载</li>
-                                <li>建议使用验证功能检查配置</li>
+                            <h4 class="font-semibold text-warn mb-1">娉ㄦ剰浜嬮」</h4>
+                            <ul class="list-disc list-inside space-y-1 text-ink-3">
+                                <li>淇濆瓨鍚庢彃浠朵細鑷姩閲嶆柊鍔犺浇</li>
+                                <li>閰嶇疆閿欒浼氬鑷存彃浠舵棤娉曞姞杞?/li>
+                                <li>寤鸿浣跨敤楠岃瘉鍔熻兘妫€鏌ラ厤缃?/li>
                             </ul>
                         </div>
                     </div>
@@ -170,7 +141,7 @@
         let currentPlugin = null;
         let originalConfig = null;
 
-        // 初始化 Monaco Editor
+        // 鍒濆鍖?Monaco Editor
         require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
         require(['vs/editor/editor.main'], function() {
             monaco.editor.defineTheme('custom-dark', {
@@ -196,53 +167,53 @@
                 formatOnType: true
             });
 
-            // 加载插件配置
+            // 鍔犺浇鎻掍欢閰嶇疆
             loadPluginConfig();
         });
 
-        // 从 URL 获取插件名称
+        // 浠?URL 鑾峰彇鎻掍欢鍚嶇О
         function getPluginName() {
             const urlParams = new URLSearchParams(window.location.search);
             return urlParams.get('plugin');
         }
 
-        // 加载插件配置
+        // 鍔犺浇鎻掍欢閰嶇疆
         async function loadPluginConfig() {
             const pluginName = getPluginName();
             if (!pluginName) {
-                showToast('未指定插件名称', 'error');
+                showToast('鏈寚瀹氭彃浠跺悕绉?, 'error');
                 return;
             }
 
             try {
-                // 获取插件信息
+                // 鑾峰彇鎻掍欢淇℃伅
                 const pluginsResponse = await fetch('/api/plugins');
                 const pluginsData = await pluginsResponse.json();
                 const plugin = pluginsData.plugins.find(p => p.name === pluginName);
 
                 if (!plugin) {
-                    showToast('插件不存在', 'error');
+                    showToast('鎻掍欢涓嶅瓨鍦?, 'error');
                     return;
                 }
 
                 currentPlugin = plugin;
 
-                // 更新插件信息显示
+                // 鏇存柊鎻掍欢淇℃伅鏄剧ず
                 document.getElementById('plugin-name').textContent = plugin.name;
                 document.getElementById('plugin-version').textContent = plugin.version || '1.0.0';
-                document.getElementById('plugin-author').textContent = plugin.author || '未知';
-                document.getElementById('plugin-description').textContent = plugin.description || '无描述';
+                document.getElementById('plugin-author').textContent = plugin.author || '鏈煡';
+                document.getElementById('plugin-description').textContent = plugin.description || '鏃犳弿杩?;
 
                 const statusEl = document.getElementById('plugin-status');
                 if (plugin.loaded) {
-                    statusEl.textContent = '已加载';
-                    statusEl.className = 'px-2 py-1 rounded text-xs bg-green-600';
+                    statusEl.textContent = '宸插姞杞?;
+                    statusEl.className = 'px-2 py-1 rounded text-xs bg-success';
                 } else {
-                    statusEl.textContent = '未加载';
-                    statusEl.className = 'px-2 py-1 rounded text-xs bg-red-600';
+                    statusEl.textContent = '鏈姞杞?;
+                    statusEl.className = 'px-2 py-1 rounded text-xs bg-danger';
                 }
 
-                // 获取配置文件
+                // 鑾峰彇閰嶇疆鏂囦欢
                 const configResponse = await fetch(`/api/plugins/${pluginName}/config`);
                 if (configResponse.ok) {
                     const configData = await configResponse.json();
@@ -254,20 +225,20 @@
                     originalConfig = '{}';
                 }
             } catch (error) {
-                console.error('加载配置失败:', error);
-                showToast('加载配置失败', 'error');
+                console.error('鍔犺浇閰嶇疆澶辫触:', error);
+                showToast('鍔犺浇閰嶇疆澶辫触', 'error');
             }
         }
 
-        // 验证配置
+        // 楠岃瘉閰嶇疆
         function validateConfig() {
             try {
                 const configStr = editor.getValue();
                 JSON.parse(configStr);
                 
                 const msgEl = document.getElementById('validation-message');
-                msgEl.className = 'mt-4 p-4 bg-green-900 border border-green-700 rounded-lg text-green-300';
-                msgEl.innerHTML = '✓ 配置格式正确';
+                msgEl.className = 'mt-4 p-4 bg-success border border-success rounded-lg text-success';
+                msgEl.innerHTML = '鉁?閰嶇疆鏍煎紡姝ｇ‘';
                 msgEl.classList.remove('hidden');
                 
                 setTimeout(() => {
@@ -277,17 +248,17 @@
                 return true;
             } catch (error) {
                 const msgEl = document.getElementById('validation-message');
-                msgEl.className = 'mt-4 p-4 bg-red-900 border border-red-700 rounded-lg text-red-300';
-                msgEl.innerHTML = __tpl(`✗ 配置格式错误: ${error.message}`);
+                msgEl.className = 'mt-4 p-4 bg-danger border border-danger rounded-lg text-danger';
+                msgEl.innerHTML = __tpl(`鉁?閰嶇疆鏍煎紡閿欒: ${error.message}`);
                 msgEl.classList.remove('hidden');
                 return false;
             }
         }
 
-        // 保存配置
+        // 淇濆瓨閰嶇疆
         async function saveConfig() {
             if (!validateConfig()) {
-                showToast('配置格式错误，无法保存', 'error');
+                showToast('閰嶇疆鏍煎紡閿欒锛屾棤娉曚繚瀛?, 'error');
                 return;
             }
 
@@ -304,39 +275,39 @@
                 });
 
                 if (response.ok) {
-                    showToast('配置保存成功', 'success');
+                    showToast('閰嶇疆淇濆瓨鎴愬姛', 'success');
                     originalConfig = configStr;
                 } else {
                     const error = await response.json();
-                    showToast(error.detail || '保存失败', 'error');
+                    showToast(error.detail || '淇濆瓨澶辫触', 'error');
                 }
             } catch (error) {
-                console.error('保存配置失败:', error);
-                showToast('保存配置失败', 'error');
+                console.error('淇濆瓨閰嶇疆澶辫触:', error);
+                showToast('淇濆瓨閰嶇疆澶辫触', 'error');
             }
         }
 
-        // 格式化 JSON
+        // 鏍煎紡鍖?JSON
         function formatJSON() {
             try {
                 const configStr = editor.getValue();
                 const config = JSON.parse(configStr);
                 editor.setValue(JSON.stringify(config, null, 2));
-                showToast('格式化成功', 'success');
+                showToast('鏍煎紡鍖栨垚鍔?, 'success');
             } catch (error) {
-                showToast('配置格式错误，无法格式化', 'error');
+                showToast('閰嶇疆鏍煎紡閿欒锛屾棤娉曟牸寮忓寲', 'error');
             }
         }
 
-        // 重置配置
+        // 閲嶇疆閰嶇疆
         function resetConfig() {
-            if (confirm(__t('确定要重置配置吗？这将恢复到上次保存的状态。'))) {
+            if (confirm(__t('纭畾瑕侀噸缃厤缃悧锛熻繖灏嗘仮澶嶅埌涓婃淇濆瓨鐨勭姸鎬併€?))) {
                 editor.setValue(originalConfig);
-                showToast('配置已重置', 'success');
+                showToast('閰嶇疆宸查噸缃?, 'success');
             }
         }
 
-        // 加载模板
+        // 鍔犺浇妯℃澘
         function loadTemplate(templateName) {
             const templates = {
                 basic: {},
@@ -344,38 +315,38 @@
                     enabled: true,
                     priority: 50,
                     keywords: {
-                        "你好": "您好！有什么可以帮助您的吗？",
-                        "帮助": "我可以帮您解答问题、完成任务等。"
+                        "浣犲ソ": "鎮ㄥソ锛佹湁浠€涔堝彲浠ュ府鍔╂偍鐨勫悧锛?,
+                        "甯姪": "鎴戝彲浠ュ府鎮ㄨВ绛旈棶棰樸€佸畬鎴愪换鍔＄瓑銆?
                     }
                 },
                 filter: {
                     enabled: true,
                     priority: 80,
-                    words: ["敏感词1", "敏感词2"],
+                    words: ["鏁忔劅璇?", "鏁忔劅璇?"],
                     replacement: "***"
                 },
                 greeting: {
                     enabled: true,
                     priority: 30,
-                    morning: "早上好！新的一天开始了！",
-                    afternoon: "下午好！希望您今天过得愉快！",
-                    evening: "晚上好！注意休息哦！"
+                    morning: "鏃╀笂濂斤紒鏂扮殑涓€澶╁紑濮嬩簡锛?,
+                    afternoon: "涓嬪崍濂斤紒甯屾湜鎮ㄤ粖澶╄繃寰楁剦蹇紒",
+                    evening: "鏅氫笂濂斤紒娉ㄦ剰浼戞伅鍝︼紒"
                 }
             };
 
             const template = templates[templateName];
             editor.setValue(JSON.stringify(template, null, 2));
-            showToast(`已加载 ${templateName} 模板`, 'success');
+            showToast(`宸插姞杞?${templateName} 妯℃澘`, 'success');
         }
 
-        // 显示提示
+        // 鏄剧ず鎻愮ず
         function showToast(message, type = 'info') {
             message = __tpl(message);
             const toast = document.createElement('div');
-            toast.className = `toast px-6 py-3 rounded-lg shadow-lg ${
-                type === 'success' ? 'bg-green-600' :
-                type === 'error' ? 'bg-red-600' :
-                'bg-blue-600'
+            toast.className = `toast px-6 py-3 rounded-lg shadow-card ${
+                type === 'success' ? 'bg-success' :
+                type === 'error' ? 'bg-danger' :
+                'bg-info'
             }`;
             toast.textContent = message;
             document.body.appendChild(toast);
@@ -385,5 +356,6 @@
             }, 3000);
         }
     </script>
+<script src="/static/js/subshell.js"></script>
 </body>
 </html>

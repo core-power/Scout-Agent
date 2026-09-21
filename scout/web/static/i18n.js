@@ -129,6 +129,17 @@ const I18N_DICT = {
     "中 / EN": { zh: "中 / EN", en: "EN / 中" },
     "快速": { zh: "快速", en: "Fast" },
     "思考": { zh: "思考", en: "Think" },
+    // ── 权限模式（输入框开关，2026-09-21）──
+    "标准": { zh: "标准", en: "Standard" },
+    "全部放行": { zh: "全部放行", en: "Allow all" },
+    "谨慎": { zh: "谨慎", en: "Cautious" },
+    "标准（高危询问）": { zh: "标准（高危询问）", en: "Standard (ask on risky)" },
+    "全部放行（不再询问）": { zh: "全部放行（不再询问）", en: "Allow all (never ask)" },
+    "谨慎（每条都问）": { zh: "谨慎（每条都问）", en: "Cautious (ask every time)" },
+    "仅删除/格式化等高危操作弹窗确认": { zh: "仅删除/格式化等高危操作弹窗确认", en: "Only risky ops (delete/format) ask" },
+    "高危操作直接执行；不可逆操作仍拦截": { zh: "高危操作直接执行；不可逆操作仍拦截", en: "Risky ops run directly; irreversible ops still blocked" },
+    "所有命令执行前都先确认": { zh: "所有命令执行前都先确认", en: "Confirm before every command" },
+    "权限模式：控制危险操作是否询问": { zh: "权限模式：控制危险操作是否询问", en: "Permission mode: whether risky ops ask first" },
     "当前版本": { zh: "当前版本", en: "Current Version" },
     "版本说明": { zh: "版本说明", en: "Release Notes" },
     "初始稳定版本发布": { zh: "初始稳定版本发布", en: "Initial stable release" },
@@ -1145,6 +1156,122 @@ const I18N_DICT = {
     "可选过滤器（event_filters）:": { zh: "可选过滤器（event_filters）:", en: "Optional filters (event_filters):" },
     "如何实现\"文件变化 → Agent 自动处理\"": { zh: "如何实现\"文件变化 → Agent 自动处理\"", en: "How to automate \"file change → Agent processing\"" },
 
+    // ===== 外壳增强层（shell-extras / agent-motion）新增文案 2026-09-19 =====
+    "会话": { zh: "会话", en: "Sessions" },
+    "打开产物面板": { zh: "打开产物面板", en: "Open artifacts panel" },
+    "面板": { zh: "面板", en: "Panel" },
+    "打开记忆库": { zh: "打开记忆库", en: "Open memory" },
+    "打开知识库": { zh: "打开知识库", en: "Open knowledge base" },
+    "回到最新消息": { zh: "回到最新消息", en: "Back to latest" },
+    "视图": { zh: "视图", en: "View" },
+    "切换主题（深 / 浅）": { zh: "切换主题（深 / 浅）", en: "Toggle theme (dark / light)" },
+    "切换界面语言": { zh: "切换界面语言", en: "Switch UI language" },
+    "设置 · 模型配置": { zh: "设置 · 模型配置", en: "Settings · Models" },
+    "设置 · Agent 行为": { zh: "设置 · Agent 行为", en: "Settings · Agent behavior" },
+    "设置 · 安全策略": { zh: "设置 · 安全策略", en: "Settings · Security policy" },
+    "设置 · 渠道管理": { zh: "设置 · 渠道管理", en: "Settings · Channels" },
+    "设置 · 工具配置": { zh: "设置 · 工具配置", en: "Settings · Tools" },
+    "输入命令或搜索会话…  Esc 关闭": { zh: "输入命令或搜索会话…  Esc 关闭", en: "Type a command or search sessions…  Esc to close" },
+    "↑↓ 选择": { zh: "↑↓ 选择", en: "↑↓ Select" },
+    "Enter 执行": { zh: "Enter 执行", en: "Enter Run" },
+    "Esc 关闭": { zh: "Esc 关闭", en: "Esc Close" },
+    "没有匹配的命令或会话": { zh: "没有匹配的命令或会话", en: "No matching command or session" },
+    "置顶此会话": { zh: "置顶此会话", en: "Pin this session" },
+    "置顶": { zh: "置顶", en: "Pin" },
+    "取消置顶": { zh: "取消置顶", en: "Unpin" },
+    "上次的对话": { zh: "上次的对话", en: "Last conversation" },
+    "继续上次：": { zh: "继续上次：", en: "Continue last: " },
+    "发送 ·": { zh: "发送 ·", en: "send ·" },
+    "换行": { zh: "换行", en: "newline" },
+    "调出上一条输入": { zh: "调出上一条输入", en: "Recall previous input" },
+    "命令面板": { zh: "命令面板", en: "Command palette" },
+    "停止生成": { zh: "停止生成", en: "Stop generating" },
+    "{n} 字 · ≈{m} tokens": { zh: "{n} 字 · ≈{m} tokens", en: "{n} chars · ≈{m} tokens" },
+    "回答已完成，共 {n} 步。": { zh: "回答已完成，共 {n} 步。", en: "Answer complete, {n} steps." },
+    "任务已完成，共 {n} 步。": { zh: "任务已完成，共 {n} 步。", en: "Task complete, {n} steps." },
+    "已折叠 · 点击查看": { zh: "已折叠 · 点击查看", en: "Collapsed · click to view" },
+    "我": { zh: "我", en: "Me" },
+    "产物": { zh: "产物", en: "Artifacts" },
+    "本会话还没有产出文件。": { zh: "本会话还没有产出文件。", en: "No artifacts in this session yet." },
+    "让 Scout 生成或修改文件后，会自动汇总到这里。": { zh: "让 Scout 生成或修改文件后，会自动汇总到这里。", en: "Files Scout creates or edits will be listed here automatically." },
+    "下载": { zh: "下载", en: "Download" },
+    "加载中…": { zh: "加载中…", en: "Loading…" },
+    "…（前 4000 字符，完整内容请下载）": { zh: "…（前 4000 字符，完整内容请下载）", en: "… (first 4000 chars, download for full content)" },
+    "无法预览该文件（可能是二进制或需要登录），请直接下载。": { zh: "无法预览该文件（可能是二进制或需要登录），请直接下载。", en: "Preview unavailable (binary file or login required). Please download instead." },
+    "产物面板（本会话生成的文件）  Alt+F": { zh: "产物面板（本会话生成的文件）  Alt+F", en: "Artifacts (files from this session)  Alt+F" },
+    "Esc 返回": { zh: "Esc 返回", en: "Esc back" },
+    "子代理": { zh: "子代理", en: "Sub-agent" },
+    "抓取网页": { zh: "抓取网页", en: "Fetch page" },
+    "搜索代码": { zh: "搜索代码", en: "Search code" },
+    "读取文件": { zh: "读取文件", en: "Read file" },
+    "编辑文件": { zh: "编辑文件", en: "Edit file" },
+    "列目录": { zh: "列目录", en: "List dir" },
+    "执行命令": { zh: "执行命令", en: "Run command" },
+    "执行代码": { zh: "执行代码", en: "Run code" },
+    "读写记忆": { zh: "读写记忆", en: "Memory" },
+    "分派子任务": { zh: "分派子任务", en: "Dispatch subtask" },
+    "生成图片": { zh: "生成图片", en: "Generate image" },
+    "看图": { zh: "看图", en: "View image" },
+    "设置计划": { zh: "设置计划", en: "Set plan" },
+    "操作浏览器": { zh: "操作浏览器", en: "Browse" },
+    "检索知识库": { zh: "检索知识库", en: "Knowledge lookup" },
+    "调用 MCP": { zh: "调用 MCP", en: "Call MCP" },
+    "规划任务": { zh: "规划任务", en: "Plan task" },
+    "传输文件": { zh: "传输文件", en: "Transfer file" },
+    "准备中": { zh: "准备中", en: "Preparing" },
+    "第 {n} 步": { zh: "第 {n} 步", en: "Step {n}" },
+    " · 并行 {n} 项": { zh: " · 并行 {n} 项", en: " · {n} in parallel" },
+    "出错": { zh: "出错", en: "Failed" },
+    "已中断": { zh: "已中断", en: "Stopped" },
+    "{n} 步 · {m} 行输出": { zh: "{n} 步 · {m} 行输出", en: "{n} steps · {m} lines" },
+    "{n} 行输出": { zh: "{n} 行输出", en: "{n} lines" },
+    "展开全部": { zh: "展开全部", en: "Expand all" },
+    "收起": { zh: "收起", en: "Collapse" },
+    "正在推演": { zh: "正在推演", en: "Reasoning" },
+    "已思考 {n}": { zh: "已思考 {n}", en: "Thought for {n}" },
+    "想完了": { zh: "想完了", en: "Thought complete" },
+    "…（前面已折叠）": { zh: "…（前面已折叠）", en: "… (earlier output collapsed)" },
+    // ===== 第五轮：导航/发现性/输入区（2026-09-19） =====
+    "命令面板（搜索命令与会话）  Ctrl + K": { zh: "命令面板（搜索命令与会话）  Ctrl + K", en: "Command palette (search commands & sessions)  Ctrl + K" },
+    "命令面板（搜索命令与会话）  ⌘ + K": { zh: "命令面板（搜索命令与会话）  ⌘ + K", en: "Command palette (search commands & sessions)  ⌘ + K" },
+    "折叠 / 展开侧栏": { zh: "折叠 / 展开侧栏", en: "Collapse / expand sidebar" },
+    "折叠侧栏": { zh: "折叠侧栏", en: "Collapse sidebar" },
+    "展开侧栏": { zh: "展开侧栏", en: "Expand sidebar" },
+    "快捷键与斜杠命令": { zh: "快捷键与斜杠命令", en: "Shortcuts & slash commands" },
+    "快捷键速查": { zh: "快捷键速查", en: "Shortcut cheat sheet" },
+    "/ 斜杠命令": { zh: "/ 斜杠命令", en: "/ Slash commands" },
+    "开一个新会话": { zh: "开一个新会话", en: "Start a new chat" },
+    "切换本轮模型": { zh: "切换本轮模型", en: "Switch model for this turn" },
+    "切换到思考模式": { zh: "切换到思考模式", en: "Switch to thinking mode" },
+    "切换到快速模式": { zh: "切换到快速模式", en: "Switch to fast mode" },
+    "在当前会话中查找": { zh: "在当前会话中查找", en: "Find in this chat" },
+    "导出会话为 Markdown": { zh: "导出会话为 Markdown", en: "Export chat as Markdown" },
+    "导出会话为 JSON": { zh: "导出会话为 JSON", en: "Export chat as JSON" },
+    "打开记忆库": { zh: "打开记忆库", en: "Open memory" },
+    "打开知识库": { zh: "打开知识库", en: "Open knowledge base" },
+    "切换深 / 浅主题": { zh: "切换深 / 浅主题", en: "Toggle dark / light theme" },
+    "停止当前生成": { zh: "停止当前生成", en: "Stop generating" },
+    "上下文": { zh: "上下文", en: "Context" },
+    "本会话上下文估算占用 {n}%，接近上限时建议新开会话": { zh: "本会话上下文估算占用 {n}%，接近上限时建议新开会话", en: "≈{n}% of context used — consider starting a new chat" },
+    "上下文接近上限，建议新开会话": { zh: "上下文接近上限，建议新开会话", en: "Context near its limit — consider starting a new chat" },
+    "正在生成中，先别急": { zh: "正在生成中，先别急", en: "Still generating — please wait" },
+    "已排队 {n} 条 · 本轮结束后自动发送": { zh: "已排队 {n} 条 · 本轮结束后自动发送", en: "{n} queued · will send when this turn finishes" },
+    "连续 {n} 次相同调用": { zh: "连续 {n} 次相同调用", en: "{n} identical calls in a row" },
+    "查看改动": { zh: "查看改动", en: "View changes" },
+    " · {n} 步 · {d}": { zh: " · {n} 步 · {d}", en: " · {n} steps · {d}" },
+    "· {n} 行": { zh: "· {n} 行", en: "· {n} lines" },
+    " · {n} 字": { zh: " · {n} 字", en: " · {n} chars" },
+    "在当前会话中查找…": { zh: "在当前会话中查找…", en: "Find in this session…" },
+    "无匹配": { zh: "无匹配", en: "No match" },
+    "上一个": { zh: "上一个", en: "Previous" },
+    "下一个": { zh: "下一个", en: "Next" },
+    "导出当前会话（Markdown）": { zh: "导出当前会话（Markdown）", en: "Export session (Markdown)" },
+    "导出当前会话（JSON）": { zh: "导出当前会话（JSON）", en: "Export session (JSON)" },
+    "已导出": { zh: "已导出", en: "Exported" },
+    "导出失败": { zh: "导出失败", en: "Export failed" },
+    "当前没有可导出的会话": { zh: "当前没有可导出的会话", en: "No session to export" },
+    "调用": { zh: "调用", en: "Call" },
+
 };
 
 // 当前语言: zh / en（存 localStorage）
@@ -1199,9 +1326,34 @@ const I18N = {
         document.querySelectorAll('[data-i18n-title]').forEach(el => {
             el.title = this.t(el.getAttribute('data-i18n-title'));
         });
-        // 4. 自动扫描：翻译所有含中文的文本节点（双向：中文时恢复，英文时翻译）
+        // 4. 通用属性翻译：title / aria-label / placeholder（含动态浮层）
+        this._translateAttrs(document.body);
+        // 5. 自动扫描：翻译所有含中文的文本节点（双向：中文时恢复，英文时翻译）
         this._translateTree(document.body);
         document.documentElement.lang = UI_LANG === 'zh' ? 'zh-CN' : 'en';
+    },
+
+    // 翻译元素属性里的中文（title / aria-label / placeholder）
+    // 动态浮层（命令面板 / 产物抽屉 / 子代理下钻）没有 data-i18n 标记，靠这里兜底。
+    _translateAttrs(root) {
+        const ATTRS = ['title', 'aria-label', 'placeholder'];
+        const scope = (root && root.querySelectorAll) ? root : document;
+        const sel = '[' + ATTRS.join('],[') + ']';
+        scope.querySelectorAll(sel).forEach(function (el) {
+            ATTRS.forEach(function (a) {
+                const val = el.getAttribute(a);
+                if (!val || !/[\u4e00-\u9fff]/.test(val)) return;
+                const origKey = 'data-i18n-orig-' + a;
+                if (UI_LANG === 'en') {
+                    if (!el.hasAttribute(origKey)) el.setAttribute(origKey, val);
+                    const entry = I18N_DICT[val];
+                    if (entry && entry.en) el.setAttribute(a, entry.en);
+                } else {
+                    const orig = el.getAttribute(origKey);
+                    if (orig) { el.setAttribute(a, orig); el.removeAttribute(origKey); }
+                }
+            });
+        });
     },
 
     _translateTree(root) {

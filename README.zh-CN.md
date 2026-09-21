@@ -10,9 +10,9 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0.3-orange.svg)](VERSION)
+[![Version](https://img.shields.io/badge/Version-1.0.0.4-orange.svg)](VERSION)
 
-*持久记忆 · 工具调用 · 多渠道接入 · 安全优先*
+*持久记忆 · 桌面操控 · 多渠道接入 · 安全优先*
 
 </div>
 
@@ -21,6 +21,8 @@
 ## 📖 目录
 
 - [简介](#简介)
+- [60 秒看懂 Scout](#demo)
+- [它真的有手 —— 桌面操控实录](#桌面操控)
 - [为什么选择 Scout Agent？](#为什么选择-scout-agent)
 - [界面预览](#界面预览)
 - [特性](#特性)
@@ -42,6 +44,55 @@ Scout Agent 是一个智能个人助手 AI 智能体，支持持久记忆、工�
 
 ---
 
+## <a name="demo"></a>⚡ 60 秒看懂 Scout（两段实录，无任何模拟）
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <b>🖱️ desktop 工具 · 真实操控 Windows 软件</b><br>
+      <img src="docs/media/desktop-gui-demo.gif" width="100%" alt="Scout 桌面操控实录"><br>
+      <sub>一句话指令 → Scout 打开记事本，逐键把中文待办清单敲进去，全程真实执行、无剪辑<br>▶ <a href="docs/media/desktop-gui-demo.mp4">高清版 MP4</a></sub>
+    </td>
+    <td align="center" width="50%">
+      <b>🖥️ 全新 Web UI · 一分钟巡礼</b><br>
+      <img src="docs/media/ui-tour.gif" width="100%" alt="Scout UI 巡礼"><br>
+      <sub>命令面板 Ctrl K → 知识库 → 20+ 工具 → 记忆库 → 设置 → 深浅主题一键切换<br>▶ <a href="docs/media/ui-tour.mp4">高清版 MP4</a></sub>
+    </td>
+  </tr>
+</table>
+
+| 🧰 **20+** 内置工具 | 🌐 **12+** 聊天渠道 | 🖱️ **10** 个实测桌面技能 | 🧩 **5** 类核心组件可替换 |
+|:---:|:---:|:---:|:---:|
+
+---
+
+## <a name="桌面操控"></a>🖱️ 它真的有手 —— 一句话，Scout 接管你的 Windows
+
+<div align="center">
+
+<img src="docs/media/desktop-gui-demo.gif" width="88%" alt="Scout 接管 Windows 记事本实录">
+
+<sub><b>一镜到底屏幕录制 · 21 秒 · 无任何模拟。</b>在 Scout 里敲一行指令 —— 它先推演、再打开记事本、逐行把中文待办清单敲进去，最后回来告诉你"已完成"。</sub><br><br>
+
+<b>▶ <a href="docs/media/desktop-gui-demo.mp4">观看高清版 MP4</a></b>
+
+</div>
+
+**刚才那 21 秒，逐段拆解：**
+
+| ⏱️ | 画面 | Scout 真正在做什么 |
+|:---:|---|---|
+| 0–3 秒 | 🗣️ *"打开记事本，帮我写一份今天的待办清单"* | 在 Scout 输入框敲一句自然语言 —— 没有脚本、没有宏、没有 API |
+| 3–9 秒 | 🧠 ReAct 推演 | 拆解任务、选中 `desktop` 工具、决定启动记事本 |
+| 9–18 秒 | 🖱️ 真实 GUI 操控 | 记事本被打开，焦点落到编辑区，中文待办**逐行真实击键**写入（兼容输入法） |
+| 18–21 秒 | ✅ *"已完成，记事本已打开，清单已写好"* | 全选展示成果，并在对话里回报执行结果 |
+
+**为什么重要：**绝大多数"智能体"走到生成文本就停了。Scout 内置 `desktop` 工具，能下**真实的鼠标点击、真实的键盘输入、真实的屏幕截图**，还配了 `skills-library/` 里 **10 套实测技能包** —— 发微信消息、飞书找人、驱动浏览器、填 Excel 表格。你说一句，它在你真实的桌面、真实的软件里真的做完。
+
+> 🔒 全程本地执行：以上录制都在作者本机 Windows 上完成，不依赖云桌面，也不上传任何屏幕内容。
+
+---
+
 ## <a name="为什么选择-scout-agent"></a>⭐ 为什么选择 Scout Agent？
 
 市面上的 AI 助手大多是"无状态工具"——每次对话都从零开始。Scout 的不同在于：它是一个**会复利的智能体**——用得越久，越懂你，也越会干你的活。
@@ -52,10 +103,10 @@ Scout Agent 是一个智能个人助手 AI 智能体，支持持久记忆、工�
 | 2 | 🧠 **工程化长时记忆** | 关键记忆自动抽取、去重，跨会话按 **重要性 × 时间衰减 + 历史摘要 `<summary>` 压缩**重组——它真的记得昨天的上下文，而不只是今天的聊天窗口。 |
 | 3 | 🚀 **思考者/执行者双模型** | "慢思考"负责拆解难题，"快执行"负责落地干活——该深度推理时深思熟虑，该快时绝不拖沓。 |
 | 4 | 🌐 **在哪都能聊** | 12+ 渠道：飞书、微信（个人/公众号/企微/客服/群机器人）、Telegram、钉钉、Discord、Slack、QQ……外加 Web UI（可装成 PWA 桌面应用）。助手跟随你的聊天习惯，而不是反过来。 |
-| 5 | 🖱 **真的长着"手"** |
-| 6 | 🤝 **Agent 与 Agent 互通（A2A）** |
-| 7 | 🔒 **天生安全优先** |
-| 8 | ⚡ **零门槛上手** |
+| 5 | 🖱 **真的长着"手"** | 内置 `desktop` 工具能做真实的**点击、输入、截图**，替你操作**任意本机软件**——发微信、在飞书找人、驱动浏览器、填 Excel 表格。附带 10 个实测技能包（`skills-library/`）：说一声"给 XX 发消息"，它就真去做，而不是"建议你这样做"。 |
+| 6 | 🤝 **Agent 与 Agent 互通（A2A）** | 实现 Google A2A 协议——其他智能体可以把任务委派给 Scout，Scout 也能委派给它们。为多智能体时代而生，而不是一座孤岛。 |
+| 7 | 🔒 **天生安全优先** | Docker 沙箱执行、危险命令黑名单（`rm -rf /`、fork 炸弹……）、Shell 注入与 XSS 防护、可选 JWT 认证、密钥加密存储。让智能体跑代码本让人紧张——Scout 把它变得平淡无奇。 |
+| 8 | ⚡ **零门槛上手** | Windows 绿色便携版：解压 → 双击 → 完事（不用 Python、不安装、不动注册表）；也可 `pip install` 源码运行。数据随用户目录走，换机、升级覆盖都不丢。 |
 
 **最适合这些场景：** 一个帮你跑日常杂活的个人副驾——定时 + 事件驱动的自动化任务、监听文件夹与 Webhook、基于私有知识库问答、通过团队 IM 汇报结果——同时密钥、记忆、代码都私有地留在你自己的硬件上。
 
@@ -65,107 +116,120 @@ Scout Agent 是一个智能个人助手 AI 智能体，支持持久记忆、工�
 
 ## <a name="界面预览"></a>🖼 界面预览
 
+全新设计的现代化界面（深浅双主题、对话区与输入框 1280px 精准对齐、命令面板 `Ctrl K`、一键中英切换）：
+
 <table>
   <tr>
-    <td align="center"><b>主聊天界面</b><br><img src="docs/images/chat-main.png" width="420"></td>
-    <td align="center"><b>设置 — 模型配置</b><br><img src="docs/images/settings-model.png" width="420"></td>
+    <td align="center"><b>主聊天界面</b><br><img src="docs/images/chat-main.png" width="390"></td>
+    <td align="center"><b>设置 · 模型配置</b><br><img src="docs/images/settings-model.png" width="390"></td>
+    <td align="center"><b>设置 · 工具配置</b><br><img src="docs/images/settings-tools.png" width="390"></td>
   </tr>
   <tr>
-    <td align="center"><b>设置 — 模型配置</b><br><img src="docs/images/settings-model-embedding.png" width="420"></td>
-    <td align="center"><b>ReAct 反思 + 安全拦截</b><br><img src="docs/images/runtime-security-block-zh.png" width="420"></td>
-  </tr>
-  <tr>
-    <td align="center"><b>Multi-Agent 模式</b><br><img src="docs/images/runtime-multi-agent-zh.png" width="420"></td>
-    <td align="center"><b>模型监控</b><br><img src="docs/images/monitor-usage.png" width="420"></td>
+    <td align="center"><b>知识库 · 文档导入</b><br><img src="docs/images/knowledge-base.png" width="390"></td>
+    <td align="center"><b>插件 · 20+ 工具注册表</b><br><img src="docs/images/plugins.png" width="390"></td>
+    <td align="center"><b>记忆库</b><br><img src="docs/images/memory.png" width="390"></td>
   </tr>
 </table>
 
 <details>
-<summary>📋 查看其余功能截图（14）</summary>
+<summary>📋 查看全部功能截图（16）</summary>
 
-#### 3. 设置 — Agent 行为
+#### 设置 · Agent 行为
 
 设置回复语言、运行模式（ReAct 单智能体循环 或 Multi-Agent 委派架构）、系统提示词与深度思考等参数。
 
-![3. 设置 — Agent 行为](docs/images/settings-agent.png)
+![设置 · Agent 行为](docs/images/settings-agent.png)
 
-#### 4. 设置 — 工具配置
-
-配置搜索引擎源（支持多源并发与自动切换）、文件 / 代码 / 沙箱等工具的开关与参数，保存后即时生效。
-
-![4. 设置 — 工具配置](docs/images/settings-tools.png)
-
-#### 5. 设置 — 安全策略
+#### 设置 · 安全策略
 
 可视化配置危险命令检测（`rm -rf /`、`dd if=`、`mkfs`、`curl | sh` 等 13 种模式）、自动审批开关、Docker 沙箱隔离，让 Agent 在受限环境中运行。
+输入框内置**权限开关**（标准 / 全部放行 / 谨慎）：标准模式下删除、格式化等高危操作先弹窗确认，`全部放行` 后同类操作不再打扰，不可逆操作（`rm -rf /`、`mkfs`、远程脚本管道执行）任何模式仍硬拦截。
 
-![5. 设置 — 安全策略](docs/images/settings-security.png)
+![设置 · 安全策略](docs/images/settings-security.png)
 
-#### 9. 系统监控
-
-实时查看 CPU、内存、磁盘、网络、Agent 运行状态与历史曲线。
-
-![9. 系统监控](docs/images/monitor-system.png)
-
-#### 11. 设置 — 渠道管理
+#### 设置 · 渠道管理
 
 支持飞书、微信、微信公众号、企业微信、企微群机器人、微信客服、个人微信、Telegram、钉钉、Discord、Slack、QQ 等 12+ 平台接入，配置后即可在这些平台与 Scout 对话。
 
-![11. 设置 — 渠道管理](docs/images/settings-channels.png)
+![设置 · 渠道管理](docs/images/settings-channels.png)
 
-#### 12. 设置 — 登录认证
+#### 设置 · 登录认证
 
 可选启用 JWT 登录密码保护 Web 界面与 API，提升服务安全性。
 
-![12. 设置 — 登录认证](docs/images/settings-auth.png)
+![设置 · 登录认证](docs/images/settings-auth.png)
 
-#### 13. 插件管理
+#### 模型 · 嵌入配置
 
-查看已安装插件与 Skill，支持卸载与重新加载；从网上发现的 Skill 安装后可在对话中自动触发。
+配置嵌入模型（远程 API / 内置哈希 / 纯文本三档），切换后记忆与知识检索方式即时生效。
 
-![13. 插件管理](docs/images/plugins.png)
+![模型 · 嵌入配置](docs/images/settings-model-embedding.png)
 
-#### 14. AI 插件生成器
+#### 目标 Goals
+
+把长期任务拆成可跟踪的目标清单，状态实时更新，跨会话持续跟进。
+
+![目标 Goals](docs/images/goals.png)
+
+#### AI 插件生成器
 
 描述想要的插件功能，AI 自动生成完整插件代码，也可以先搜索全网现有 Skill/插件。
 
-![14. AI 插件生成器](docs/images/plugin-builder.png)
+![AI 插件生成器](docs/images/plugin-builder.png)
 
-#### 15. 自动化中心
+#### 自动化中心
 
 基于事件触发器、运行历史、无人值守策略与定时任务，让 Scout 响应 EventBus 事件或按 Cron 自动执行任务。
 
-![15. 自动化中心](docs/images/automation.png)
+![自动化中心](docs/images/automation.png)
 
-#### 16. 运行观测时间线
+#### 运行观测时间线
 
 按 trace 聚合查看最近会话的运行时间线、成功率与 Token 消耗，快速定位异常。
 
-![16. 运行观测时间线](docs/images/observe.png)
+![运行观测时间线](docs/images/observe.png)
 
-#### 17. 通知中心
+#### 模型监控
 
-配置通知推送规则、类型开关与 IM 渠道目标，集中管理所有通知历史。
+Token 消耗与模型调用统计，成本一目了然。
 
-![17. 通知中心](docs/images/notify.png)
+![模型监控](docs/images/monitor-usage.png)
 
-#### 18. 事件总线
+#### 系统监控
+
+实时查看 CPU、内存、磁盘、网络、Agent 运行状态与历史曲线。
+
+![系统监控](docs/images/monitor-system.png)
+
+#### Multi-Agent 模式
+
+多个协作 Agent 分工推进同一任务，界面实时展示各 Agent 的角色与产出。
+
+![Multi-Agent 模式](docs/images/runtime-multi-agent.png)
+
+#### ReAct 反思 + 安全拦截
+
+ReAct 推理过程实时可见，危险命令在执行前被安全层拦截并提示。
+
+![ReAct 反思 + 安全拦截](docs/images/runtime-security-block.png)
+
+#### 事件总线
 
 查看系统内 EventBus 广播的事件流（含事件类型、来源、载荷摘要），插件与自动化均基于该总线触发。
 
-![18. 事件总线](docs/images/events.png)
+![事件总线](docs/images/events.png)
 
-#### 19. 文件监听
+#### 文件监听
 
 监听指定目录的文件变化（新增 / 修改 / 删除），事件自动推送给 Agent 处理，可配置监听路径与过滤规则。
 
-![19. 文件监听](docs/images/watcher.png)
+![文件监听](docs/images/watcher.png)
 
-#### 20. 外部回调
+#### 外部回调 / 通知
 
-注册 HTTP Webhook 接收外部系统推送，将事件注入 Scout 会话或触发自动化任务，支持签名校验与路由配置。
+注册 HTTP Webhook 接收外部推送并注入会话或触发自动化；通知中心集中管理推送规则、类型开关与 IM 渠道目标。
 
-![20. 外部回调](docs/images/webhooks.png)
+![外部回调 / 通知](docs/images/webhooks.png)
 
 
 </details>
@@ -252,7 +316,7 @@ Scout Agent 是一个智能个人助手 AI 智能体，支持持久记忆、工�
 
 不想折腾环境？直接用**绿色便携版**，双击即用：
 
-1. 到 **GitHub Releases** 下载 **Windows 绿色版**：[v1.0.0.3 发布页](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.3)（直接下载 [scout-agent-1.0.0.3-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.3/scout-agent-1.0.0.3-win-x64.zip)，或到 [全部 Releases](https://github.com/core-power/Scout-Agent/releases) 找更新版本）。
+1. 到 **GitHub Releases** 下载 **Windows 绿色版**：[v1.0.0.4 发布页](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.4)（直接下载 [scout-agent-1.0.0.4-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.4/scout-agent-1.0.0.4-win-x64.zip)，或到 [全部 Releases](https://github.com/core-power/Scout-Agent/releases) 找更新版本）。
 2. 解压后把**整个文件夹**拷到任意 Windows 10/11 电脑即可运行——免安装、免注册表、免管理员权限。
 3. 打开解压目录，双击 **`ScoutDesktop\ScoutAgent.exe`**，对话窗口立即弹出。
 4. 首次使用打开**设置**页，填入你的 LLM API Key 即可（支持通义/DeepSeek/OpenAI 等任意 OpenAI 兼容端点）。

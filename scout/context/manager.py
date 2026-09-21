@@ -25,21 +25,39 @@ _IMG_RE = re.compile(
 def estimate_tokens(text: str) -> int:
     """粗略 token 估算（无需 tiktoken，可跨平台离线运行）.
 
-    规则：
-    - 中日韩全角字符按 1 字符 ≈ 1 token（实际略保守，0.6~0.8 token/字）
-    - 其余按 4 字符 ≈ 1 token（英文/数字/标点）
-    用于上下文窗口治理：长工具输出（搜索抓取全文）按字符数即时计入窗口，
-    避免"只按条数"导致窗口实际溢出、压缩阈值误判。
+    ★ 2026-09-19 校准（usage.db 实测反推，原实现误差达 2 倍）：
+    原规则把「非 CJK」一律按 4 字符 ≈ 1 token。这在英文散文上成立，但 Agent
+    上下文的主要成分是 **Windows 路径、代码、JSON、base64、shell 输出** ——
+    反斜杠/下划线/点号/冒号/引号几乎各自独立成 token，实测密度只有
+    1.5~2.2 字符/token，按 4 算等于**系统性低估 2 倍**，直接后果是
+    ``max_tokens`` 预算阈值永远判定"未超预算" → 压缩全程不触发 →
+    单回合 prompt 从 3k 一路涨到 48k（实测会话 4126a066，454 步）。
+
+    同时中文按 1 字 1 token 是**高估**（qwen/GLM 实测 0.6~0.8），一起修正。
+
+    新规则：
+    - CJK 全角：0.7 token/字
+    - 字母数字与空格：4 字符 ≈ 1 token（英文/代码标识符）
+    - 其余符号（路径分隔、标点、括号、引号、换行）：2 字符 ≈ 1 token
+
+    低估的代价（不压缩→上下文爆炸）远大于高估（提前压缩→多一次摘要调用），
+    故符号档刻意取保守值。
     """
     if not text:
         return 0
     import unicodedata
 
-    cjk = sum(
-        1 for ch in text if unicodedata.east_asian_width(ch) in ("F", "W")
-    )
-    other = len(text) - cjk
-    return cjk + max(0, (other + 3) // 4)
+    cjk = 0
+    alnum = 0
+    sym = 0
+    for ch in text:
+        if unicodedata.east_asian_width(ch) in ("F", "W"):
+            cjk += 1
+        elif ch.isalnum() or ch == " ":
+            alnum += 1
+        else:
+            sym += 1
+    return int(cjk * 0.7) + (alnum + 3) // 4 + (sym + 1) // 2
 
 
 # ── 情节记忆结构化摘要（2026-09-15，分层记忆 · 情节层）──────────────────
@@ -154,6 +172,9 @@ class ContextManager:
         prune_batch: int = 6,
         max_tokens: int = 0,
         compress_ratio: float = 0.8,
+        max_summaries: int = 3,
+        summary_token_budget: int = 2500,
+        max_summary_segs: int = 200,
     ):
         """
         Args:
@@ -171,8 +192,28 @@ class ContextManager:
                 （搜索抓取全文等）会即时计入，而不是等条数攒够。
                 可用环境变量 SCOUT_CONTEXT_MAX_TOKENS 覆盖默认值。
             compress_ratio: 触发压缩的窗口占用比例（默认 80%）
+            max_summaries: 视图内最多保留的 [对话摘要] 条数（2026-09-19，见
+                ``build_llm_view`` ①.5 步；可用 SCOUT_MAX_SUMMARIES 覆盖）。
+            summary_token_budget: 视图内摘要总 token 预算（同上）。
+            max_summary_segs: session.extra['summaries'] 保留的摘要段数上限
+                （2026-09-19；可用 SCOUT_MAX_SUMMARY_SEGS 覆盖）。
         """
         import os as _os
+
+        try:
+            max_summary_segs = int(
+                _os.getenv("SCOUT_MAX_SUMMARY_SEGS", str(max_summary_segs))
+                or max_summary_segs
+            )
+            max_summaries = int(
+                _os.getenv("SCOUT_MAX_SUMMARIES", str(max_summaries)) or max_summaries
+            )
+            summary_token_budget = int(
+                _os.getenv("SCOUT_SUMMARY_TOKEN_BUDGET", str(summary_token_budget))
+                or summary_token_budget
+            )
+        except ValueError:
+            pass
 
         if not max_tokens:
             try:
@@ -186,6 +227,33 @@ class ContextManager:
         self.prune_batch = prune_batch
         self.max_tokens = max_tokens
         self.compress_ratio = compress_ratio
+        self.max_summaries = max(1, max_summaries)
+        self.summary_token_budget = max(500, summary_token_budget)
+        self.max_summary_segs = max(20, max_summary_segs)
+        # ★ 2026-09-19：API 回传的真实 prompt token（session_id -> 最近一次实测值）。
+        # 本地 estimate_tokens 再准也是估算；usage 表里有**逐次真实值**，优先用它
+        # 做预算判定，估算只作为"尚无实测"时的兜底。
+        self._real_prompt_tokens: dict[str, int] = {}
+
+    def observe_real_tokens(self, session_id: str, real_prompt_tokens: int) -> None:
+        """记录 API 回传的真实 prompt token 数（供 :meth:`_over_budget` 优先采用）.
+
+        调用方在每次主循环 LLM 返回后把 ``usage.prompt_tokens`` 喂进来。
+        这是治理唯一可信的标尺：估算器对代码/路径/base64 类内容误差可达 2 倍。
+        """
+        try:
+            if session_id and real_prompt_tokens and real_prompt_tokens > 0:
+                self._real_prompt_tokens[str(session_id)] = int(real_prompt_tokens)
+        except (TypeError, ValueError):
+            pass
+
+    def real_prompt_tokens(self, session_id: str) -> int:
+        """返回最近一次 API 回传的真实 prompt token 数（无实测返回 0）.
+
+        供调用方区分「估算超预算」与「实测确已超预算」——后者是硬信号，
+        不应被压缩冷却等节流策略挡住。
+        """
+        return int(self._real_prompt_tokens.get(str(session_id or "")) or 0)
 
     def count_tokens(self, session: Session) -> int:
         """估算会话当前 token 占用（含消息内容与元数据，不含 system prompt）."""
@@ -202,9 +270,20 @@ class ContextManager:
 
         ★ 2026-09-14（视图分离）：按「视图」而非真相计量 —— 视图才是实际发给 LLM
         的内容（真相已不再被压缩缩短）。
+
+        ★ 2026-09-19（实测优先）：若已通过 :meth:`observe_real_tokens` 拿到 API
+        回传的真实 prompt token，直接用它判定——本地估算对代码/路径/JSON 类内容
+        系统性低估约 2 倍，实测出现过「真实 48k、估算仍判未超 19.6k」从而
+        整个回合不压缩的情况（会话 4126a066，454 步，prompt 单调涨到 48893）。
+        真实值只反映到上一为止步的上下文，本步新增量很小（<1k），不影响判定。
         """
         if self.max_tokens <= 0:
             return False
+        _real = self._real_prompt_tokens.get(
+            str(getattr(session, "id", "") or "")
+        )
+        if _real:
+            return _real >= int(self.max_tokens * self.compress_ratio)
         _total = 0
         for m in self.build_llm_view(session, apply_tool_pruning=False):
             _total += estimate_tokens(m.content or "")
@@ -287,6 +366,34 @@ class ContextManager:
                     )
                 continue
             out.append(m)
+
+        # ①.5 ★ 2026-09-19 摘要收敛（压缩反噬修复）
+        #
+        # 缺陷：compress() 每次生成一条新摘要写进真相，而摘要消息**自身永远
+        # 不会被「命中锚点」移出视图**（anchors 只映射被摘要覆盖的原文）——
+        # 于是「压一次、多一条」，摘要只增不减。长回合里里程碑压缩反复触发时，
+        # 摘要无限累积，压缩从"减负"变成"膨胀源"：
+        #   实测会话 4126a066：215 条摘要 = 47.7k token，占该会话上下文 97.8%，
+        #   prompt 从 2.9k 单调涨到 48.9k（454 步），压缩阈值全程判"未超预算"。
+        #
+        # 修复：视图内只保留最近 max_summaries 条、且受 summary_token_budget 约束。
+        # 安全性：被移除的只是**视图**，真相 session.messages 仍完整（UI/导出不丢历史）；
+        # 且 compress 已把被压原文归档进记忆库（_archive_to_memory），可 memory_search 召回。
+        _sum_idx = [
+            i for i, m in enumerate(out) if (m.content or "").startswith("[对话摘要]")
+        ]
+        if len(_sum_idx) > 1:
+            _keep: set[int] = set()
+            _cost = 0
+            for i in reversed(_sum_idx):  # 从最新往回保留
+                if len(_keep) >= self.max_summaries:
+                    break
+                _c = estimate_tokens(out[i].content or "")
+                if _keep and _cost + _c > self.summary_token_budget:
+                    break
+                _keep.add(i)
+                _cost += _c
+            out = [m for i, m in enumerate(out) if i not in _sum_idx or i in _keep]
 
         if not apply_tool_pruning:
             return out
@@ -697,8 +804,15 @@ class ContextManager:
                 "count": len(old_messages),
                 "created_at": datetime.now().isoformat(),
             })
-            if len(_sums) > 20:  # 有界：单条摘要已覆盖一批消息，20 段足够长任务
-                del _sums[: len(_sums) - 20]
+            # ★ 2026-09-19：界从 20 提到 200（可用 SCOUT_MAX_SUMMARY_SEGS 覆盖）。
+            # 旧逻辑删最旧段时会连带删掉它的 anchors → **那段原文重新回到视图
+            # 全量重发**（压缩成果瞬间作废、上下文暴涨）。而视图里渲染几条摘要
+            # 已由 build_llm_view ①.5 独立收敛（默认 3 条），保留全部 anchors
+            # 并不会增加上下文，只占 session.extra 存储（单段 ~1KB，200 段 ≈ 200KB）。
+            # 结论：宁可多存，不可丢 anchors。
+            _SEG_MAX = self.max_summary_segs
+            if len(_sums) > _SEG_MAX:
+                del _sums[: len(_sums) - _SEG_MAX]
         except Exception:  # noqa: BLE001 — 摘要写入失败不影响主流程
             pass
         # 旧的"压缩后补 user 防 API 400"逻辑已上移到 build_llm_view（视图内保证

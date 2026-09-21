@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import socket
 import sys
@@ -392,6 +393,65 @@ def _find_icon_path() -> str | None:
     return None
 
 
+def _gui_state_path() -> Path:
+    """桌面窗口状态（几何 / 退出确认偏好）落盘位置。"""
+    return data_dir() / "gui_state.json"
+
+
+def _load_gui_state() -> dict:
+    try:
+        p = _gui_state_path()
+        if p.is_file():
+            v = json.loads(p.read_text(encoding="utf-8"))
+            return v if isinstance(v, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        _log(f"gui state load failed (ignore): {e}")
+    return {}
+
+
+def _save_gui_state(patch: dict) -> None:
+    try:
+        st = _load_gui_state()
+        st.update(patch)
+        _gui_state_path().write_text(
+            json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as e:  # noqa: BLE001
+        _log(f"gui state save failed (ignore): {e}")
+
+
+def _restore_geometry(st: dict) -> tuple[int, int, int, int, bool] | None:
+    """把上次退出时的窗口几何还原出来。
+
+    ★ 2026-09-19：此前每次启动都是「工作区 90%×88% + 居中」，用户手动调好的
+      大小/位置/最大化状态一律不记，双屏或习惯小窗的用户每次都要重摆一遍。
+      这里做了两道校验：尺寸下限，以及矩形必须仍与某块屏幕的工作区相交
+      （拔掉副屏后窗口不能落在屏幕外，否则表现为「启动后看不见窗口」）。
+    """
+    try:
+        x, y = int(st["x"]), int(st["y"])
+        w, h = int(st["w"]), int(st["h"])
+    except Exception:  # noqa: BLE001 - 字段缺失/类型不对就走默认
+        return None
+    if w < 640 or h < 480:
+        return None
+    try:
+        from System.Windows.Forms import Screen
+
+        for s in Screen.AllScreens:
+            wa = s.WorkingArea
+            # 只判断「相交」不够：剩 1px 也算相交，窗口照样等于看不见。
+            # 要求可见部分至少 200×120，才认为这个几何还能用。
+            ix1, ix2 = max(x, wa.X), min(x + w, wa.X + wa.Width)
+            iy1, iy2 = max(y, wa.Y), min(y + h, wa.Y + wa.Height)
+            if ix2 - ix1 >= 200 and iy2 - iy1 >= 120:
+                return (x, y, w, h, bool(st.get("maximized")))
+    except Exception as _e:  # noqa: BLE001 - Screen 不可用时仍按单屏放行
+        _log(f"screen check failed (fallback accept): {_e}")
+        return (x, y, w, h, bool(st.get("maximized")))
+    return None
+
+
 def _open_gui(url: str, port: int) -> None:
     """用原生 WinForms + WebView2 打开对话窗口。
 
@@ -426,13 +486,21 @@ def _open_gui(url: str, port: int) -> None:
         clr.AddReference(winforms_dll)
         _log("clr.AddReference OK")
         from Microsoft.Web.WebView2.WinForms import CoreWebView2CreationProperties, WebView2
-        from System.Drawing import Icon, Size
+        # ★ Point 属于 System.Drawing（不是 System.Windows.Forms）。写在 WinForms 的
+        # import 列表里在源码环境侥幸可用，打包后解析不到 -> GUI 初始化抛异常 ->
+        # 回退成"打开系统浏览器"。2026-09-20 修正。
+        from System.Drawing import Icon, Point, Size
         from System.Windows.Forms import (
             Application,
+            Button,
+            CheckBox,
             DialogResult,
             DockStyle,
             Form,
+            FormBorderStyle,
             FormStartPosition,
+            FormWindowState,
+            Label,
             MessageBox,
             MessageBoxButtons,
             MessageBoxIcon,
@@ -454,6 +522,15 @@ def _open_gui(url: str, port: int) -> None:
     def run_gui() -> None:
         try:
             _log("gui thread start")
+            # ★ 2026-09-19：启用 WinForms 视觉样式。此前没调用，窗体边框/按钮/消息框
+            #   会退回 Windows 经典（2000 年代）外观，在 Win10/11 上又灰又平，
+            #   且不跟随系统主题 —— 是「桌面端看着不像原生应用」的直接原因。
+            try:
+                Application.EnableVisualStyles()
+                Application.SetCompatibleTextRenderingDefault(False)
+                _log("EnableVisualStyles OK")
+            except Exception as _e:  # noqa: BLE001
+                _log(f"EnableVisualStyles failed (ignore): {_e}")
             # 捕获 .NET 侧异常：pythonnet 事件异常不会传播到 Python try/except，
             # 会静默导致 Application.Run 消息循环退出（表现为窗口几秒后自动关闭）
             from System import AppDomain
@@ -476,7 +553,18 @@ def _open_gui(url: str, port: int) -> None:
                     self.Width = width
                     self.Height = height
                     self.MinimumSize = Size(960, 640)
-                    self.StartPosition = FormStartPosition.CenterScreen
+                    # ★ 窗口几何记忆：先按 Manual 定位，恢复失败再退回居中
+                    self.StartPosition = FormStartPosition.Manual
+                    _g = _restore_geometry(_load_gui_state())
+                    if _g:
+                        _x, _y, _w, _h, _max = _g
+                        self.Location = Point(_x, _y)
+                        self.Size = Size(_w, _h)
+                        self.WindowState = FormWindowState.Maximized if _max else FormWindowState.Normal
+                        _log(f"window geometry restored x={_x} y={_y} w={_w} h={_h} max={_max}")
+                    else:
+                        self.StartPosition = FormStartPosition.CenterScreen
+                        _log(f"window geometry default w={width} h={height}")
                     if icon_path:
                         try:
                             self.Icon = Icon(icon_path)
@@ -546,23 +634,133 @@ def _open_gui(url: str, port: int) -> None:
                         except Exception:
                             cv2.add_DownloadStarting(_on_download_starting)
                         _log("webview download events wired")
+
+                        # ★ 2026-09-19：关掉浏览器加速键。桌面应用里这些键全是坑：
+                        #   F5 / Ctrl+R 重载页面（丢掉正在输入的草稿、断开 WS）；
+                        #   Ctrl+P 打印、Ctrl+S 存网页、Ctrl+G/F3 继续查找、
+                        #   Ctrl+ 加减号缩放（误触一次整界面就乱了且没有重置入口）。
+                        #   关闭后 Ctrl+F 由前端会话内查找接管（前端只在桌面外壳下接管）。
+                        try:
+                            cv2.Settings.AreBrowserAcceleratorKeysEnabled = False
+                            _log("settings: browser accelerator keys disabled")
+                        except Exception as _e:  # noqa: BLE001
+                            _log(f"settings accelerator failed (ignore): {_e}")
+                        # Ctrl + 滚轮误缩放同理，一并关掉
+                        try:
+                            cv2.Settings.IsZoomControlEnabled = False
+                        except Exception as _e:  # noqa: BLE001
+                            _log(f"settings zoomcontrol failed (ignore): {_e}")
+                        try:
+                            cv2.Settings.IsStatusBarEnabled = False
+                        except Exception as _e:  # noqa: BLE001
+                            _log(f"settings statusbar failed (ignore): {_e}")
+
+                        # ★ 2026-09-19：外链走系统默认浏览器。
+                        #   默认行为下 target=_blank 会在控件内部开新窗口（或整页跳走），
+                        #   而桌面壳没有后退/地址栏，用户点一次链接就「回不来了」。
+                        def _on_new_window(_s, _e) -> None:
+                            try:
+                                uri = getattr(_e, "Uri", "") or ""
+                                _e.Handled = True
+                                _log(f"NewWindowRequested -> default browser: {uri}")
+                                if uri and uri.startswith(("http://", "https://")):
+                                    os.startfile(uri)
+                            except Exception as _x:  # noqa: BLE001
+                                _log(f"NewWindowRequested cb err: {_x}")
+
+                        try:
+                            cv2.NewWindowRequested += _on_new_window
+                            _log("NewWindowRequested wired")
+                        except Exception:
+                            cv2.add_NewWindowRequested(_on_new_window)
+
                         cv2.Navigate(url)
 
                 def _on_shown(self, sender, e) -> None:
                     _log("MainForm Shown")
+                    # ★ 开箱即可打字：WinForms 默认把焦点给窗体而不是 WebView2，
+                    #   窗口弹出后直接敲字没反应，用户以为卡住了。
+                    try:
+                        self.Activate()
+                        self.wv.Focus()
+                    except Exception as _e:  # noqa: BLE001
+                        _log(f"focus webview failed (ignore): {_e}")
 
                 def _on_closed(self, sender, e) -> None:
                     _log("MainForm Closed")
 
+                def _confirm_exit(self) -> bool:
+                    """退出确认（带「不再询问」）。
+
+                    原来每次点 × 都弹一次模态消息框 —— 一天开关十几次就是十几次打扰。
+                    这里换成带复选框的小窗口，勾了就写进 gui_state.json，之后直接退出。
+                    """
+                    st = _load_gui_state()
+                    if st.get("exit_confirm") is False:
+                        return True
+                    try:
+                        dlg = Form()
+                        dlg.Text = "退出确认"
+                        dlg.FormBorderStyle = FormBorderStyle.FixedDialog
+                        dlg.StartPosition = FormStartPosition.CenterParent
+                        dlg.MinimizeBox = False
+                        dlg.MaximizeBox = False
+                        dlg.ShowInTaskbar = False
+                        dlg.Width = 396
+                        dlg.Height = 186
+                        if icon_path:
+                            try:
+                                dlg.Icon = Icon(icon_path)
+                            except Exception:  # noqa: BLE001
+                                pass
+                        lbl = Label()
+                        lbl.Text = "确定要退出 Scout Agent 吗？"
+                        lbl.Left, lbl.Top, lbl.Width, lbl.Height = 20, 20, 340, 24
+                        chk = CheckBox()
+                        chk.Text = "不再询问，以后直接退出"
+                        chk.Left, chk.Top, chk.Width, chk.Height = 20, 54, 260, 24
+                        ok = Button()
+                        ok.Text = "退出"
+                        ok.Left, ok.Top, ok.Width, ok.Height = 172, 96, 88, 30
+                        ok.DialogResult = DialogResult.Yes
+                        cancel = Button()
+                        cancel.Text = "取消"
+                        cancel.Left, cancel.Top, cancel.Width, cancel.Height = 272, 96, 88, 30
+                        cancel.DialogResult = DialogResult.No
+                        dlg.AcceptButton = ok
+                        dlg.CancelButton = cancel
+                        for c in (lbl, chk, ok, cancel):
+                            dlg.Controls.Add(c)
+                        r = dlg.ShowDialog(self)
+                        if r != DialogResult.Yes:
+                            return False
+                        if chk.Checked:
+                            _save_gui_state({"exit_confirm": False})
+                            _log("exit confirm disabled by user")
+                        return True
+                    except Exception as _e:  # noqa: BLE001 - 自绘失败退回消息框
+                        _log(f"exit dialog failed, fallback MessageBox: {_e}")
+                        r = MessageBox.Show(
+                            "确定要退出 Scout Agent 吗？",
+                            "退出确认",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question,
+                        )
+                        return r == DialogResult.Yes
+
                 def _on_closing(self, sender, e) -> None:
                     _log(f"FormClosing CloseReason={e.CloseReason}")
-                    r = MessageBox.Show(
-                        "确定要退出 Scout Agent 吗？",
-                        "退出确认",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Question,
-                    )
-                    if r != DialogResult.Yes:
+                    # 先把几何存下来（RestoreBounds 在最大化时给的是还原后的尺寸）
+                    try:
+                        rb = self.RestoreBounds
+                        _save_gui_state({
+                            "x": int(rb.X), "y": int(rb.Y),
+                            "w": int(rb.Width), "h": int(rb.Height),
+                            "maximized": self.WindowState == FormWindowState.Maximized,
+                        })
+                    except Exception as _e:  # noqa: BLE001
+                        _log(f"save geometry failed (ignore): {_e}")
+                    if not self._confirm_exit():
                         e.Cancel = True
 
             form = MainForm()
@@ -590,9 +788,15 @@ def _open_gui(url: str, port: int) -> None:
         server.should_exit = True
 
     # ★ 2026-09-14：退出前直接落盘活跃会话（不依赖 uvicorn lifespan finally）——
-    # server 跑在 daemon 线程上，should_exit 后主线程随即走完并 sys.exit，
+    # server 跑在 daemon 线程上，should_exit 后主线程随即走完并 os._exit，
     # daemon 线程被直接终结，lifespan 的 finally（含 flush 钩子）可能来不及执行。
     # 这里在主线程同步执行一次，确保「未收尾回合 / 未到节流点的增量」不丢。
+    #
+    # ★ 2026-09-20：flush 真正生效依赖 get_session_store() 全局单例（store.py）——
+    # 此前每次 new 实例，主线程这个 flush 跑在新实例上 _active_refs 恒空，落盘 0 条。
+    # 现在主线程与 uvicorn 线程共享同一实例、同一 _active_refs，主线程 asyncio.run
+    # 干净路径执行落盘。"cannot schedule new futures" 报错来自 lifespan 的 to_thread，
+    # 已在 server.py 改为独立线程根治，与本处无关。
     try:
         from scout.session.store import get_session_store
 
@@ -722,4 +926,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _rc = main()
+    # ★ 2026-09-20：GUI 模式下窗口关闭后强制退出进程（--no-gui 已在 main 内自行返回，到不了这里）。
+    # 此前正常 sys.exit 会卡在残留的非 daemon 第三方线程（uvicorn/pywinauto 等）上，
+    # 进程不退出但仍持有单实例互斥 → 之后双击 exe 全部静默退出（僵尸进程，2026-09-20 实测）。
+    # 会话落盘已在 _open_gui 的 finally 中完成，这里直接终止是安全的。
+    import os as _os
+    _os._exit(_rc)

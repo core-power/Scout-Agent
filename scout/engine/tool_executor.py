@@ -14,6 +14,7 @@
 import ast
 import asyncio
 import logging
+import os
 import re
 import json
 from datetime import datetime
@@ -23,6 +24,18 @@ from scout.core.types import Message, Observation, Role, Session, ToolCall
 from scout.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+# ★ 2026-09-19：工具结果进上下文的字符上限，改成可配置。
+#   这是一个**权衡旋钮**，不是越大越好：
+#     - 调小：每步上下文轻，但输出被截 → 模型要分多次 file read 才能看完一个文件，
+#       每多读一次就是**一整个 turn 的 prompt 重发**（实测一个 251 行的文件被按
+#       「行 1-251 / 行 36-211 / 行 74-179」读了 3 遍）。
+#     - 调大：一次读完省步数，但这条内容会一直留在历史里，抬高后续每一步的成本。
+#   默认保持 1200（与收紧后的现值一致，行为不变）；读大文件时可临时调大。
+try:
+    _TOOL_CHARS_LIMIT = max(200, int(os.getenv("SCOUT_MAX_TOOL_CHARS", "1200") or 1200))
+except ValueError:
+    _TOOL_CHARS_LIMIT = 1200
 
 
 # ── 敏感信息脱敏（2026-09-15）──────────────────────────────────────
@@ -422,14 +435,26 @@ class ToolExecutionMixin:
                 # 同时检查 command 与 args，防止 LLM 把命令拆到 args 里绕过检测。
 
                 if tc.name == "shell":
-                    parts = [tc.arguments.get("command", "")]
-                    if isinstance(tc.arguments.get("args"), list):
-                        parts.extend(str(a) for a in tc.arguments["args"])
-                    command = " ".join(str(p).strip() for p in parts if str(p).strip())
+                    # ★ 2026-09-21：危险命令由"一律硬拦"改为分级 ——
+                    #   never（不可逆/不可审计）→ 仍在此硬拦截；
+                    #   risky（高危但用户可判断）→ 交给 _gate_permission 弹窗询问，
+                    #   用户在输入框把权限切到「全部放行」后直接执行。
+                    try:
+                        from scout.tools.builtin.shell import classify_shell_risk
 
-                    is_safe, warning = self.security.check_command_block(command)
+                        level, warning = classify_shell_risk(
+                            tc.arguments.get("command", ""),
+                            tc.arguments.get("args") if isinstance(tc.arguments.get("args"), list) else None,
+                        )
+                    except Exception:  # noqa: BLE001 — 分类器异常不应放行，回落旧判定
+                        parts = [tc.arguments.get("command", "")]
+                        if isinstance(tc.arguments.get("args"), list):
+                            parts.extend(str(a) for a in tc.arguments["args"])
+                        command = " ".join(str(p).strip() for p in parts if str(p).strip())
+                        is_safe, warning = self.security.check_command_block(command)
+                        level = "never" if not is_safe else "normal"
 
-                    if not is_safe:
+                    if level == "never":
                         obs = Observation(
                             tool_name=tc.name,
                             success=False,
@@ -461,6 +486,92 @@ class ToolExecutionMixin:
                         return True
         return False
 
+    async def _gate_permission(self, session: Session, tc: ToolCall, call_id: str) -> bool:
+        """权限门控（2026-09-21）：风险分级 × 用户权限开关.
+
+        两个维度：
+          ① 风险分级 —— never（不可逆）已在 _gate_security_checks 拦截；
+             risky（高危但用户可判断，如 rm -rf build、del ..\\旧目录、重启）走本门控；
+             normal 直接执行。
+          ② 权限开关（输入框，持久化到 config.permission_mode）——
+             ask（默认）：risky 弹窗询问；auto：risky 也直接执行；
+             strict：所有 shell/代码执行与破坏性工具逐条询问。
+
+        Returns:
+            True 表示已拒绝/拦截（调用方应直接 return）；False 表示放行.
+        """
+        security = getattr(self, "security", None)
+        mode = getattr(security, "permission_mode", "ask") if security else "ask"
+
+        level, reason = "normal", ""
+        if tc.name == "shell":
+            try:
+                from scout.tools.builtin.shell import classify_shell_risk
+
+                level, reason = classify_shell_risk(
+                    tc.arguments.get("command", ""),
+                    tc.arguments.get("args") if isinstance(tc.arguments.get("args"), list) else None,
+                )
+            except Exception:  # noqa: BLE001 — 分类失败按常规处理，不阻塞执行
+                level, reason = "normal", ""
+        else:
+            tool = ToolRegistry.get_tool(tc.name)
+            if tool is not None and getattr(tool.annotations, "destructive", False):
+                level = "risky"
+                reason = f"该操作会修改或删除数据（{tc.name}）"
+
+        # ② 权限模式：strict 连常规 shell 也问；auto 连 risky 都放行
+        if mode == "strict" and tc.name in ("shell", "execute_code"):
+            preview = str(
+                tc.arguments.get("command") or tc.arguments.get("code") or tc.name
+            )[:160]
+            level, reason = "risky", f"谨慎模式：执行前需确认\n{preview}"
+        if mode == "strict" and level == "risky" and not reason:
+            reason = f"谨慎模式：执行前需确认（{tc.name}）"
+
+        need_ask = level == "risky" and mode != "auto"
+
+        if not need_ask:
+            if level == "risky":
+                # auto 模式：用户已授权全部权限，直接放行（留痕便于事后追溯）
+                tc.arguments["_approved"] = True
+                if self.bus:
+                    await self.bus.emit(
+                        "tool.risky_auto",
+                        {"tool": tc.name, "reason": reason, "mode": mode},
+                    )
+            return False
+
+        import uuid
+
+        request_id = str(uuid.uuid4())[:8]
+        try:
+            approved = await self.callbacks.on_confirm(
+                request_id=request_id, tool_name=tc.name, args=tc.arguments, reason=reason
+            )
+        except Exception as exc:  # noqa: BLE001 — 审批通道不可用时不静默放行
+            logger.warning("权限审批通道异常，按拒绝处理: %s", exc)
+            approved = False
+
+        if approved:
+            tc.arguments["_approved"] = True
+            if not hasattr(self, "_approved_call_ids"):
+                self._approved_call_ids = set()
+            self._approved_call_ids.add(call_id)  # 避免 HITL 再问一次
+            return False
+
+        obs = Observation(tool_name=tc.name, success=False, output="用户拒绝执行此操作")
+        session.observations.append(obs)
+        session.messages.append(
+            Message(
+                role=Role.TOOL,
+                content=obs.output,
+                metadata={"tool_name": tc.name, "success": False, "call_id": call_id},
+            )
+        )
+        self._record_tool_result(session.id, tc.name, False, obs.output)
+        return True
+
     async def _gate_hitl_approval(self, session: Session, tc: ToolCall, call_id: str) -> bool:
         """HITL 用户确认：危险操作前请求用户确认.
 
@@ -472,6 +583,10 @@ class ToolExecutionMixin:
         # Human-in-the-Loop: 危险操作前请求用户确认（auto_approve 开启时跳过；
 
         # 自动化运行时无人可确认，由 AutomationPolicy 门控替代）
+
+        # ★ 2026-09-21：已在 _gate_permission 问过并获批准的，不再重复询问
+        if getattr(self, "_approved_call_ids", None) and call_id in self._approved_call_ids:
+            return False
 
         if (
             self.enable_hitl
@@ -775,7 +890,7 @@ class ToolExecutionMixin:
 
         # 2026-09-07 从 3000 收紧到 1200：累计 input 随历史长度平方增长；
         # 1200 字符足够保留"结论+关键数据+尾部状态"，要点记忆由 Running Notes 兜底
-        _max_tool_chars = 1200
+        _max_tool_chars = _TOOL_CHARS_LIMIT
 
         if len(_content) > _max_tool_chars:
             # ★ 2026-09-15 修复「长输出静默丢失」：原实现只留首尾各 600 字符，
@@ -970,6 +1085,10 @@ class ToolExecutionMixin:
 
         # ③ 安全检查：工具白名单 + 危险命令硬拦截
         if await self._gate_security_checks(session, tc, call_id):
+            return
+
+        # ③b 权限门控：风险分级 × 用户权限开关（2026-09-21）
+        if await self._gate_permission(session, tc, call_id):
             return
 
         # ④ HITL：危险操作前请求用户确认

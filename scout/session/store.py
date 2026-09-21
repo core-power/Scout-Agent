@@ -1262,12 +1262,23 @@ class SessionStore:
         return self._run_async(self.async_stats())
 
 
+# ★ 2026-09-20：全局单例缓存。此前每次调用都 new 一个 SessionStore，
+# 退出时 launcher/server 兜底 flush 跑在新实例上（_active_refs 恒空）→ 落盘 no-op；
+# 且每个新实例 _ensure_storage 重入 connect() 把共享 SQLiteStorage._conn 换掉 → 连接泄漏。
+_SESSION_STORE_SINGLETON: "SessionStore | None" = None
+_SESSION_STORE_LOCK = threading.Lock()
+
+
 def get_session_store(backend: str | None = None, **kwargs) -> "SessionStore":
     """会话存储工厂（2026-08-27）— 支持插件 SPI 替换.
 
     backend 优先级：显式参数 > 环境变量 SCOUT_SESSION_STORE。
     backend="spi" 时从插件取 session 实现（未注册则报错提示加载对应插件）。
+
+    ★ 2026-09-20：内置后端返回全局单例 —— 活跃会话引用（_active_refs）只存在一个
+    实例上，多实例会导致 flush_active 找不到任何活跃会话（退出兜底落盘失效）。
     """
+    global _SESSION_STORE_SINGLETON
     backend = backend or os.getenv("SCOUT_SESSION_STORE", "")
     if backend == "spi":
         from scout.plugins.spi import SPI_KIND_SESSION, get_provider
@@ -1279,4 +1290,7 @@ def get_session_store(backend: str | None = None, **kwargs) -> "SessionStore":
                 "请加载声明 provides=['session'] 的插件，或改用内置后端。"
             )
         return impl(**kwargs) if callable(impl) else impl
-    return SessionStore(**kwargs)
+    with _SESSION_STORE_LOCK:
+        if _SESSION_STORE_SINGLETON is None:
+            _SESSION_STORE_SINGLETON = SessionStore(**kwargs)
+        return _SESSION_STORE_SINGLETON

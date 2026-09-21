@@ -32,6 +32,21 @@ MAX_SESSIONS = 16
 IS_WINDOWS = os.name == "nt"
 
 
+def _encode_cmd_payload(framed: str) -> bytes:
+    """Windows 侧：把待注入命令编码为 cmd.exe 能正确识别的字节。
+
+    中文 Windows 的 cmd 默认 GBK(936) 代码页，默认按 GBK 编码（与原行为一致）。
+    ★ 2026-09-20：若命令含 GBK 无法表示的字符（emoji、生僻字、部分 Unicode 符号），
+      原实现用 errors="replace" 把它们静默替换成 '?' —— 命令被悄悄改坏，
+      表现为「看起来执行了但结果不对」且极难排查。
+      这类情况改为：先切 UTF-8 代码页（chcp 65001）再用 UTF-8 编码发送。
+    """
+    try:
+        return framed.encode("gbk")
+    except UnicodeEncodeError:
+        return ("chcp 65001 >nul\r\n" + framed).encode("utf-8", errors="replace")
+
+
 class ShellSession:
     """单条持久 bash 会话."""
 
@@ -98,7 +113,7 @@ class ShellSession:
             if IS_WINDOWS:
                 # cmd 哨兵：echo 输出退出码；%errorlevel% 在本行解析时反映上一命令退出码
                 framed = f"{cmd}\r\necho.&echo {SENTINEL}=%errorlevel%\r\n"
-                payload = framed.encode("gbk", errors="replace")  # 中文系统 cmd 默认 GBK 代码页
+                payload = _encode_cmd_payload(framed)
             else:
                 framed = f"{cmd}\nprintf '\\n{SENTINEL}=%s\\n' \"$?\"\n"
                 payload = framed.encode("utf-8", errors="replace")

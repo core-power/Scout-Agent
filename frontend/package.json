@@ -1,0 +1,15 @@
+{
+  "name": "scout-ui",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Scout Web UI 构建工具链。把 Tailwind 从浏览器运行时(Play CDN)改为构建期产出静态 CSS，并集中管理设计 token 与图标雪碧图。产物提交入库，PyInstaller 打包流程无需改动。",
+  "scripts": {
+    "build": "tailwindcss -c tailwind.config.js -i src/app.css -o ../scout/web/static/css/app.css --minify",
+    "watch": "tailwindcss -c tailwind.config.js -i src/app.css -o ../scout/web/static/css/app.css --watch",
+    "sprite": "node build-sprite.mjs",
+    "verify": "node verify-classes.mjs"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}

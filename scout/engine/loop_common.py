@@ -91,13 +91,21 @@ def finish_reason(
     wd_trips: int,
     deadline_expired: bool,
     cancelled: bool,
+    stalled: bool = False,
 ) -> str:
-    """回合收尾原因判定（steps/token/watchdog/time/cancelled），双轨共用."""
+    """回合收尾原因判定（steps/token/watchdog/time/cancelled/stalled），双轨共用.
+
+    stalled（2026-09-20）：自适应预算判定连续多步无实质进展（工具全失败或
+    输出指纹重复），优先于 steps 上报——"跑满 120 步"和"第 30 步就在原地打转"
+    对用户的含义完全不同，不能都报成步数上限。
+    """
     reason = "steps"
     if fused_by_token:
         reason = "token"
     elif wd_trips >= 2:
         reason = "watchdog"
+    elif stalled:
+        reason = "stalled"
     elif deadline_expired:
         reason = "time"
     if cancelled:

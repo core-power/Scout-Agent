@@ -1,383 +1,412 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>系统监控 - Scout Agent</title>
+    <title>绯荤粺鐩戞帶 路 Scout Agent</title>
+    <script src="/static/theme.js"></script>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="/static/i18n.js"></script>
-    <script src="/static/vendor/tailwind.js"></script>
     <script src="/static/vendor/chart.umd.min.js"></script>
-    <style>
-        body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-        .card {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        }
-        .stat-card {
-            transition: transform 0.2s;
-        }
-        .stat-card:hover {
-            transform: translateY(-4px);
-        }
-        .progress-bar {
-            transition: width 0.5s ease-in-out;
-        }
-    </style>
+    <!-- 鏋勫缓浜х墿锛歠rontend/src/app.css锛屾敼鏍峰紡璇锋敼閭ｉ噷鍐?npm run build -->
+    <link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/theme-workbuddy.css">
 </head>
-<body>
+<body class="h-screen overflow-hidden bg-surface-0 text-ink-1 flex flex-col">
     <script>renderLangToggle();</script>
-    <div class="min-h-screen p-8">
-        <!-- 头部 -->
-        <div class="max-w-7xl mx-auto mb-8">
-            <div class="flex items-center justify-between">
-                <div>
-                    <h1 class="text-4xl font-bold text-white mb-2">📊 系统监控</h1>
-                    <p class="text-white/80">实时监控 Scout Agent 运行状态</p>
+
+<!-- 椤舵爮 -->
+<div class="flex items-center gap-3 px-4 py-3 border-b border-line-soft flex-shrink-0">
+    <a href="/" class="p-2 -ml-2 rounded-lg hover:bg-surface-3 text-ink-3 transition-colors">
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+    </a>
+    <h1 class="page-title">绯荤粺鐩戞帶</h1>
+    <span class="text-xs text-ink-3">姣?3 绉掕嚜鍔ㄥ埛鏂?/span>
+    <div class="flex-1"></div>
+    <span id="mon-error" class="badge bg-danger-soft text-danger hidden"></span>
+    <button id="btn-refresh" onclick="refreshAll()" class="btn btn-ghost text-xs">
+        <svg class="ico" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5"/><path stroke-linecap="round" d="M20 9A8 8 0 006.3 5.7L4 8m0 7a8 8 0 0013.7 3.3L20 16"/></svg>
+        鍒锋柊
+    </button>
+</div>
+
+<div class="flex-1 min-h-0 overflow-y-auto">
+    <div class="max-w-[1180px] mx-auto px-5 py-5 space-y-4">
+
+        <!-- 鈺愨晲鈺?绯荤粺璧勬簮 鈺愨晲鈺?-->
+        <section class="card p-4">
+            <h2 class="section-title">
+                <svg class="ico text-ink-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/></svg>
+                绯荤粺璧勬簮
+            </h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+
+                <!-- CPU -->
+                <div class="metric metric-accent stat-card">
+                    <div class="flex items-center justify-between">
+                        <span class="metric-label">CPU 浣跨敤鐜?/span>
+                        <svg class="ico opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><rect x="6" y="6" width="12" height="12" rx="2"/><path stroke-linecap="round" d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+                    </div>
+                    <div id="cpu-percent" class="metric-value">鈥?/div>
+                    <div class="metric-track mt-2"><div id="cpu-bar" class="progress-bar" style="width:0%"></div></div>
+                    <div id="cpu-cores" class="metric-sub mt-1.5">鈥?/div>
                 </div>
-                <div class="flex gap-4">
-                    <a href="/" class="px-6 py-3 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors">
-                        ← 返回首页
-                    </a>
-                    <button onclick="refreshAll()" class="px-6 py-3 bg-white text-purple-600 rounded-lg hover:bg-white/90 transition-colors">
-                        🔄 刷新数据
-                    </button>
+
+                <!-- 鍐呭瓨 -->
+                <div class="metric metric-success stat-card">
+                    <div class="flex items-center justify-between">
+                        <span class="metric-label">鍐呭瓨浣跨敤鐜?/span>
+                        <svg class="ico opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="10" rx="2"/><path stroke-linecap="round" d="M7 17v3M12 17v3M17 17v3M7 4v3M12 4v3M17 4v3"/></svg>
+                    </div>
+                    <div id="memory-percent" class="metric-value">鈥?/div>
+                    <div class="metric-track mt-2"><div id="memory-bar" class="progress-bar" style="width:0%"></div></div>
+                    <div id="memory-detail" class="metric-sub mt-1.5">鈥?/div>
                 </div>
+
+                <!-- 纾佺洏 -->
+                <div class="metric metric-warn stat-card">
+                    <div class="flex items-center justify-between">
+                        <span class="metric-label">纾佺洏浣跨敤鐜?/span>
+                        <svg class="ico opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+                    </div>
+                    <div id="disk-percent" class="metric-value">鈥?/div>
+                    <div class="metric-track mt-2"><div id="disk-bar" class="progress-bar" style="width:0%"></div></div>
+                    <div id="disk-detail" class="metric-sub mt-1.5">鈥?/div>
+                </div>
+
+                <!-- 缃戠粶锛堟病鏈夈€屽崰姣斻€嶆蹇碉紝鎵€浠ヤ笉鏀捐繘搴︽潯锛屾敼鏀句笂涓嬭锛?-->
+                <div class="metric metric-agent stat-card">
+                    <div class="flex items-center justify-between">
+                        <span class="metric-label">缃戠粶閫熺巼</span>
+                        <svg class="ico opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M7 17 3 13l4-4"/><path stroke-linecap="round" d="M3 13h11"/><path stroke-linecap="round" stroke-linejoin="round" d="M17 7l4 4-4 4"/><path stroke-linecap="round" d="M21 11H10"/></svg>
+                    </div>
+                    <div class="metric-value"><span id="network-speed">0</span><span class="text-sm font-normal opacity-70 ml-1">KB/s</span></div>
+                    <div class="metric-sub mt-1.5 tabular">
+                        <div>涓婅 <span id="network-upload">0</span> KB/s</div>
+                        <div>涓嬭 <span id="network-download">0</span> KB/s</div>
+                    </div>
+                </div>
+
             </div>
-        </div>
+        </section>
 
-        <!-- 系统资源监控 -->
-        <div class="max-w-7xl mx-auto mb-8">
-            <div class="card rounded-xl p-6">
-                <h2 class="text-2xl font-bold text-gray-800 mb-6">💻 系统资源</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    <!-- CPU 使用率 -->
-                    <div class="stat-card bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-6 text-white">
-                        <div class="flex items-center justify-between mb-4">
-                            <span class="text-3xl">🔥</span>
-                            <span id="cpu-percent" class="text-4xl font-bold">0%</span>
-                        </div>
-                        <div class="text-sm opacity-90 mb-2">CPU 使用率</div>
-                        <div class="w-full bg-white/20 rounded-full h-2">
-                            <div id="cpu-bar" class="progress-bar bg-white rounded-full h-2" style="width: 0%"></div>
-                        </div>
-                        <div id="cpu-cores" class="text-xs opacity-75 mt-2">0 核心</div>
-                    </div>
+        <!-- 鈺愨晲鈺?杩愯姒傝 鈺愨晲鈺?
+             瀛楁鍏ㄩ儴鏉ヨ嚜 /api/status銆傚師瀹炵幇璇荤殑鏄?active_sessions / tool_calls /
+             tool_types锛岃繖涓変釜閿悗绔粠鏉ヤ笉杩斿洖锛屾墍浠ユ暣琛屾案杩滄樉绀?0銆?-->
+        <section class="card p-4">
+            <h2 class="section-title">
+                <svg class="ico text-ink-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" d="M12 7v5l3 2"/></svg>
+                杩愯姒傝
+            </h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
 
-                    <!-- 内存使用率 -->
-                    <div class="stat-card bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-6 text-white">
-                        <div class="flex items-center justify-between mb-4">
-                            <span class="text-3xl">💾</span>
-                            <span id="memory-percent" class="text-4xl font-bold">0%</span>
-                        </div>
-                        <div class="text-sm opacity-90 mb-2">内存使用率</div>
-                        <div class="w-full bg-white/20 rounded-full h-2">
-                            <div id="memory-bar" class="progress-bar bg-white rounded-full h-2" style="width: 0%"></div>
-                        </div>
-                        <div id="memory-detail" class="text-xs opacity-75 mt-2">0 GB / 0 GB</div>
+                <div class="metric metric-success stat-card">
+                    <span class="metric-label">杩愯鐘舵€?/span>
+                    <div class="flex items-center gap-2 mt-1">
+                        <span id="agent-dot" class="w-2 h-2 rounded-full bg-ink-4 flex-shrink-0"></span>
+                        <span id="agent-status" class="text-base font-semibold">鈥?/span>
                     </div>
-
-                    <!-- 磁盘使用率 -->
-                    <div class="stat-card bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg p-6 text-white">
-                        <div class="flex items-center justify-between mb-4">
-                            <span class="text-3xl">💿</span>
-                            <span id="disk-percent" class="text-4xl font-bold">0%</span>
-                        </div>
-                        <div class="text-sm opacity-90 mb-2">磁盘使用率</div>
-                        <div class="w-full bg-white/20 rounded-full h-2">
-                            <div id="disk-bar" class="progress-bar bg-white rounded-full h-2" style="width: 0%"></div>
-                        </div>
-                        <div id="disk-detail" class="text-xs opacity-75 mt-2">0 GB / 0 GB</div>
-                    </div>
-
-                    <!-- 网络流量 -->
-                    <div class="stat-card bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg p-6 text-white">
-                        <div class="flex items-center justify-between mb-4">
-                            <span class="text-3xl">🌐</span>
-                            <span id="network-speed" class="text-4xl font-bold">0</span>
-                        </div>
-                        <div class="text-sm opacity-90 mb-2">网络速率</div>
-                        <div id="network-detail" class="text-xs opacity-75 mt-2">
-                            <div>↑ 0 KB/s</div>
-                            <div>↓ 0 KB/s</div>
-                        </div>
-                    </div>
+                    <div id="agent-uptime" class="metric-sub mt-1">鈥?/div>
                 </div>
+
+                <div class="metric metric-accent stat-card">
+                    <span class="metric-label">浼氳瘽</span>
+                    <div id="stat-sessions" class="metric-value">鈥?/div>
+                    <div class="metric-sub mt-1">宸蹭繚瀛樼殑浼氳瘽鏁?/div>
+                </div>
+
+                <div class="metric metric-agent stat-card">
+                    <span class="metric-label">宸ュ叿</span>
+                    <div id="stat-tools" class="metric-value">鈥?/div>
+                    <div class="metric-sub mt-1">宸叉敞鍐屽伐鍏锋暟</div>
+                </div>
+
+                <div class="metric metric-warn stat-card">
+                    <span class="metric-label">璁板繂</span>
+                    <div id="stat-memories" class="metric-value">鈥?/div>
+                    <div class="metric-sub mt-1">闀挎湡璁板繂鏉＄洰鏁?/div>
+                </div>
+
             </div>
-        </div>
+            <div id="stat-extra" class="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-ink-3"></div>
+        </section>
 
-        <!-- Agent 状态 -->
-        <div class="max-w-7xl mx-auto mb-8">
-            <div class="card rounded-xl p-6">
-                <h2 class="text-2xl font-bold text-gray-800 mb-6">🤖 Agent 状态</h2>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <!-- 运行状态 -->
-                    <div class="bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-lg p-6 text-white">
-                        <div class="text-sm opacity-90 mb-2">运行状态</div>
-                        <div id="agent-status" class="text-3xl font-bold mb-2">运行中</div>
-                        <div id="agent-uptime" class="text-sm opacity-75">运行时间: 0 小时</div>
-                    </div>
-
-                    <!-- 会话统计 -->
-                    <div class="bg-gradient-to-br from-pink-500 to-pink-600 rounded-lg p-6 text-white">
-                        <div class="text-sm opacity-90 mb-2">活跃会话</div>
-                        <div id="active-sessions" class="text-3xl font-bold mb-2">0</div>
-                        <div id="total-sessions" class="text-sm opacity-75">总会话数: 0</div>
-                    </div>
-
-                    <!-- 工具调用 -->
-                    <div class="bg-gradient-to-br from-teal-500 to-teal-600 rounded-lg p-6 text-white">
-                        <div class="text-sm opacity-90 mb-2">工具调用</div>
-                        <div id="tool-calls" class="text-3xl font-bold mb-2">0</div>
-                        <div id="tool-types" class="text-sm opacity-75">工具类型: 0</div>
-                    </div>
-                </div>
+        <!-- 鈺愨晲鈺?鎬ц兘鍥捐〃 鈺愨晲鈺?-->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div class="card p-4">
+                <h2 class="section-title">CPU 浣跨敤鍘嗗彶<span class="font-normal text-ink-3">鏈€杩?30 娆￠噰鏍?/span></h2>
+                <div class="h-[200px]"><canvas id="cpu-chart"></canvas></div>
             </div>
-        </div>
-
-        <!-- 性能图表 -->
-        <div class="max-w-7xl mx-auto mb-8">
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <!-- CPU 历史 -->
-                <div class="card rounded-xl p-6">
-                    <h3 class="text-xl font-bold text-gray-800 mb-4">📈 CPU 使用历史</h3>
-                    <canvas id="cpu-chart" height="200"></canvas>
-                </div>
-
-                <!-- 内存历史 -->
-                <div class="card rounded-xl p-6">
-                    <h3 class="text-xl font-bold text-gray-800 mb-4">📈 内存使用历史</h3>
-                    <canvas id="memory-chart" height="200"></canvas>
-                </div>
+            <div class="card p-4">
+                <h2 class="section-title">鍐呭瓨浣跨敤鍘嗗彶<span class="font-normal text-ink-3">鏈€杩?30 娆￠噰鏍?/span></h2>
+                <div class="h-[200px]"><canvas id="memory-chart"></canvas></div>
             </div>
-        </div>
+        </section>
 
-        <!-- 插件状态 -->
-        <div class="max-w-7xl mx-auto">
-            <div class="card rounded-xl p-6">
-                <div class="flex items-center justify-between mb-6">
-                    <h2 class="text-2xl font-bold text-gray-800">🧩 插件状态</h2>
-                    <a href="/plugins" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
-                        管理插件 →
-                    </a>
-                </div>
-                <div id="plugins-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <!-- 插件卡片将在这里动态生成 -->
-                </div>
+        <!-- 鈺愨晲鈺?鎻掍欢鐘舵€?鈺愨晲鈺?-->
+        <section class="card p-4">
+            <div class="flex items-center gap-3 mb-3">
+                <h2 class="section-title mb-0">
+                    <svg class="ico text-ink-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M10 3H4a1 1 0 00-1 1v6m7-7h10a1 1 0 011 1v6m-11 11H4a1 1 0 01-1-1v-6m7 7h10a1 1 0 001-1v-6"/></svg>
+                    鎻掍欢鐘舵€?
+                </h2>
+                <div class="flex-1"></div>
+                <a href="/plugins" class="btn btn-ghost text-xs">绠＄悊鎻掍欢</a>
             </div>
-        </div>
+            <div id="plugins-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+            <div id="plugins-empty" class="empty-state hidden">
+                <span class="text-sm text-ink-3">娌℃湁宸插畨瑁呯殑鎻掍欢</span>
+            </div>
+        </section>
+
     </div>
+</div>
 
-    <script>
-        let cpuChart, memoryChart;
-        let cpuHistory = [];
-        let memoryHistory = [];
-        let startTime = Date.now();
+<script>
+/* 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+   绯荤粺鐩戞帶
+   ------------------------------------------------------------------------
+   涓庢棫鐗堢殑宸埆锛堟棫鐗堟暣椤垫暟鎹亽涓?0锛夛細
+     1. 绯荤粺璧勬簮鍘熸潵璇锋眰 /api/system/stats 鈥斺€?鍚庣浠庢潵娌℃湁杩欎釜鎺ュ彛锛?
+        姣?3 绉掓嬁涓€娆?404锛屽洓寮犲崱姘歌繙 0%銆傛帴鍙ｅ凡鍦?
+        scout/adapters/web/routes/integrations.py 琛ラ綈銆?
+     2. 杩愯姒傝鍘熸潵璇?active_sessions / tool_calls / tool_types锛?
+        杩欎笁涓敭 /api/status 涓嶈繑鍥烇紝鍚屾牱姘歌繙鏄?0銆傜幇鍦ㄦ敼璇荤湡瀹炲瓧娈?
+        锛坮unning / sessions / tools / memories / skills / events锛夈€?
+     3. 閰嶈壊鏀逛负鍏ㄧ珯 token锛岃窡闅忎富棰橈紱鍥捐〃棰滆壊涔熶粠 CSS 鍙橀噺閲屽彇锛?
+        涓嶅啀鎶?rgb(59,130,246) 杩欑被鍊煎啓姝诲湪 JS 閲屻€?
+   鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲 */
 
-        // 初始化图表
-        function initCharts() {
-            const cpuCtx = document.getElementById('cpu-chart').getContext('2d');
-            cpuChart = new Chart(cpuCtx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'CPU 使用率 (%)',
-                        data: [],
-                        borderColor: 'rgb(59, 130, 246)',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            max: 100
-                        }
-                    }
-                }
-            });
+let cpuChart = null;
+let memoryChart = null;
+const cpuHistory = [];
+const memoryHistory = [];
+const MAX_SAMPLES = 30;
+let netReady = false;   // 缃戠粶閫熺巼瑕佷袱娆￠噰鏍锋墠鏈夊€硷紝绗竴娆″厛涓嶆樉绀?0 KB/s 鐨勫亣鏁版嵁
 
-            const memoryCtx = document.getElementById('memory-chart').getContext('2d');
-            memoryChart = new Chart(memoryCtx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: '内存使用率 (%)',
-                        data: [],
-                        borderColor: 'rgb(34, 197, 94)',
-                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            max: 100
-                        }
-                    }
-                }
-            });
+/* 鎻掍欢鍚?鎻忚堪鏉ヨ嚜鍚庣锛屾槸澶栭儴鏁版嵁锛屾嫾杩?innerHTML 鍓嶅繀椤昏浆涔?*/
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+}
+
+/* 浠?CSS 鍙橀噺鍙栬壊 鈥斺€?涓婚鍒囨崲鍚庨噸鏂拌皟鐢ㄥ嵆鍙嬁鍒版柊鍊硷紝
+   涓嶇敤鍦?JS 閲岀淮鎶や竴浠介鑹茶〃锛堣繖涔熸槸鏃х増鍜?app.css 瀵逛笉涓婄殑鍘熷洜锛夈€?*/
+function cssRgb(name, alpha) {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    if (!raw) return alpha == null ? 'transparent' : `transparent`;
+    return alpha == null ? `rgb(${raw})` : `rgb(${raw} / ${alpha})`;
+}
+
+function chartColors() {
+    return {
+        line: cssRgb('--c-line'),
+        ink3: cssRgb('--c-ink-3'),
+        accent: cssRgb('--c-accent'),
+        success: cssRgb('--c-success'),
+    };
+}
+
+function baseOptions(c) {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        // 3 绉掑埛鏂颁竴娆★紝甯﹀叆鍦哄姩鐢讳細涓€鐩存姈
+        animation: false,
+        plugins: { legend: { display: false } },
+        elements: {
+            point: { radius: 0, hoverRadius: 3 },
+            line: { borderWidth: 2, tension: 0.35 },
+        },
+        interaction: { intersect: false, mode: 'index' },
+        scales: {
+            y: {
+                beginAtZero: true,
+                max: 100,
+                border: { color: c.line },
+                grid: { color: c.line },
+                ticks: { color: c.ink3, font: { size: 11 }, maxTicksLimit: 5, callback: (v) => v + '%' },
+            },
+            x: {
+                border: { color: c.line },
+                grid: { display: false },
+                ticks: { color: c.ink3, font: { size: 10 }, maxTicksLimit: 6, maxRotation: 0 },
+            },
+        },
+    };
+}
+
+function initCharts() {
+    const c = chartColors();
+
+    cpuChart = new Chart(document.getElementById('cpu-chart').getContext('2d'), {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'CPU', data: cpuHistory, borderColor: c.accent, backgroundColor: cssRgb('--c-accent', 0.12), fill: true }] },
+        options: baseOptions(c),
+    });
+
+    memoryChart = new Chart(document.getElementById('memory-chart').getContext('2d'), {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: '鍐呭瓨', data: memoryHistory, borderColor: c.success, backgroundColor: cssRgb('--c-success', 0.12), fill: true }] },
+        options: baseOptions(c),
+    });
+}
+
+/* 鈹€鈹€ 椤舵爮閿欒鎻愮ず锛堟嬁涓嶅埌鏁版嵁鏃朵笉鑳藉啀鎮勬倓鍙啓 console锛夆攢鈹€ */
+function setError(msg) {
+    const el = document.getElementById('mon-error');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('hidden', !msg);
+}
+
+function setBar(id, percent) {
+    const el = document.getElementById(id);
+    if (el) el.style.width = Math.max(0, Math.min(100, Number(percent) || 0)) + '%';
+}
+
+function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+}
+
+/* 鈹€鈹€ 绯荤粺璧勬簮 鈹€鈹€ */
+async function updateSystemStats() {
+    const r = await fetch('/api/system/stats');
+    if (!r.ok) throw new Error(`/api/system/stats -> HTTP ${r.status}`);
+    const d = await r.json();
+
+    if (d.ok === false) {
+        // 鍚庣鏄庣‘璇存嬁涓嶅埌锛堜緥濡?psutil 娌¤锛夛紝涓嶈鎶?0 褰撴垚鐪熷疄鏁版嵁灞曠ず
+        throw new Error(d.error || '鍚庣鏈彁渚涚郴缁熻祫婧愭暟鎹?);
+    }
+
+    setText('cpu-percent', `${d.cpu.percent}%`);
+    setBar('cpu-bar', d.cpu.percent);
+    setText('cpu-cores', `${d.cpu.cores} 鏍稿績`);
+
+    setText('memory-percent', `${d.memory.percent}%`);
+    setBar('memory-bar', d.memory.percent);
+    setText('memory-detail', `${d.memory.used} / ${d.memory.total} GB`);
+
+    setText('disk-percent', `${d.disk.percent}%`);
+    setBar('disk-bar', d.disk.percent);
+    setText('disk-detail', `${d.disk.used} / ${d.disk.total} GB`);
+
+    setText('network-speed', d.network.speed);
+    setText('network-upload', d.network.upload);
+    setText('network-download', d.network.download);
+
+    // 閲囨牱鍏ュ浘
+    cpuHistory.push(d.cpu.percent);
+    memoryHistory.push(d.memory.percent);
+
+    const label = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    while (cpuHistory.length > MAX_SAMPLES) {
+        cpuHistory.shift();
+        memoryHistory.shift();
+        cpuChart.data.labels.shift();
+        memoryChart.data.labels.shift();
+    }
+    cpuChart.data.labels.push(label);
+    memoryChart.data.labels.push(label);
+    cpuChart.update('none');
+    memoryChart.update('none');
+}
+
+/* 鈹€鈹€ 杩愯姒傝 鈹€鈹€ */
+async function updateAgentStats() {
+    const r = await fetch('/api/status');
+    if (!r.ok) throw new Error(`/api/status -> HTTP ${r.status}`);
+    const d = await r.json();
+
+    const running = d.running !== false;
+    setText('agent-status', __t(running ? '杩愯涓? : '宸插仠姝?));
+    document.getElementById('agent-dot').className =
+        'w-2 h-2 rounded-full flex-shrink-0 ' + (running ? 'bg-success' : 'bg-danger');
+
+    const up = Number(d.uptime_seconds || 0);
+    setText('agent-uptime', up > 0 ? `鏈嶅姟宸茶繍琛?${Math.floor(up / 3600)} 灏忔椂 ${Math.floor((up % 3600) / 60)} 鍒哷 : '');
+
+    setText('stat-sessions', d.sessions ?? 0);
+    setText('stat-tools', d.tools ?? 0);
+    setText('stat-memories', d.memories ?? 0);
+
+    // 鏈夊€兼墠鏄剧ず锛屾病鍊肩殑椤逛笉鐣欎竴涓┖鐨?0 缁欎汉璇В
+    const extra = [];
+    if (d.events != null) extra.push(`浜嬩欢鍘嗗彶 ${d.events}`);
+    if (d.skills != null) extra.push(`鎶€鑳?${d.skills}`);
+    if (d.agents != null) extra.push(`Agent ${d.agents}`);
+    if (d.security) extra.push('瀹夊叏妯″潡宸插惎鐢?);
+    document.getElementById('stat-extra').innerHTML =
+        extra.map((t) => `<span>${esc(t)}</span>`).join('');
+}
+
+/* 鈹€鈹€ 鎻掍欢鐘舵€?鈹€鈹€ */
+async function updatePlugins() {
+    const r = await fetch('/api/plugins');
+    if (!r.ok) throw new Error(`/api/plugins -> HTTP ${r.status}`);
+    const data = await r.json();
+    const plugins = Array.isArray(data) ? data : (data.plugins || []);
+
+    const grid = document.getElementById('plugins-grid');
+    const empty = document.getElementById('plugins-empty');
+    grid.innerHTML = '';
+
+    empty.classList.toggle('hidden', plugins.length > 0);
+
+    for (const p of plugins) {
+        const on = p.enabled !== false && p.enabled !== 0;
+        const card = document.createElement('div');
+        card.className = 'card-flat p-3.5 flex flex-col gap-2 stat-card';
+        card.innerHTML = `
+            <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold text-ink-1 flex-1 min-w-0 truncate">${esc(p.name)}</span>
+                <span class="badge ${on ? 'bg-success-soft text-success' : 'bg-surface-4 text-ink-3'}">${on ? __t('鍚敤') : __t('绂佺敤')}</span>
+            </div>
+            <div class="text-xs text-ink-3 leading-relaxed">${esc(p.description || __t('鏃犳弿杩?))}</div>
+            <div class="text-2xs text-ink-4 tabular">${__t('鐗堟湰')} ${esc(p.version || '鈥?)} 路 ${__t('浼樺厛绾?)} ${esc(p.priority ?? '鈥?)}</div>
+        `;
+        grid.appendChild(card);
+    }
+}
+
+/* 鈹€鈹€ 鍒锋柊鍏ㄩ儴 鈹€鈹€
+   涓変釜璇锋眰骞惰锛涗换浣曚竴涓け璐ラ兘鍦ㄩ《鏍忎寒鍑烘潵锛岃€屼笉鏄彧涓㈣繘 console銆?*/
+async function refreshAll() {
+    const btn = document.getElementById('btn-refresh');
+    if (btn) btn.disabled = true;
+    try {
+        const results = await Promise.allSettled([
+            updateSystemStats(),
+            updateAgentStats(),
+            updatePlugins(),
+        ]);
+        const failed = results.filter((x) => x.status === 'rejected');
+        if (!failed.length) {
+            setError('');
+        } else if (failed.length === results.length) {
+            setError('鏃犳硶杩炴帴鍚庣鏈嶅姟');
+        } else {
+            // 閮ㄥ垎澶辫触锛氭妸鍏蜂綋鏄摢涓€鍧楀け璐ヨ娓呮
+            const names = ['绯荤粺璧勬簮', '杩愯姒傝', '鎻掍欢鐘舵€?];
+            const bad = results.map((x, i) => (x.status === 'rejected' ? names[i] : null)).filter(Boolean);
+            setError(`${bad.join('銆?)}鍔犺浇澶辫触`);
+            console.error('鐩戞帶鍒锋柊澶辫触:', failed.map((f) => f.reason));
         }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
 
-        // 更新系统资源
-        async function updateSystemStats() {
-            try {
-                const response = await fetch('/api/system/stats');
-                const data = await response.json();
-
-                // CPU
-                document.getElementById('cpu-percent').textContent = `${data.cpu.percent}%`;
-                document.getElementById('cpu-bar').style.width = `${data.cpu.percent}%`;
-                document.getElementById('cpu-cores').textContent = `${data.cpu.cores}${__t('核心')}`;
-
-                // 内存
-                document.getElementById('memory-percent').textContent = `${data.memory.percent}%`;
-                document.getElementById('memory-bar').style.width = `${data.memory.percent}%`;
-                document.getElementById('memory-detail').textContent = 
-                    `${data.memory.used} GB / ${data.memory.total} GB`;
-
-                // 磁盘
-                document.getElementById('disk-percent').textContent = `${data.disk.percent}%`;
-                document.getElementById('disk-bar').style.width = `${data.disk.percent}%`;
-                document.getElementById('disk-detail').textContent = 
-                    `${data.disk.used} GB / ${data.disk.total} GB`;
-
-                // 网络
-                document.getElementById('network-speed').textContent = data.network.speed;
-                document.getElementById('network-detail').innerHTML = `
-                    <div>↑ ${data.network.upload} KB/s</div>
-                    <div>↓ ${data.network.download} KB/s</div>
-                `;
-
-                // 更新图表
-                const now = new Date().toLocaleTimeString();
-                cpuHistory.push(data.cpu.percent);
-                memoryHistory.push(data.memory.percent);
-
-                if (cpuHistory.length > 30) {
-                    cpuHistory.shift();
-                    memoryHistory.shift();
-                    cpuChart.data.labels.shift();
-                    memoryChart.data.labels.shift();
-                }
-
-                cpuChart.data.labels.push(now);
-                cpuChart.data.datasets[0].data = cpuHistory;
-                cpuChart.update();
-
-                memoryChart.data.labels.push(now);
-                memoryChart.data.datasets[0].data = memoryHistory;
-                memoryChart.update();
-
-            } catch (error) {
-                console.error('更新系统状态失败:', error);
-            }
-        }
-
-        // 更新 Agent 状态
-        async function updateAgentStats() {
-            try {
-                const response = await fetch('/api/status');
-                const data = await response.json();
-
-                // 运行状态
-                document.getElementById('agent-status').textContent = 
-                    __t(data.running ? '✅ 运行中' : '❌ 停止');
-
-                // 计算运行时间
-                const uptime = Math.floor((Date.now() - startTime) / 1000 / 60);
-                document.getElementById('agent-uptime').textContent = 
-                    `${__t('运行时间: ')}${uptime}${__t('分钟')}`;
-
-                // 会话统计
-                document.getElementById('active-sessions').textContent = 
-                    data.active_sessions || 0;
-                document.getElementById('total-sessions').textContent = 
-                    __tpl(`总会话数: ${data.total_sessions || 0}`);
-
-                // 工具调用
-                document.getElementById('tool-calls').textContent = 
-                    data.tool_calls || 0;
-                document.getElementById('tool-types').textContent = 
-                    __tpl(`工具类型: ${data.tool_types || 0}`);
-
-            } catch (error) {
-                console.error('更新 Agent 状态失败:', error);
-            }
-        }
-
-        // 更新插件状态
-        async function updatePlugins() {
-            try {
-                const response = await fetch('/api/plugins');
-                const data = await response.json();
-                const plugins = Array.isArray(data) ? data : (data.plugins || []);
-
-                const grid = document.getElementById('plugins-grid');
-                grid.innerHTML = '';
-
-                plugins.forEach(plugin => {
-                    const card = document.createElement('div');
-                    card.className = `p-4 rounded-lg border-2 ${
-                        plugin.enabled 
-                            ? 'border-green-500 bg-green-50' 
-                            : 'border-gray-300 bg-gray-50'
-                    }`;
-
-                    card.innerHTML = `
-                        <div class="flex items-center justify-between mb-2">
-                            <div class="font-bold text-gray-800">${plugin.name}</div>
-                            <span class="px-2 py-1 text-xs rounded ${
-                                plugin.enabled 
-                                    ? 'bg-green-500 text-white' 
-                                    : 'bg-gray-400 text-white'
-                            }">
-                                ${plugin.enabled ? __t('启用') : __t('禁用')}
-                            </span>
-                        </div>
-                        <div class="text-sm text-gray-600 mb-2">${plugin.description || __t('无描述')}</div>
-                        <div class="text-xs text-gray-500">
-                            <div>${__tpl(`版本: ${plugin.version}`)}</div>
-                            <div>${__tpl(`优先级: ${plugin.priority}`)}</div>
-                        </div>
-                    `;
-
-                    grid.appendChild(card);
-                });
-
-            } catch (error) {
-                console.error('更新插件状态失败:', error);
-            }
-        }
-
-        // 刷新所有数据
-        async function refreshAll() {
-            await Promise.all([
-                updateSystemStats(),
-                updateAgentStats(),
-                updatePlugins()
-            ]);
-        }
-
-        // 初始化
-        document.addEventListener('DOMContentLoaded', () => {
-            initCharts();
-            refreshAll();
-            
-            // 每 3 秒更新一次
-            setInterval(refreshAll, 3000);
-        });
-    </script>
+document.addEventListener('DOMContentLoaded', () => {
+    initCharts();
+    refreshAll();
+    // 椤甸潰鍦ㄥ悗鍙版椂涓嶈疆璇細鐪佹帀鏃犳剰涔夌殑璇锋眰
+    setInterval(() => { if (!document.hidden) refreshAll(); }, 3000);
+});
+</script>
+<script src="/static/js/subshell.js"></script>
 </body>
 </html>

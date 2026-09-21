@@ -72,3 +72,14 @@ run_test.sh
 
 # 遗留的旧版页面快照（运行时产物，不入库）
 _served_index.html
+
+# ===== 前端构建（npm 依赖不入库；构建产物 scout/web/static/css/app.css 入库）=====
+frontend/node_modules/
+frontend/package-lock.json
+
+# ===== 一次性工作文件（2026-09-21 发布清理）=====
+_stats.out
+_shots_*.png
+*.bak-v1
+scout/web/static/_*.py
+tools/demo_media/

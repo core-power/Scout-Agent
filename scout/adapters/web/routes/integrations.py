@@ -9,6 +9,8 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from scout.core.types import Message, Role, Session
 import json
+import os
+import time
 import uuid
 from scout.tools.registry import ToolRegistry
 
@@ -16,6 +18,11 @@ from scout.tools.registry import ToolRegistry
 import logging
 
 logger = logging.getLogger("scout.adapters.web")
+
+# 本模块的加载时刻，作为"服务启动时间"的近似值 —— /api/status 用它算运行时长。
+# 模块在进程启动时被导入一次，所以这个近似足够准；
+# 前端原本拿不到运行时长，只能拿"页面打开了多久"冒充，那是错的。
+_BOOT_TS = time.time()
 
 from typing import TYPE_CHECKING
 
@@ -233,6 +240,7 @@ class YourPluginName(Plugin):
                 "tools": len(ToolRegistry.all_tools()),
                 "agents": 1 if self._agent else 0,
                 "adapters": [],
+                "uptime_seconds": int(time.time() - _BOOT_TS),
             }
             if self._agent:
                 if self._agent.memory_store:
@@ -250,3 +258,66 @@ class YourPluginName(Plugin):
                 if emb is not None and hasattr(emb, "model_info"):
                     status["embedding"] = emb.model_info
             return status
+
+        # 网络速率是「两次采样之差」，需要记住上一次的读数。
+        # 放在闭包里：每个 WebAdapter 实例一份，天然没有跨实例污染。
+        _net_prev = {"t": 0.0, "sent": 0, "recv": 0}
+
+        @self.app.get("/api/system/stats")
+        async def get_system_stats():
+            """系统资源占用（CPU / 内存 / 磁盘 / 网络）.
+
+            「系统监控」页（monitor.html）从它上线起就在轮询这个接口，
+            但后端一直没有实现 —— 页面每 3 秒拿一次 404，
+            四张指标卡永远停在 0%。psutil 本来就在 requirements 里，
+            这里补齐它。psutil 缺失时返回 ok=False，前端据此提示，
+            而不是假装有数据。
+            """
+            try:
+                import psutil  # 延迟导入：没装也不影响其它接口
+            except ImportError:
+                logger.warning("psutil 未安装，/api/system/stats 不可用")
+                return JSONResponse({"ok": False, "error": "psutil 未安装"})
+
+            # interval 不传时 cpu_percent 给的是「距上次调用以来的均值」，
+            # 首次调用必然是 0。阻塞 0.15s 拿真实瞬时值 —— 3 秒轮询一次，开销可忽略。
+            cpu_percent = psutil.cpu_percent(interval=0.15)
+            vm = psutil.virtual_memory()
+            # Windows 上 os.sep 是 "\\"，psutil 认盘符根；其它平台用 "/"
+            du = psutil.disk_usage(os.path.abspath(os.sep))
+            net = psutil.net_io_counters()
+
+            now = time.time()
+            sent, recv = net.bytes_sent, net.bytes_recv
+            if _net_prev["t"]:
+                dt = max(now - _net_prev["t"], 1e-6)
+                up_kbs = (sent - _net_prev["sent"]) / dt / 1024
+                down_kbs = (recv - _net_prev["recv"]) / dt / 1024
+            else:
+                up_kbs = down_kbs = 0.0  # 第一次没有参照，先给 0
+            _net_prev.update(t=now, sent=sent, recv=recv)
+
+            gib = 1024 ** 3
+            return {
+                "ok": True,
+                "cpu": {
+                    "percent": round(cpu_percent, 1),
+                    "cores": psutil.cpu_count(logical=True) or 0,
+                },
+                "memory": {
+                    "percent": round(vm.percent, 1),
+                    "used": round(vm.used / gib, 1),
+                    "total": round(vm.total / gib, 1),
+                },
+                "disk": {
+                    "percent": round(du.percent, 1),
+                    "used": round(du.used / gib, 1),
+                    "total": round(du.total / gib, 1),
+                },
+                "network": {
+                    # speed 是上下行合计，前端大数字用它
+                    "speed": round(up_kbs + down_kbs, 1),
+                    "upload": round(up_kbs, 1),
+                    "download": round(down_kbs, 1),
+                },
+            }

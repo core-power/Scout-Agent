@@ -135,12 +135,35 @@ def create_web_app(agent=None) -> FastAPI:
             # 回合收尾落盘（且工具中途不落库），正常关闭时「未收尾回合」或
             # 「距上次节流落盘 <5s 的增量」会丢失（用户反馈「重启后最新对话
             # 消息丢失」）。走线程池执行，避免同步全量重写阻塞关闭流程。
+            #
+            # ★ 2026-09-20：改用独立 threading.Thread，而非 asyncio.to_thread。
+            # uvicorn 关闭时默认事件循环 executor 已 shutdown，to_thread 抛
+            # "RuntimeError: cannot schedule new futures after shutdown"（实测日志）。
+            # 独立线程不依赖事件循环，干净收尾；join 限时等待，超时不阻塞退出。
             try:
+                import threading as _th
+
                 from scout.session.store import get_session_store
 
-                _saved = await asyncio.to_thread(get_session_store().flush_active)
-                if _saved:
-                    logging.getLogger(__name__).info("退出前已落盘 %d 个活跃会话", _saved)
+                _box = {"n": -1, "err": None}
+                _done = _th.Event()
+
+                def _flush_worker():
+                    try:
+                        _box["n"] = get_session_store().flush_active()
+                    except Exception as _fe:  # noqa: BLE001
+                        _box["err"] = _fe
+                    finally:
+                        _done.set()
+
+                _t = _th.Thread(target=_flush_worker, name="scout-exit-flush", daemon=True)
+                _t.start()
+                if not _done.wait(timeout=8):
+                    logging.getLogger(__name__).warning("退出 flush 超时（>8s），跳过")
+                if _box["err"] is not None:
+                    logging.getLogger(__name__).warning("退出 flush 失败: %s", _box["err"], exc_info=True)
+                elif _box["n"] > 0:
+                    logging.getLogger(__name__).info("退出前已落盘 %d 个活跃会话", _box["n"])
             except Exception:
                 logging.getLogger(__name__).warning("退出 flush 失败（不影响关闭）", exc_info=True)
 
@@ -155,7 +178,7 @@ def create_web_app(agent=None) -> FastAPI:
             logging.getLogger(__name__).debug("读取 web_docs 配置失败: %s", e)
     app = FastAPI(
         title="Scout Agent",
-        version="1.0.0.3",
+        version="1.0.0.4",
         lifespan=_lifespan,
         docs_url="/docs" if _docs_enabled else None,
         redoc_url="/redoc" if _docs_enabled else None,
@@ -395,6 +418,6 @@ def create_web_app(agent=None) -> FastAPI:
     # 健康检查端点（用于 Docker）
     @app.get("/health")
     async def health_check():
-        return {"status": "healthy", "version": "1.0.0.3"}
+        return {"status": "healthy", "version": "1.0.0.4"}
 
     return app

@@ -1,0 +1,425 @@
+/* ============================================================
+   Scout Agent Motion Layer v2 —— 「运行轨道 Run Rail」
+   ------------------------------------------------------------
+   设计目标：让一次运行**读得懂**，而不只是**看着在动**。
+
+   v1 只解决了"有没有动效"，v2 解决"进度叙事"：
+     · Run Head   气泡顶部的运行摘要条（第几步 / 已用多久 / 并行几项 / 步骤点阵）
+     · Run Rail   左侧一条轨道线 + 节点圆点，把散落的卡片串成一条故事线
+     · 焦点衰减   只有当前节点是"主角"，已完成的自动降为"档案"
+     · 动词化     工具卡从「工具名 + JSON」变成「动词 + 宾语」，完成后 输入 → 输出
+     · 三档活着   <2.5s 安静 / 2.5s 起进度条 / 10s 起转琥珀，不臆造 ETA
+     · 收束       整轮结束后运行区自动折叠成一行，让答案成为主角
+
+   Motion Spec（全站统一，不得越界）
+     d1 120ms  仅颜色/透明度切换
+     d2 180ms  入场 / 折叠，位移 ≤ 6px
+     d3 240ms  完成态弹入（pop 曲线）
+     ease  cubic-bezier(.22,1,.36,1)   pop  cubic-bezier(.34,1.56,.64,1)
+     循环动画同一时刻最多 2 个；禁止位移 > 8px；禁止 > 400ms 的非循环动画
+
+   配色全部走 --c-* token，浅/深双主题自动跟随；删除 <link> 即完整回滚。
+   ============================================================ */
+
+/* ---------- 0. 动效基准 ---------- */
+:root{
+  --am-ease: cubic-bezier(.22,1,.36,1);
+  --am-pop:  cubic-bezier(.34,1.56,.64,1);
+  --am-d1: 120ms;
+  --am-d2: 180ms;
+  --am-d3: 240ms;
+  --am-mono: ui-monospace, SFMono-Regular, Cascadia Mono, Consolas, monospace;
+}
+
+/* ---------- 1. Run Head —— 运行摘要条 ---------- */
+.am-runhead{
+  display:flex; align-items:center; gap:7px;
+  font-size:11px; line-height:1.5; color:rgb(var(--c-ink-3));
+  padding:1px 0 3px; user-select:none;
+  transition:color var(--am-d1) var(--am-ease);
+}
+.am-runhead .am-rh-mark{display:flex;align-items:center;color:rgb(var(--c-accent-text))}
+.am-runhead .am-rh-mark svg{width:12px;height:12px;display:block;flex:none}
+/* Run Head / 思考行里的环形指示器 */
+.am-spin-svg{animation:am-ring 1.05s linear infinite}
+.am-spin-svg circle{
+  stroke-dasharray:60 200; stroke-dashoffset:0;
+  animation:am-dash 1.4s ease-in-out infinite;
+}
+.am-runhead .am-rh-text{color:rgb(var(--c-ink-2)); min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+.am-runhead .am-rh-dots{display:inline-flex;align-items:center;gap:3px;margin-left:2px}
+.am-rh-dot{
+  width:5px;height:5px;border-radius:1px;background:rgb(var(--c-line-strong));
+  transition:background-color var(--m-d1,120ms) var(--am-ease);
+}
+.am-rh-dot.is-now{
+  background:rgb(var(--c-accent));
+  animation:am-rh-pulse 1.5s ease-in-out infinite;
+}
+.am-rh-more{font-size:10px;color:rgb(var(--c-ink-4));margin-left:1px}
+@keyframes am-rh-pulse{0%,100%{opacity:.4;transform:scale(.82)}50%{opacity:1;transform:scale(1)}}
+.am-runhead .am-rh-time{
+  margin-left:auto; font-variant-numeric:tabular-nums; color:rgb(var(--c-ink-4));
+  font-size:11px; flex:none;
+}
+/* 收束态 */
+.am-runhead[data-am-state="done"] .am-rh-mark{color:rgb(var(--c-success))}
+.am-runhead[data-am-state="done"] .am-rh-text{color:rgb(var(--c-ink-3))}
+.am-runhead[data-am-state="done"] .am-rh-dot{background:rgb(var(--c-success) / .55)}
+.am-runhead[data-am-state="error"] .am-rh-mark,
+.am-runhead[data-am-state="cancel"] .am-rh-mark{color:rgb(var(--c-danger))}
+.am-runhead[data-am-state="error"] .am-rh-text{color:rgb(var(--c-danger))}
+
+/* ---------- 2. Run Rail —— 轨道线 + 节点圆点 ---------- */
+.agent-process.am-rail{position:relative; padding-left:14px}
+.agent-process.am-rail::before{
+  content:''; position:absolute; left:4px; top:6px; bottom:6px; width:1px;
+  background:rgb(var(--c-line)); border-radius:1px;
+}
+.am-node{position:relative; transition:opacity var(--am-d1) var(--am-ease)}
+.am-node::before{
+  content:''; position:absolute; left:-14px; top:10px;
+  width:7px; height:7px; box-sizing:border-box; border-radius:999px;
+  background:rgb(var(--c-surface-2)); border:1.5px solid rgb(var(--c-line-strong));
+  transition:background-color var(--am-d1) var(--am-ease),
+             border-color var(--am-d1) var(--am-ease),
+             box-shadow var(--am-d1) var(--am-ease);
+}
+.am-node.am-tool::before{top:13px}
+.am-node.is-live::before{
+  background:rgb(var(--c-accent)); border-color:rgb(var(--c-accent));
+  box-shadow:0 0 0 3px rgb(var(--c-accent) / .14);
+}
+.am-node.is-past::before{background:rgb(var(--c-line-strong));border-color:rgb(var(--c-line-strong))}
+.am-node.is-past:not(.am-card){opacity:.72}
+.am-node.is-past:hover,.am-node.is-past:focus-within{opacity:1}
+.am-node.is-err::before{background:rgb(var(--c-danger));border-color:rgb(var(--c-danger))}
+.am-node.is-ok::before{background:rgb(var(--c-success) / .7);border-color:rgb(var(--c-success) / .7)}
+
+/* ---------- 3. 工具调用卡 ---------- */
+/* 入场：位移 5px，不抢夺注意力 */
+.am-enter{animation:am-in var(--am-d2) var(--am-ease) both}
+@keyframes am-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+/* 类型图标（左侧，恒定 14px 线性） */
+.am-tool-icon{width:14px;height:14px;flex:none;display:block;color:rgb(var(--c-ink-3));
+  transition:color var(--am-d1) var(--am-ease)}
+.am-card[data-am-state="running"] .am-tool-icon{color:rgb(var(--c-accent-text))}
+.am-card[data-am-state="error"]  .am-tool-icon{color:rgb(var(--c-danger))}
+
+/* 动词 + 宾语：一行读懂"它在对谁做什么" */
+.am-tv{font-weight:500;color:rgb(var(--c-ink-1));flex:none;white-space:nowrap}
+.am-to{
+  font-family:var(--am-mono); font-size:11px; color:rgb(var(--c-ink-4));
+  min-width:0; max-width:42%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  transition:color var(--am-d1) var(--am-ease);
+}
+.am-to.am-out{color:rgb(var(--c-success) / .85)}
+.am-to.am-err{color:rgb(var(--c-danger))}
+.am-arrow{color:rgb(var(--c-ink-4));margin:0 3px;font-size:11px}
+
+/* 运行中：极淡强调底 + 左侧 2px 游标 */
+.am-card[data-am-state="running"] > summary{background:rgb(var(--c-accent-soft) / .18)}
+.am-card[data-am-state="running"]{border-color:rgb(var(--c-accent) / .35)}
+.am-card{position:relative;
+  transition:border-color var(--am-d2) var(--am-ease),
+             background-color var(--am-d2) var(--am-ease),
+             opacity var(--am-d1) var(--am-ease)}
+/* 已完成的步骤退到"档案"层，hover / 聚焦时回到前台 */
+.am-card.is-past:not(:hover):not(:focus-within){opacity:.9}
+
+/* 状态图标：接管 index.html 的 svg.tool-icon（保留 ml-auto，布局不乱） */
+svg.tool-icon.am-spin{
+  color:rgb(var(--c-accent-text)) !important;
+  animation:am-ring 1.05s linear infinite;
+}
+svg.tool-icon.am-spin circle{
+  stroke-dasharray:60 200; stroke-dashoffset:0;
+  animation:am-dash 1.4s ease-in-out infinite;
+}
+svg.tool-icon.am-done{color:rgb(var(--c-success)) !important}
+svg.tool-icon.am-fail{color:rgb(var(--c-danger)) !important}
+svg.tool-icon.am-cancel{color:rgb(var(--c-ink-4)) !important}
+.am-pop{animation:am-pop var(--am-d3) var(--am-pop) both}
+@keyframes am-pop{from{opacity:0;transform:scale(.55)}to{opacity:1;transform:scale(1)}}
+@keyframes am-ring{to{transform:rotate(1turn)}}
+@keyframes am-dash{
+  0%  {stroke-dasharray:1 200;  stroke-dashoffset:0}
+  50% {stroke-dasharray:64 200; stroke-dashoffset:-22}
+  100%{stroke-dasharray:64 200; stroke-dashoffset:-86}
+}
+
+/* 耗时：默认安静，>2.5s 才出现，>10s 转琥珀 */
+.am-elapsed{
+  font-size:11px; font-variant-numeric:tabular-nums; color:rgb(var(--c-ink-4));
+  flex:none; opacity:0; transition:opacity var(--am-d1) var(--am-ease),
+                                  color var(--am-d1) var(--am-ease);
+}
+.am-card.am-long .am-elapsed{opacity:1}
+.am-card[data-am-state="done"] .am-elapsed,
+.am-card[data-am-state="error"] .am-elapsed,
+.am-card[data-am-state="cancel"] .am-elapsed{opacity:1;color:rgb(var(--c-ink-4))}
+.am-elapsed.am-slow{color:rgb(var(--c-warn))}
+
+/* 底部不确定进度条：只在长任务出现（避免短任务闪一下） */
+.am-progress{
+  position:absolute; left:0; right:0; bottom:0; height:2px;
+  overflow:hidden; opacity:0; pointer-events:none;
+  transition:opacity var(--am-d1) var(--am-ease);
+}
+.am-card.am-long[data-am-state="running"] .am-progress{opacity:1}
+.am-progress i{
+  position:absolute; top:0; bottom:0; left:0; width:38%;
+  background:linear-gradient(90deg,transparent,rgb(var(--c-accent)),transparent);
+  animation:am-sweep 1.5s var(--am-ease) infinite;
+}
+.am-card.am-slow .am-progress i{background:linear-gradient(90deg,transparent,rgb(var(--c-warn)),transparent)}
+@keyframes am-sweep{0%{transform:translateX(-110%)}100%{transform:translateX(400%)}}
+
+.am-card > summary{position:relative}
+.am-card > summary::-webkit-details-marker{display:none}
+.am-card > summary{list-style:none}
+/* 完成态：整行降饱和，让位给后续步骤 */
+.am-card[data-am-state="done"]{border-color:rgb(var(--c-line-soft))}
+.am-card[data-am-state="done"] > summary .am-tv{font-weight:400;color:rgb(var(--c-ink-2))}
+.am-card[data-am-state="error"] > summary{background:rgb(var(--c-danger-soft) / .45)}
+.am-card[data-am-state="cancel"] > summary{opacity:.62}
+
+/* 完成瞬间：一次边框扫光，不做背景 flash（深色下 flash 太刺眼） */
+.am-sweep{position:relative}
+.am-sweep::after{
+  content:''; position:absolute; inset:-1px; border-radius:inherit; pointer-events:none;
+  background:linear-gradient(90deg,transparent,rgb(var(--c-success) / .30),transparent);
+  animation:am-sweep-once 620ms var(--am-ease) 1 both;
+}
+@keyframes am-sweep-once{0%{opacity:0;transform:translateX(-60%)}35%{opacity:1}100%{opacity:0;transform:translateX(60%)}}
+
+/* ---------- 4. 实时输出流 ---------- */
+.tool-stream{position:relative}
+.tool-stream > span{display:none}          /* 隐藏原始 "output" 标签，改用 bar */
+.am-stream-bar{
+  display:flex; align-items:center; gap:6px; font-size:11px;
+  color:rgb(var(--c-ink-4)); margin-bottom:2px;
+}
+.am-stream-bar .am-sb-name{color:rgb(var(--c-ink-3))}
+.am-stream-bar .am-lines{font-variant-numeric:tabular-nums;font-family:var(--am-mono)}
+.am-more{
+  font-size:11px; color:rgb(var(--c-accent-text)); cursor:pointer;
+  user-select:none; padding:0 2px; border-radius:3px;
+  transition:background-color var(--am-d1) var(--am-ease);
+}
+.am-more:hover{background:rgb(var(--c-accent-soft) / .5)}
+/* 折叠态：固定高度 + 底部渐隐，暗示"还在往下长" */
+.tool-stream.am-clipped > pre{
+  max-height:132px; overflow:hidden;
+  -webkit-mask-image:linear-gradient(180deg,#000 62%,transparent 100%);
+          mask-image:linear-gradient(180deg,#000 62%,transparent 100%);
+}
+.tool-stream.am-open > pre{max-height:340px; overflow:auto}
+
+/* ---------- 5. 思考行 ---------- */
+.agent-process .thinking-row.am-think{padding-left:2px}
+.am-think-label{color:rgb(var(--c-ink-2))}
+.am-think-meta{color:rgb(var(--c-ink-4));font-size:11px;font-variant-numeric:tabular-nums}
+.am-dots{display:inline-flex;gap:3px;align-items:center;margin-left:2px}
+.am-dots i{
+  width:3px;height:3px;border-radius:999px;background:rgb(var(--c-accent-text));
+  animation:am-dot 1.2s ease-in-out infinite;
+}
+.am-dots i:nth-child(2){animation-delay:.16s}
+.am-dots i:nth-child(3){animation-delay:.32s}
+@keyframes am-dot{0%,100%{opacity:.25;transform:translateY(0)}45%{opacity:1;transform:translateY(-2px)}}
+.thinking-row.am-think-fin .am-think-label{color:rgb(var(--c-ink-3))}
+.am-leaving{opacity:0;transform:translateY(-2px);
+  transition:opacity var(--am-d2) var(--am-ease),transform var(--am-d2) var(--am-ease)}
+
+/* ---------- 6. 流式文本光标 ---------- */
+.am-caret{
+  display:inline-block; width:2px; height:1.05em; margin-left:1px;
+  vertical-align:-.18em; border-radius:1px;
+  background:rgb(var(--c-accent));
+  animation:am-caret 1.05s steps(1,end) infinite;
+}
+@keyframes am-caret{0%,45%{opacity:1}50%,95%{opacity:0}100%{opacity:1}}
+
+/* ---------- 7. 运行区收束：结构化完成条 ----------
+   结构：状态图标 · 主信息（已完成 N 步） · 次要信息（工具/耗时/失败） · 展开入口
+   原则：一次运行结束后只留“一行可读的结论”，过程折叠在后面，答案仍然是主角 */
+.activity-wrap{margin:0 0 8px}
+.activity-wrap > summary.am-fin-summary{
+  display:flex; align-items:center; gap:7px;
+  width:100%; padding:5px 8px; border-radius:6px;
+  font-size:11px; font-weight:400; line-height:16px; color:rgb(var(--c-ink-3));
+  list-style:none; cursor:pointer; user-select:none;
+  position:relative; overflow:hidden;
+  border:1px solid transparent; background:transparent;
+  animation:am-fin-in 240ms cubic-bezier(.22,1,.36,1);
+  transition:background-color 140ms cubic-bezier(.22,1,.36,1),
+             color 140ms cubic-bezier(.22,1,.36,1),
+             border-color 140ms cubic-bezier(.22,1,.36,1);
+}
+.activity-wrap > summary.am-fin-summary::-webkit-details-marker{display:none}
+.activity-wrap > summary.am-fin-summary:hover{
+  background:rgb(var(--c-surface-3));
+  border-color:rgb(var(--c-line-soft));
+  color:rgb(var(--c-ink-2));
+}
+.activity-wrap > summary.am-fin-summary:focus-visible{
+  outline:none; border-color:rgb(var(--c-accent));
+}
+
+/* 状态图标：成功=语义绿，含失败=警示 */
+.am-fin-ico{flex:none; width:12px; height:12px; color:rgb(var(--c-success));
+            transition:color 140ms cubic-bezier(.22,1,.36,1)}
+.am-fin-ico svg{width:12px; height:12px; display:block}
+.am-fin-summary.has-err .am-fin-ico{color:rgb(var(--c-danger))}
+
+/* 信息分层：主信息 500 字重 + ink-2，次要信息 ink-4，失败项语义红 */
+.am-fin-text{font-weight:500; color:rgb(var(--c-ink-2))}
+.am-fin-meta{color:rgb(var(--c-ink-4)); overflow:hidden;
+             text-overflow:ellipsis; white-space:nowrap}
+.am-fin-err{color:rgb(var(--c-danger))}
+
+/* 右侧展开入口：文案随状态切换 + chevron 旋转 */
+.am-fin-act{
+  margin-left:auto; flex:none; display:flex; align-items:center; gap:3px;
+  color:rgb(var(--c-ink-4));
+  transition:color 140ms cubic-bezier(.22,1,.36,1);
+}
+.activity-wrap:not([open]) .am-fin-close,
+.activity-wrap[open] .am-fin-open{display:none}
+.activity-wrap > summary.am-fin-summary:hover .am-fin-act{color:rgb(var(--c-accent-text))}
+.am-fin-act::after{
+  content:''; width:10px; height:10px; flex:none; background:currentColor;
+  -webkit-mask:center/contain no-repeat
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>');
+          mask:center/contain no-repeat
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>');
+  transition:transform 180ms cubic-bezier(.22,1,.36,1);
+}
+.activity-wrap[open] .am-fin-act::after{transform:rotate(180deg)}
+
+/* 入场：淡入 + 一次性扫光（替代背景闪烁，深色下不刺眼） */
+@keyframes am-fin-in{
+  from{opacity:0; transform:translateY(-3px)}
+  to{opacity:1; transform:none}
+}
+.activity-wrap > summary.am-fin-summary::before{
+  content:''; position:absolute; inset:0; border-radius:6px; pointer-events:none;
+  background:linear-gradient(90deg,transparent,rgb(var(--c-accent)),transparent);
+  opacity:0;
+  animation:am-fin-sweep 620ms ease-out 1 both;
+}
+@keyframes am-fin-sweep{
+  0%{opacity:0; transform:translateX(-100%)}
+  30%{opacity:.10}
+  100%{opacity:0; transform:translateX(100%)}
+}
+
+.activity-wrap[open] > summary{margin-bottom:6px}
+/* 展开后过程区回到前台（收起时才淡化） */
+.activity-wrap[open] > .agent-process,
+.activity-wrap[open] > div{opacity:1 !important}
+
+/* ---------- 8. 停止 / 回到最新 ---------- */
+/* 2026-09-20 修正：composer 改版后 #stop-btn 是 danger 实心底，
+   这里旧规则把图标也染成 danger —— 红图标叠红底，按钮成了一块纯红。
+   图标必须用 on-solid（实心底上的白色），保留呼吸动画提示"正在运行"。 */
+#stop-btn.am-live{
+  color:rgb(var(--c-on-solid,255 255 255)) !important;
+  animation:am-live 1.6s ease-in-out infinite;
+}
+@keyframes am-live{0%,100%{opacity:.72}50%{opacity:1}}
+.am-dot-badge{
+  position:absolute; top:6px; right:7px; width:6px; height:6px;
+  border-radius:999px; background:rgb(var(--c-accent));
+  animation:am-breathe 1.6s ease-in-out infinite;
+}
+@keyframes am-breathe{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+/* 回到最新：跟随 900px 阅读栏右缘（原来 fixed right-8 与居中内容错位） */
+#scroll-btn{position:absolute; bottom:20px; right:max(24px, calc((100% - 900px) / 2 + 24px))}
+
+/* ---------- 9. 无障碍：尊重系统减弱动效 ---------- */
+@media (prefers-reduced-motion: reduce){
+  svg.tool-icon.am-spin, svg.tool-icon.am-spin circle,
+  .am-progress i, .am-caret, .am-dots i, .am-dot-badge,
+  .am-rh-dot.is-now, #stop-btn.am-live{animation:none !important}
+  .am-enter,.am-pop,.am-sweep::after{animation:none !important}
+  .am-rh-dot.is-now{opacity:1}
+  .am-elapsed{opacity:1}
+}
+
+/* ---------- 10. 顶部运行条（含结束时的"冲到 100%"） ----------
+   2026-09-20 停用：用户反馈生成期间顶部的循环扫光条一直刷过、干扰阅读。
+   运行状态已有足够指示（停止按钮呼吸动画 + 卡片运行态），整条隐藏；
+   JS 侧 setActive/am-fill 逻辑保留不动，之后想恢复删掉 display:none 即可。 */
+.am-topbar{
+  display:none !important;
+}
+.am-topbar--legacy{
+  position:fixed; top:0; left:0; right:0; height:2px; z-index:9999;
+  opacity:0; pointer-events:none; overflow:hidden;
+  transition:opacity 200ms ease;
+}
+.am-topbar--legacy.am-on{opacity:1}
+.am-topbar--legacy i{
+  display:block; height:100%; width:34%;
+  background:linear-gradient(90deg, transparent, rgb(var(--c-accent)), transparent);
+  animation:am-top-run 1.3s ease-in-out infinite;
+}
+@keyframes am-top-run{
+  0%  {transform:translateX(-110%)}
+  100%{transform:translateX(320%)}
+}
+/* 结束信号：由流动改为"充满到头"，并转成成功色后淡出 */
+.am-topbar.am-fill i{
+  width:100% !important; transform:none; animation:none !important;
+  background:rgb(var(--c-success)); opacity:.9;
+  transition:width 240ms cubic-bezier(.22,1,.36,1), background-color 200ms linear;
+}
+
+/* ---------- 11. 运行态 ↔ 结束态：肉眼可辨的切换 ----------
+   running：卡片左侧主色时间线 + 极淡主色底纹
+   done：   收束编排 —— 顶条冲到 100% 淡出 → 时间线转绿收缩 → 底纹淡出 →
+            完成条从 0 高度展开，答案成为唯一主角 */
+[data-run] .am-body{position:relative}
+
+/* 运行时间线（左侧 2px） */
+.am-body::before{
+  content:''; position:absolute; left:-1px; top:12px; bottom:12px; width:2px;
+  border-radius:2px; background:rgb(var(--c-accent));
+  opacity:0; transform:scaleY(.2); transform-origin:50% 0;
+  transition:opacity 260ms cubic-bezier(.22,1,.36,1),
+             transform 360ms cubic-bezier(.22,1,.36,1),
+             background-color 200ms linear;
+}
+[data-run="running"] .am-body::before{opacity:1; transform:scaleY(1)}
+.am-body.is-settling::before{
+  background:rgb(var(--c-success));
+  opacity:0; transform:scaleY(0);
+}
+[data-run="error"] .am-body::before,
+[data-run="cancel"] .am-body::before{opacity:0}
+
+/* 运行底纹（一次性淡入淡出） */
+.am-body::after{
+  content:''; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  background:linear-gradient(180deg, rgb(var(--c-accent)) 0%, transparent 70%);
+  opacity:0; transition:opacity 480ms cubic-bezier(.22,1,.36,1);
+}
+[data-run="running"] .am-body::after{opacity:.05}
+
+/* 完成条：从 0 高度展开（收束的物理感） */
+.activity-wrap{margin:0 0 8px; overflow:hidden;
+               animation:am-wrap-in 300ms cubic-bezier(.22,1,.36,1)}
+.activity-wrap[open]{overflow:visible}
+@keyframes am-wrap-in{
+  from{max-height:0; opacity:0}
+  to  {max-height:76px; opacity:1}
+}
+
+@media (prefers-reduced-motion: reduce){
+  .am-topbar i{animation:none !important}
+  .activity-wrap{animation:none !important}
+}

@@ -1,0 +1,290 @@
+/* ============================================================================
+ * theme-workbuddy.css —— WorkBuddy 审美的纯 token 覆盖层  v2
+ * ============================================================================
+ * 用法：在 app.css 之后引入（12 个页面已自动插入，见 docs/shell-design.md §6.3）
+ *      <link rel="stylesheet" href="/static/css/app.css">
+ *      <link rel="stylesheet" href="/static/css/theme-workbuddy.css">
+ *
+ * 原理：app.css 里所有颜色都走 rgb(var(--c-*))，换变量 = 全站换肤，组件类名一行不改。
+ * 回滚：删掉那一行 link 即可，构建产物不受影响。
+ *
+ * ── v2 相对 v1 的修正 ────────────────────────────────────────────────────
+ *  1. 修掉三条「死规则」：v1 里写的 .rounded-tag / .rounded-card / .rounded-panel
+ *     和 .shadow-soft 在 tailwind.config.js 里定义了，但 12 个页面从未使用，
+ *     Tailwind 不会产出它们 —— 也就是说那几条覆盖从未生效。
+ *     v2 改为覆盖页面真正在用的 rounded-* / shadow-* 工具类。
+ *  2. 深色重调（重点）：v1 的深色是按同一套明度机械推导的，深色下问题不一样：
+ *       · 边框比背景只亮一点，等于没有层次 → 明度差拉大到 6~8%
+ *       · 正文用了偏灰的 #E8E6DE，长时间读长文本发虚 → 提到 #F0EEE7
+ *       · 主色 accent 与 accent-text 都偏亮，实心按钮上的紫几乎不成块 → 分离两者
+ *  3. 新增「手感层」：token 只能换颜色，hover / 按下 / 焦点 / 动效时长这四类
+ *     观感必须动具体属性，v1 完全没做，这也是「交互感觉不太行」的主因之一。
+ * ========================================================================== */
+
+/* ══════════════════════════════════════════════════════════════════════
+   §1  浅色 token —— 暖灰中性 + 紫调主色
+   取值全部对齐 WorkBuddy 设计系统的 9×7 色阶：
+     中性 c-gray：50 #F1EFE8 / 100 #D3D1C7 / 200 #B4B2A9 / 400 #888780
+                  600 #5F5E5A / 800 #444441 / 900 #2C2C2A
+     主色 c-purple：50 #EEEDFE / 100 #CECBF6 / 200 #AFA9EC
+                    400 #7F77DD / 600 #534AB7 / 800 #3C3489 / 900 #26215C
+   浅色规则：50 档填充 + 600 档描边 + 800 档标题 / 600 档正文
+   ══════════════════════════════════════════════════════════════════════ */
+:root {
+  /* 背景层次：0 页面 → 5 强交互。靠明度差分层，不靠边框堆叠 */
+  --c-surface-0: 255 255 255;   /* 页面底 */
+  --c-surface-1: 250 249 247;   /* 侧栏 / 面板 */
+  --c-surface-2: 255 255 255;   /* 卡片 / 弹层 */
+  --c-surface-3: 241 239 232;   /* 次级填充        gray-50  */
+  --c-surface-4: 236 234 227;   /* 输入框 / 徽章 */
+  --c-surface-5: 211 209 199;   /* 强交互          gray-100 */
+
+  /* 文字：14:1 / 9:1 / 5.8:1 / 3.4:1 四级对比度 */
+  --c-ink-1: 44 44 42;          /* 标题            gray-900 */
+  --c-ink-2: 95 94 90;          /* 正文            gray-600 */
+  --c-ink-3: 136 135 128;       /* 辅助            gray-400 */
+  --c-ink-4: 180 178 169;       /* 占位 / 禁用 */
+
+  /* 边线：三级，浅色下相邻层次的差 ≈ 4% */
+  --c-line-soft: 241 239 232;
+  --c-line: 232 230 222;
+  --c-line-strong: 211 209 199;
+
+  /* 主色（紫）。accent 实心填充 / accent-text 文字图标 / accent-soft 浅底 */
+  --c-accent: 83 74 183;        /* purple-600 */
+  --c-accent-text: 83 74 183;
+  --c-accent-soft: 238 237 254; /* purple-50  */
+  --c-on-solid: 255 255 255;
+
+  --c-scrim: 44 44 42;
+  --c-scrim-soft: 136 135 128;
+
+  /* 语义状态色：600 档实体 / 50 档浅底 */
+  --c-danger: 163 45 45;        --c-danger-soft: 252 235 235;
+  --c-warn: 133 79 11;          --c-warn-soft: 250 238 218;
+  --c-success: 15 110 86;       --c-success-soft: 225 245 238;
+  --c-info: 24 95 165;          --c-info-soft: 230 241 251;
+  --c-agent: 83 74 183;         --c-agent-soft: 238 237 254;
+
+  --c-shadow: 44 44 42;
+
+  /* 代码高亮（GitHub Light 风格） */
+  --hljs-bg: 247 246 243;
+  --hljs-fg: 44 44 42;
+  --hljs-keyword: 163 45 45;
+  --hljs-title: 83 74 183;
+  --hljs-attr: 24 95 165;
+  --hljs-string: 24 95 165;
+  --hljs-builtin: 133 79 11;
+  --hljs-comment: 136 135 128;
+  --hljs-name: 15 110 86;
+  --hljs-bullet: 133 79 11;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §2  深色 token（重调） —— 800 档填充 / 200 档描边 / 100 档标题 · 200 档正文
+   深色下最容易踩的三件事，这里逐条处理：
+     a) 边框不可见   → 边框与背景的明度差从 v1 的 ~4% 提到 6~8%
+     b) 正文发虚     → ink-1 从 #E8E6DE 提到 #F0EEE7（约 15.9:1）
+     c) 主色糊成一片 → accent 走 400 档(#7F77DD)、accent-text 走 200 档(#AFA9EC)、
+                      accent-soft 走 900 档偏暗紫，三者拉开
+   ══════════════════════════════════════════════════════════════════════ */
+html.dark {
+  --c-surface-0: 26 26 24;      /* 页面底（低于 gray-900） */
+  --c-surface-1: 34 34 31;      /* 侧栏 / 面板，与页面底 ΔL*≈3.9 */
+  --c-surface-2: 42 42 39;      /* 卡片 / 弹层 */
+  --c-surface-3: 52 52 47;      /* 次级填充 */
+  --c-surface-4: 63 63 57;      /* 输入框 / 徽章 */
+  --c-surface-5: 79 79 72;      /* 强交互 */
+
+  --c-ink-1: 240 238 231;       /* 标题（提亮，长文更实） */
+  --c-ink-2: 211 209 199;       /* 正文              gray-100 */
+  --c-ink-3: 180 178 169;       /* 辅助              gray-200 */
+  --c-ink-4: 152 151 144;       /* 占位 / 禁用（抬到 4.9:1，看清 placeholder） */
+
+  --c-line-soft: 44 44 40;
+  --c-line: 56 56 51;           /* 比 v1 亮 5，深色下卡片轮廓才立得住 */
+  --c-line-strong: 79 79 72;
+
+  --c-accent: 127 119 221;      /* purple-400：实心按钮、进度条 */
+  --c-accent-text: 175 169 236; /* purple-200：深色下的文字/图标更亮才够看 */
+  --c-accent-soft: 51 45 102;   /* 介于 purple-800/900，做浅底不刺眼 */
+  --c-on-solid: 255 255 255;
+
+  --c-scrim: 0 0 0;
+  --c-scrim-soft: 79 79 72;
+
+  --c-danger: 247 193 193;      --c-danger-soft:  90 34 34;
+  --c-warn: 250 199 117;        --c-warn-soft:    78 45 8;
+  --c-success: 159 225 203;     --c-success-soft: 10 66 54;
+  --c-info: 181 212 244;        --c-info-soft:    16 60 105;
+  --c-agent: 190 186 241;       --c-agent-soft:   55 47 118;
+
+  --c-shadow: 0 0 0;
+
+  --hljs-bg: 32 32 29;
+  --hljs-fg: 232 230 222;
+  --hljs-keyword: 247 193 193;
+  --hljs-title: 190 186 241;
+  --hljs-attr: 181 212 244;
+  --hljs-string: 181 212 244;
+  --hljs-builtin: 250 199 117;
+  --hljs-comment: 136 135 128;
+  --hljs-name: 159 225 203;
+  --hljs-bullet: 250 199 117;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   §3  形态层 —— 发丝边 / 去投影 / 字重 / 字号 / 圆角
+   只覆盖 Tailwind 工具类本身；同优先级，靠后加载生效。
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 发丝边 0.5px。border-2 不覆盖 —— 规范里只有「强调态」才允许 2px */
+.border, .border-t, .border-b, .border-l, .border-r, .border-x, .border-y,
+.border-line, .border-line-soft, .border-line-strong { border-width: .5px; }
+
+/* 去投影：层次靠明度差 + 0.5px 边线。
+   modal / pop 保留一点，否则弹层浮在页面上完全没有边界感（这是功能性投影，
+   不是装饰），但幅度压到原来的 1/3，且用纯黑而非主题色避免脏 */
+.shadow, .shadow-card, .shadow-pop { box-shadow: none; }
+.shadow-modal { box-shadow: 0 6px 20px rgb(0 0 0 / .16); }
+html.dark .shadow-modal { box-shadow: 0 8px 28px rgb(0 0 0 / .42); }
+
+/* 字重收敛到 400 / 500 两级 */
+.font-bold, .font-semibold { font-weight: 500; }
+.font-medium { font-weight: 500; }
+
+/* 最小字号 11px（10px 在 Windows 雅黑下会糊） */
+.text-tiny { font-size: 11px; line-height: 16px; }
+.text-2xs  { font-size: 11px; line-height: 16px; }
+
+/* 圆角：覆盖页面真正在用的档位（v1 写的 rounded-tag/card/panel 从未被产出）。
+   幅度保守地抬一档，避免 12 个页面里的密集控件显得过圆 */
+.rounded    { border-radius: 6px; }
+.rounded-md { border-radius: 8px; }
+.rounded-lg { border-radius: 11px; }
+.rounded-xl { border-radius: 12px; }
+.rounded-2xl{ border-radius: 16px; }
+
+hr { border-top-width: .5px; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   §4  手感层 —— token 换不到的那部分观感
+   这是「交互感觉不太行」里最容易被忽略的一半：颜色对了，但按下去没反馈、
+   悬停只换颜色不换层级、动效时长不统一，整体就会显得"廉价"。
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 4.1 统一动效：160ms + swift 缓动（同端口给出的 cubic-bezier(.22,1,.36,1)）
+   只改 duration / timing，不碰 transition-property，避免影响可见性动画 */
+.transition, .transition-all, .transition-colors,
+.transition-opacity, .transition-transform, .duration-200 {
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(.22, 1, .36, 1);
+}
+
+/* 4.2 悬停 = 升一级，而不是换个颜色。
+   Tailwind 的 hover:bg-surface-* 已经做了背景升级，这里补齐它没做的部分：
+   边框同步升一档 + 去掉不必要的 GPU 层，避免整页长期挂着合成层 */
+html body :is(button, a, summary, [role="button"], [role="tab"], [role="option"])
+  :where(:not(:disabled)) { cursor: pointer; }
+.transition-all { will-change: auto; }
+
+/* 4.3 按下反馈：给所有按钮类元素一个统一的下压。
+   用 filter brightness 而不是 transform，避免破坏 sticky / overflow 布局 */
+button:active:not(:disabled),
+[role="button"]:active:not([aria-disabled="true"]),
+summary:active { transform: scale(.985); }
+.press-none:active { transform: none; }
+
+/* 4.4 焦点环：收细到 1.5px、贴到 1px，并统一圆角。
+   规范里唯一允许出现的"投影"就是焦点环，它必须比 hover 更强但不能抢戏 */
+:focus-visible {
+  outline-width: 1.5px;
+  outline-offset: 1px;
+  border-radius: 6px;
+  outline-color: rgb(var(--c-accent));
+}
+
+/* 4.5 禁用态：预置样式只有 cursor:default，这里统一到 45% 并去掉残留投影 */
+:disabled, [aria-disabled="true"] {
+  opacity: .45;
+  box-shadow: none;
+}
+
+/* 4.6 文字渲染：Windows 雅黑在浅色下偏粗，统一加抗锯齿 */
+body, input, textarea, select, button {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 4.7 数字对齐：状态栏 / 用量表 / token 计数用等宽数字，避免跳动 */
+.tabular, .tabular-nums { font-variant-numeric: tabular-nums; }
+
+/* 4.8 滚动：预留滚动条槽位，避免消息流出现/消失时的横向抖动；
+   滚动到底 / 顶时不把滚动链传给外层容器 */
+.scroll-y, .overflow-y-auto, .overflow-auto {
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+/* 4.9 选区：深色下用主色的低透明版本，别用系统默认蓝 */
+html.dark ::selection { background: rgb(var(--c-accent) / .32); }
+
+/* 4.10 骨架屏 / 流式占位：去掉渐变（规范禁用），改用纯色呼吸 */
+@keyframes wb-pulse { 0%, 100% { opacity: .45 } 50% { opacity: .8 } }
+.skeleton, [data-loading] { animation: wb-pulse 1.6s ease-in-out infinite; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   §5  逃生口
+   某些区域（如流程图、图表画布）确实需要原来的边框宽度或投影时，加上这些类即可。
+   ══════════════════════════════════════════════════════════════════════ */
+.wb-no-hairline { border-width: 1px !important; }
+.wb-keep-shadow { box-shadow: 0 1px 3px rgb(var(--c-shadow) / .08) !important; }
+.wb-fullweight  { font-weight: 600 !important; }
+.wb-nomotion    { transition: none !important; animation: none !important; }
+
+/* ============================================================
+   v3 静态层修整（2026-09-19）
+   - composer / 弹层由 token 接管（HTML 已去除 bg-white 硬编码）
+   - 消息悬浮操作按钮统一为图标按钮（去 emoji）
+   ============================================================ */
+#composer{background:rgb(var(--c-surface-2))}
+#composer:focus-within{border-color:rgb(var(--c-accent))}
+
+.msg-act{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:24px; height:24px; border-radius:5px; flex:none;
+  transition:color var(--am-d1,120ms) var(--am-ease,ease),
+             background-color var(--am-d1,120ms) var(--am-ease,ease);
+}
+.msg-act:hover{background:rgb(var(--c-surface-3))}
+
+/* ============================================================
+   v4 Windows / Chromium 观感修整（2026-09-19）
+   ============================================================ */
+
+/* §W1 滚动条：Windows 上 Chromium 默认给 15px 宽的经典亮灰滚动条，
+      深色主题下是一条刺眼的白杠，且 hover 时才给 hover 态、平时占位很难看。
+      统一成 10px 槽 + 4px 细滑块（用透明 border + background-clip 实现内缩），
+      颜色跟随 --c-line-strong token，明暗主题自动适配。 */
+html { scrollbar-width: thin; scrollbar-color: rgb(var(--c-line-strong)) transparent; }
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--c-line-strong)) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--c-line-strong));
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--c-ink-4)); background-clip: content-box; }
+::-webkit-scrollbar-thumb:active { background: rgb(var(--c-ink-3)); background-clip: content-box; }
+
+/* §W2 中文字体：Windows 上 system-ui 命中 Segoe UI，中文回退到 Microsoft YaHei。
+      "Microsoft YaHei UI" 的行距更紧、与 Latin 基线更贴合，优先于 YaHei。 */
+html, body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto,
+               "PingFang SC", "Hiragino Sans GB",
+               "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+}

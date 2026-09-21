@@ -57,34 +57,90 @@ def path_allowed(abs_path: str) -> bool:
     return False
 
 
-# 危险命令模式
-DANGEROUS_PATTERNS = [
+# ── 危险命令：两级风险（2026-09-21）────────────────────────────────
+# 维度一（风险分级）：同样"危险"的操作，后果并不同量级 ——
+#   NEVER：不可逆 / 不可审计，任何权限模式下都硬拦截，不给"审批放行"入口；
+#   RISKY：高危但用户有权决定（删自己的目录、重启、强推 git…），默认弹窗审批，
+#          用户在输入框把权限切到"全部放行"后直接执行。
+# DANGEROUS_PATTERNS 保留为两者合集，供既有调用方（verifier / automation 等）沿用。
+NEVER_PATTERNS = [
     (r"\brm\s+-rf?\s+/", "递归删除根目录"),
     (r"\brm\s+-rf?\s+~", "递归删除用户目录"),
     (r"\bdd\s+if=", "dd 磁盘操作"),
     (r"\bmkfs\b", "格式化磁盘"),
     (r">\s*/dev/sd", "写入磁盘设备"),
-    (r"\bshutdown\b", "关机命令"),
-    (r"\breboot\b", "重启命令"),
     (r"\bkill\s+-9\s+1\b", "杀死 init 进程"),
-    (r"\biptables\s+-F\b", "清空防火墙规则"),
     (r"\bchmod\s+-R\s+777\s+/", "递归 777 根目录"),
     (r"\bcurl\s+.*\|\s*sh", "管道执行远程脚本"),
     (r"\bwget\s+.*\|\s*sh", "管道执行远程脚本"),
     (r"\s*\(\s*\)\s*\{.*\};", "fork 炸弹"),
     (r"\s*\(\s*\)\s*\{", "fork 炸弹"),
     (r"\{[^}]*\}\s*&\s*\{[^}]*\}\s*&", "fork 炸弹"),
-    # 服务重启/停止 — 引导用户手动执行（2026-08-12）
-    # 后台 (scout restart &) 会残留孤儿进程导致服务起不来，需用户手动清理。
+]
+
+RISKY_PATTERNS = [
+    # 递归 / 强制删除（针对具体目录，用户可判断后果）
+    (r"\brm\s+-[a-zA-Z]*[rf][a-zA-Z]*\b", "递归或强制删除"),
+    (r"\brmdir\s+/s\b", "递归删除目录（rmdir /s）"),
+    (r"\bdel\s+/[a-zA-Z]*[fs][a-zA-Z]*\b", "强制/递归删除文件（del /f /s）"),
+    (r"\b(rd|rmdir)\s+/s\s+/q\b", "静默递归删除目录"),
+    (r"\bformat\s+[a-zA-Z]:", "格式化盘符"),
+    (r"\bdiskpart\b", "磁盘分区工具"),
+    (r"\b(shred|wipe|sdelete)\b", "安全擦除文件"),
+    # 系统与进程
+    (r"\bshutdown\b", "关机命令"),
+    (r"\breboot\b", "重启命令"),
+    (r"\biptables\s+-F\b", "清空防火墙规则"),
+    (r"\bkill\s+-9\b", "强制杀进程"),
+    (r"\btaskkill\s+/f\b", "强制结束进程"),
+    # 服务重启/停止 — 引导用户确认（2026-08-12）
+    # 后台 (scout restart &) 会残留孤儿进程导致服务起不来。
     # 只拦截重启/停止类，scout status/logs/start 等安全命令不拦截。
     (r"\bscout\b[^;|\n&]*\b(?:restart|stop)\b", "重启/停止 scout 服务"),
     (r"\bpkill[^;|\n&]*\bscout\b", "pkill scout 进程"),
     (r"\bkill\b[^;|\n&]*\bscout\b", "kill scout 进程"),
-    # 读取敏感系统文件 / 隐私数据
+    # Git 破坏性操作
+    (r"\bgit\s+push\s+.*--force\b", "强制推送（覆盖远端历史）"),
+    (r"\bgit\s+reset\s+--hard\b", "硬重置（丢弃本地改动）"),
+    (r"\bgit\s+clean\s+-[a-zA-Z]*f", "强制清理未跟踪文件"),
+    # 权限 / 归属变更
+    (r"\bchmod\s+-R\b", "递归修改权限"),
+    (r"\bchown\s+-R\b", "递归修改属主"),
+    (r"\bicacls\b", "修改文件 ACL"),
+    (r"\btakeown\b", "夺取文件所有权"),
+    # 读取敏感系统文件 / 隐私数据（用户可授权，默认提示）
     (r"\b(cat|less|more|head|tail|awk|grep|sed)\s+[^;|\n&]*(?:/etc/passwd|/etc/shadow|/etc/gshadow|/etc/hosts|/etc/hostname|/etc/resolv\.conf|/etc/ssh/sshd_config|/etc/ssh/ssh_config)\b", "读取敏感系统文件"),
     (r"\b(cat|less|more|head|tail|awk|grep|sed)\s+[^;|\n&]*(?:~|/home/[^/]+)/\.ssh/(?:id_rsa|id_ed25519|id_ecdsa|authorized_keys|known_hosts)\b", "读取 SSH 密钥或授权信息"),
     (r"\b(cat|less|more|head|tail|awk|grep|sed)\s+[^;|\n&]*(?:~|/home/[^/]+)/\.(?:bash_history|zsh_history|sh_history|mysql_history|python_history)\b", "读取用户历史命令"),
 ]
+
+DANGEROUS_PATTERNS = NEVER_PATTERNS + RISKY_PATTERNS
+
+# 命令风险分级结果
+RISK_NEVER = "never"    # 任何权限模式都拦截
+RISK_RISKY = "risky"    # 高危：默认询问，权限全开时直接执行
+RISK_NORMAL = "normal"  # 常规操作
+
+# 权限模式（维度二：用户授权范围）——由输入框开关控制，持久化到 config.json
+PERMISSION_ASK = "ask"      # 标准：仅高危操作询问（默认）
+PERMISSION_AUTO = "auto"    # 全部放行：高危也不再询问，直接执行
+PERMISSION_STRICT = "strict"  # 谨慎：所有 shell 命令与写操作都先询问
+PERMISSION_MODES = (PERMISSION_ASK, PERMISSION_AUTO, PERMISSION_STRICT)
+
+
+def classify_command_risk(command: str) -> tuple[str, str]:
+    """命令风险分级：返回 (RISK_NEVER / RISK_RISKY / RISK_NORMAL, 原因).
+
+    NEVER 优先于 RISKY —— 一条命令同时命中两类时按不可逆处理。
+    """
+    text = command or ""
+    for pat, desc in NEVER_PATTERNS:
+        if re.search(pat, text, re.IGNORECASE):
+            return RISK_NEVER, desc
+    for pat, desc in RISKY_PATTERNS:
+        if re.search(pat, text, re.IGNORECASE):
+            return RISK_RISKY, desc
+    return RISK_NORMAL, ""
 
 
 class SecurityManager:
@@ -95,11 +151,19 @@ class SecurityManager:
         allow_tools: set[str] | None = None,
         deny_tools: set[str] | None = None,
         auto_approve: bool = False,
+        permission_mode: str = PERMISSION_ASK,
     ):
         self.allow_tools = allow_tools or set()
         self.deny_tools = deny_tools or set()
         self.auto_approve = auto_approve
+        # 权限模式（输入框开关）：ask=高危询问 / auto=全部放行 / strict=逐条询问
+        self.permission_mode = permission_mode if permission_mode in PERMISSION_MODES else PERMISSION_ASK
         self._approval_callback: Any = None
+
+    def set_permission_mode(self, mode: str) -> str:
+        """切换权限模式（非法值回落 ask），返回生效值."""
+        self.permission_mode = mode if mode in PERMISSION_MODES else PERMISSION_ASK
+        return self.permission_mode
 
     def set_approval_callback(self, callback):
         """设置审批回调函数 — 当工具需要审批时调用."""

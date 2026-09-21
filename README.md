@@ -10,9 +10,9 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0.3-orange.svg)](VERSION)
+[![Version](https://img.shields.io/badge/Version-1.0.0.4-orange.svg)](VERSION)
 
-*Persistent Memory · Tool Calling · Multi-Channel · Security-First*
+*Persistent Memory · Desktop Control · Multi-Channel · Security-First*
 
 </div>
 
@@ -21,6 +21,8 @@
 ## 📖 Table of Contents
 
 - [Introduction](#introduction)
+- [Scout in 60 Seconds](#demo)
+- [It Really Has Hands — Live Desktop Control](#desktop-control)
 - [Why Scout Agent?](#why-scout-agent)
 - [UI Preview](#ui-preview)
 - [Features](#features)
@@ -39,6 +41,55 @@
 ## <a name="introduction"></a>🔍 Introduction
 
 Scout Agent is an intelligent personal assistant AI agent with persistent memory, tool calling, and multi-channel access. It grows with you by remembering your preferences, automating tasks, and connecting to the platforms you use every day.
+
+---
+
+## <a name="demo"></a>⚡ Scout in 60 Seconds (two live recordings — nothing simulated)
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <b>🖱️ desktop tool · really drives Windows apps</b><br>
+      <img src="docs/media/desktop-gui-demo.gif" width="100%" alt="Scout desktop automation demo"><br>
+      <sub>Type one instruction → Scout opens Notepad and types the to-do list for you, keystroke by keystroke. Uncut, nothing simulated.<br>▶ <a href="docs/media/desktop-gui-demo.mp4">HD MP4</a></sub>
+    </td>
+    <td align="center" width="50%">
+      <b>🖥️ Brand-new Web UI · one-minute tour</b><br>
+      <img src="docs/media/ui-tour-en.gif" width="100%" alt="Scout UI tour"><br>
+      <sub>Command palette Ctrl K → Knowledge → 20+ tools → Memory → Settings → light/dark in one click<br>▶ <a href="docs/media/ui-tour-en.mp4">HD MP4</a></sub>
+    </td>
+  </tr>
+</table>
+
+| 🧰 **20+** built-in tools | 🌐 **12+** chat channels | 🖱️ **10** battle-tested desktop skills | 🧩 **5** swappable core components |
+|:---:|:---:|:---:|:---:|
+
+---
+
+## <a name="desktop-control"></a>🖱️ It Really Has Hands — One Sentence, and Scout Drives Your Windows
+
+<div align="center">
+
+<img src="docs/media/desktop-gui-demo.gif" width="88%" alt="Scout takes over Windows Notepad — live recording">
+
+<sub><b>Uncut screen recording · 21 s · zero simulation.</b> One line typed into Scout — it thinks, opens Notepad, types the whole to-do list in Chinese, then reports back “done”.</sub><br><br>
+
+<b>▶ <a href="docs/media/desktop-gui-demo.mp4">Watch the HD MP4</a></b>
+
+</div>
+
+**What you just watched, beat by beat:**
+
+| ⏱️ | Scene | What Scout actually did |
+|:---:|---|---|
+| 0–3 s | 🗣️ *“打开记事本，帮我写一份今天的待办清单”* | A plain-language instruction typed into Scout — no script, no macro, no API |
+| 3–9 s | 🧠 ReAct reasoning | Breaks the task down, picks the `desktop` tool, decides to launch Notepad |
+| 9–18 s | 🖱️ Real GUI control | Notepad opens, focus lands in the editing area, and the Chinese to-do list is typed **line by line with real keystrokes** (IME-friendly) |
+| 18–21 s | ✅ *“已完成，记事本已打开，清单已写好”* | Selects all to show the result, then reports completion in the chat |
+
+**Why it matters:** most “agents” stop at generating text. Scout ships a built-in `desktop` tool that runs **real mouse clicks, real keystrokes and real screenshots**, plus **10 battle-tested skill packs** in `skills-library/` — send a WeChat message, look someone up on Feishu, drive a browser, fill an Excel sheet. You say it; it happens on your real desktop, on your real apps.
+
+> 🔒 Everything runs locally: the recording above was made on the author’s own Windows box, with no cloud desktop and no screen-sharing service involved.
 
 ---
 
@@ -65,107 +116,119 @@ Most AI assistants are **stateless helpers** — every conversation starts from 
 
 ## <a name="ui-preview"></a>🖼 UI Preview
 
+A freshly redesigned, modern interface (light/dark themes, 1280px-aligned chat + input, `Ctrl K` command palette, one-click EN/中文 toggle):
+
 <table>
   <tr>
-    <td align="center"><b>Main Chat</b><br><img src="docs/images/chat-main-en.png" width="420"></td>
-    <td align="center"><b>Settings — Model</b><br><img src="docs/images/settings-model-en.png" width="420"></td>
+    <td align="center"><b>Main Chat</b><br><img src="docs/images/chat-main-en.png" width="390"></td>
+    <td align="center"><b>Settings · Model</b><br><img src="docs/images/settings-model-en.png" width="390"></td>
+    <td align="center"><b>Settings · Tools</b><br><img src="docs/images/settings-tools-en.png" width="390"></td>
   </tr>
   <tr>
-    <td align="center"><b>Settings — Model</b><br><img src="docs/images/settings-model-embedding-en.png" width="420"></td>
-    <td align="center"><b>ReAct Reflection + Security Block</b><br><img src="docs/images/runtime-security-block-en.png" width="420"></td>
-  </tr>
-  <tr>
-    <td align="center"><b>Multi-Agent Mode</b><br><img src="docs/images/runtime-multi-agent-en.png" width="420"></td>
-    <td align="center"><b>Model Monitoring</b><br><img src="docs/images/monitor-usage-en.png" width="420"></td>
+    <td align="center"><b>Knowledge Base · Import</b><br><img src="docs/images/knowledge-base-en.png" width="390"></td>
+    <td align="center"><b>Plugins · 20+ Tool Registry</b><br><img src="docs/images/plugins-en.png" width="390"></td>
+    <td align="center"><b>Memory</b><br><img src="docs/images/memory-en.png" width="390"></td>
   </tr>
 </table>
 
 <details>
-<summary>📋 More screenshots（14）</summary>
+<summary>📋 All feature screenshots (16)</summary>
 
-#### 3. Settings — Agent
+#### Settings — Agent
 
 Configure reply language, run mode (ReAct single-agent loop or Multi-Agent delegation), system prompt, deep thinking and other parameters.
 
-![3. Settings — Agent](docs/images/settings-agent-en.png)
+![Settings — Agent](docs/images/settings-agent-en.png)
 
-#### 4. Settings — Tools
-
-Configure search engine sources (multi-source concurrent + auto failover), file/code/sandbox tool switches and parameters; applied instantly after saving.
-
-![4. Settings — Tools](docs/images/settings-tools-en.png)
-
-#### 5. Settings — Security
+#### Settings — Security
 
 Visual configuration of dangerous command detection (`rm -rf /`, `dd if=`, `mkfs`, `curl | sh` and 13 more patterns), auto-approve toggle, Docker sandbox isolation — keeps the Agent in a restricted environment.
 
-![5. Settings — Security](docs/images/settings-security-en.png)
+![Settings — Security](docs/images/settings-security-en.png)
 
-#### 9. System Monitoring
-
-Real-time CPU, memory, disk, network, Agent runtime status and historical curves.
-
-![9. System Monitoring](docs/images/monitor-system-en.png)
-
-#### 11. Settings — Channels
+#### Settings — Channels
 
 Feishu, WeChat, WeChat Official Account, WeCom, WeCom Group Bot, WeChat Customer Service, Personal WeChat, Telegram, DingTalk, Discord, Slack, QQ — 12+ platforms; chat with Scout from any of them.
 
-![11. Settings — Channels](docs/images/settings-channels-en.png)
+![Settings — Channels](docs/images/settings-channels-en.png)
 
-#### 12. Settings — Auth
+#### Settings — Auth
 
 Optional JWT login password protection for the Web UI and APIs.
 
-![12. Settings — Auth](docs/images/settings-auth-en.png)
+![Settings — Auth](docs/images/settings-auth-en.png)
 
-#### 13. Plugins
+#### Model · Embedding
 
-View installed plugins and Skills, unload and reload; Skills discovered online can be installed and auto-triggered in conversations.
+Configure the embedding model (remote API / built-in hash / pure-text); memory and knowledge retrieval switch instantly.
 
-![13. Plugins](docs/images/plugins-en.png)
+![Model · Embedding](docs/images/settings-model-embedding-en.png)
 
-#### 14. Plugin Builder
+#### Goals
+
+Turn long-running work into a trackable goal list with live status, followed up across sessions.
+
+![Goals](docs/images/goals-en.png)
+
+#### Plugin Builder
 
 Describe the plugin you want and the AI generates complete plugin code; you can also search existing Skills/plugins on the web first.
 
-![14. Plugin Builder](docs/images/plugin-builder-en.png)
+![Plugin Builder](docs/images/plugin-builder-en.png)
 
-#### 15. Automation
+#### Automation
 
 Event triggers, run history, unattended policy and cron tasks — let Scout react to EventBus events or run tasks on a schedule.
 
-![15. Automation](docs/images/automation-en.png)
+![Automation](docs/images/automation-en.png)
 
-#### 16. Observability
+#### Observability
 
 Aggregate recent session timelines, success rates and token consumption per trace to quickly locate anomalies.
 
-![16. Observability](docs/images/observe-en.png)
+![Observability](docs/images/observe-en.png)
 
-#### 17. Notifications
+#### Model Monitoring
 
-Configure push rules, type toggles and IM channel targets; centrally manage all notification history.
+Token consumption and model-call statistics; costs at a glance.
 
-![17. Notifications](docs/images/notify-en.png)
+![Model Monitoring](docs/images/monitor-usage-en.png)
 
-#### 18. Events
+#### System Monitoring
+
+Real-time CPU, memory, disk, network, Agent runtime status and historical curves.
+
+![System Monitoring](docs/images/monitor-system-en.png)
+
+#### Multi-Agent Mode
+
+Multiple collaborating agents split one task; the UI shows each agent's role and output live.
+
+![Multi-Agent Mode](docs/images/runtime-multi-agent-en.png)
+
+#### ReAct Reflection + Security Block
+
+The ReAct reasoning trace is visible in real time, and dangerous commands are intercepted by the security layer before they run.
+
+![ReAct Reflection + Security Block](docs/images/runtime-security-block-en.png)
+
+#### Events
 
 Browse the EventBus event stream (types, sources, payload summaries); plugins and automation both hook into this bus.
 
-![18. Events](docs/images/events-en.png)
+![Events](docs/images/events-en.png)
 
-#### 19. Watcher
+#### Watcher
 
 Watch directories for file changes (added/modified/deleted) and push events to the Agent; configurable paths and filter rules.
 
-![19. Watcher](docs/images/watcher-en.png)
+![Watcher](docs/images/watcher-en.png)
 
-#### 20. Webhooks
+#### Webhooks / Notifications
 
-Register HTTP webhooks to receive external pushes and inject events into Scout sessions or trigger automations; signature verification and routing supported.
+Register HTTP webhooks to receive external pushes and inject them into sessions or trigger automations; the notification center centrally manages push rules, type toggles and IM channel targets.
 
-![20. Webhooks](docs/images/webhooks-en.png)
+![Webhooks / Notifications](docs/images/webhooks-en.png)
 
 
 </details>
@@ -251,7 +314,7 @@ Net effect: after days, machine switches or restarts, it still remembers where y
 
 Don't want to set up Python? Use the **portable green build** — double-click and go:
 
-1. Download the **Windows portable build** from **GitHub Releases**: [v1.0.0.3](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.3) — direct link: [scout-agent-1.0.0.3-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.3/scout-agent-1.0.0.3-win-x64.zip) (check [all releases](https://github.com/core-power/Scout-Agent/releases) for newer versions).
+1. Download the **Windows portable build** from **GitHub Releases**: [v1.0.0.4](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.4) — direct link: [scout-agent-1.0.0.4-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.4/scout-agent-1.0.0.4-win-x64.zip) (check [all releases](https://github.com/core-power/Scout-Agent/releases) for newer versions).
 2. Unzip it, then copy the **whole folder** to any Windows 10/11 machine — no installation, no registry, no admin rights.
 3. Open the unzipped folder and double-click **`ScoutDesktop\ScoutAgent.exe`** — the chat window opens instantly.
 4. On first use, open **Settings** and paste your LLM API key (dashscope / DeepSeek / OpenAI / any OpenAI-compatible endpoint).

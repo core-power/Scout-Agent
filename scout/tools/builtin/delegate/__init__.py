@@ -97,6 +97,8 @@ def build_sub_agent(
         enable_memory=False,
         enable_security=agent.enable_security,
         auto_approve=agent.security.auto_approve if agent.security else False,
+        # 继承主 Agent 的权限模式（输入框开关），子代理执行标准一致
+        permission_mode=getattr(agent.security, "permission_mode", "ask") if agent.security else "ask",
         enable_hitl=agent.enable_hitl,
         hitl_tools=list(agent.hitl_tools) if agent.hitl_tools else None,
         enable_skills=False,

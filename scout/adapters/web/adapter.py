@@ -447,6 +447,7 @@ class WebAdapter(
             agent_mode=config.agent_mode,
             embedding_provider=embedding_provider,
             auto_approve=config.auto_approve,
+            permission_mode=getattr(config, "permission_mode", "ask") or "ask",
             language=config.language,
             memory_extractor=memory_extractor,
             context_assembler=context_assembler,

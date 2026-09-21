@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scout 前端交互参考 · 对标通用 AI 对话范式</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --panel2:#f2f4f7; --ink:#1c2430; --ink2:#4a5568;
+    --ink3:#8a94a6; --line:#e4e8ef; --line2:#eef1f5;
+    --accent:#2563eb; --accent-soft:#eaf1fe;
+    --ok:#16a34a; --ok-soft:#e9f8ee; --warn:#d97706; --warn-soft:#fdf3e3;
+    --danger:#dc2626; --danger-soft:#fdecec; --purple:#7c3aed; --purple-soft:#f1eafe;
+    --radius:12px; --shadow:0 1px 2px rgba(16,24,40,.04),0 6px 20px rgba(16,24,40,.06);
+    --mono:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:980px;margin:0 auto;padding:40px 24px 80px}
+  header.hero{background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;
+    border-radius:16px;padding:30px 32px;box-shadow:var(--shadow);margin-bottom:28px}
+  header.hero .kicker{font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;opacity:.8;margin:0 0 8px}
+  header.hero h1{margin:0 0 10px;font-size:26px;font-weight:700;letter-spacing:-.01em}
+  header.hero p{margin:0;opacity:.92;font-size:14.5px;max-width:70ch}
+  nav.toc{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px 20px;margin-bottom:30px;display:flex;flex-wrap:wrap;gap:8px;box-shadow:var(--shadow)}
+  nav.toc a{font-size:13px;color:var(--ink2);text-decoration:none;padding:5px 11px;border-radius:8px;
+    background:var(--panel2);border:1px solid var(--line2);transition:.15s}
+  nav.toc a:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:24px 28px;margin-bottom:22px;box-shadow:var(--shadow)}
+  h2{font-size:19px;margin:0 0 4px;display:flex;align-items:center;gap:10px;letter-spacing:-.01em}
+  h2 .no{flex:none;width:28px;height:28px;border-radius:8px;background:var(--accent-soft);color:var(--accent);
+    font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .lead{color:var(--ink3);font-size:13.5px;margin:0 0 18px}
+  h3{font-size:14.5px;margin:20px 0 8px;color:var(--ink)}
+  p{margin:8px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:14px 16px}
+  .card .t{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:6px;display:flex;align-items:center;gap:7px}
+  .card .d{font-size:13px;color:var(--ink2);margin:0}
+  ul{margin:6px 0;padding-left:20px} li{margin:5px 0;font-size:13.5px;color:var(--ink2)}
+  code{font-family:var(--mono);font-size:12px;background:#eef2f7;border:1px solid var(--line);
+    border-radius:5px;padding:1px 6px;color:#334155}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line2);vertical-align:top}
+  th{background:var(--panel2);color:var(--ink);font-weight:600;font-size:12.5px}
+  td{color:var(--ink2)}
+  .pill{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:20px;line-height:1.6}
+  .p0{background:var(--danger-soft);color:var(--danger)}
+  .p1{background:var(--warn-soft);color:var(--warn)}
+  .p2{background:var(--accent-soft);color:var(--accent)}
+  .p3{background:var(--panel2);color:var(--ink3)}
+  .badge-ok{background:var(--ok-soft);color:var(--ok)}
+  .badge-no{background:var(--danger-soft);color:var(--danger)}
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 8px 8px 0;
+    padding:12px 16px;font-size:13.5px;color:var(--ink2);margin:14px 0}
+  .note.warn{border-color:var(--warn);background:var(--warn-soft)}
+  .note.danger{border-color:var(--danger);background:var(--danger-soft)}
+  .note.ok{border-color:var(--ok);background:var(--ok-soft)}
+  .token-row{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+  .token{font-family:var(--mono);font-size:11.5px;background:#0f172a;color:#e2e8f0;border-radius:6px;padding:4px 9px}
+  footer{color:var(--ink3);font-size:12.5px;text-align:center;margin-top:30px}
+  .kv{font-size:13px}.kv b{color:var(--ink);font-weight:600}
+  a.anchor{color:inherit;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <p class="kicker">Interaction Reference · 2026-09-18</p>
+  <h1>Scout 前端交互参考</h1>
+  <p>对标通用 AI 对话桌面应用（WorkBuddy 这类产品）的交互范式，拆成可落地的规则清单，用于指导 Scout
+  <code>scout/web/static/index.html</code> 的对话/过程区/输入区改造。本文只给规范，不改代码；
+  末尾附「现状对照 + 优先级清单」，并标注改造中顺手发现的两处选择器失效。</p>
+</header>
+
+<nav class="toc">
+  <a href="#s1">1 消息流</a>
+  <a href="#s2">2 思考与过程区</a>
+  <a href="#s3">3 工具调用卡片</a>
+  <a href="#s4">4 输入区</a>
+  <a href="#s5">5 滚动与定位</a>
+  <a href="#s6">6 状态与反馈</a>
+  <a href="#s7">7 动效节奏</a>
+  <a href="#s8">8 主题与无障碍</a>
+  <a href="#s9">9 现状对照 + 优先级清单</a>
+</nav>
+
+<!-- 1 -->
+<section id="s1">
+  <h2><span class="no">1</span>消息流（核心）</h2>
+  <p class="lead">用户感知最强的部分。目标是：流式自然、气泡边界清晰、每条消息可操作、长对话可回看。</p>
+
+  <div class="grid2">
+    <div class="card"><div class="t">流式输出</div><p class="d">逐 token 渲染，新内容自动贴底；
+      <b>用户一旦向上滚动就停止自动贴底</b>，出现「↓ 回到底部」悬浮按钮。光标用一个会呼吸的 <code>▍</code> 表示"仍在生成"，结束时消失。</p></div>
+    <div class="card"><div class="t">气泡边界</div><p class="d">同一回合的所有过程 + 正文收进<b>同一个气泡</b>；
+      回合结束才 finalize 并开启新气泡。避免一次回答被切成 N 段、头像反复出现（Scout 已用 <code>AgentBubble</code> 做到）。</p></div>
+    <div class="card"><div class="t">消息操作条</div><p class="d">hover 时浮出：复制 / 重新生成 /（可选）反馈。
+      操作条不占常态空间，避免干扰阅读。复制成功给轻提示（toast 或按钮瞬变 ✓）。</p></div>
+    <div class="card"><div class="t">元信息行</div><p class="d">头像 + 角色名 + 时间 + 状态徽章（执行中/完成/错误）+ 步骤计数，
+      一行排开。状态徽章用<b>语义色</b>：执行中=琥珀、完成=绿、错误=红、压缩=蓝。</p></div>
+  </div>
+
+  <div class="note">关键原则：<b>过程区与正文区分离</b>。过程（思考/工具）在气泡顶部、可折叠、完成后整体弱化（降透明度 + 折叠成一行摘要）；正文始终清晰突出。这正是上一轮已做的「Codex 式收尾」，保持即可。</div>
+</section>
+
+<!-- 2 -->
+<section id="s2">
+  <h2><span class="no">2</span>思考与过程区</h2>
+  <p class="lead">承接上一轮"全面收敛"的改造。规范如下，改造时别再退回三套标签。</p>
+
+  <table>
+    <thead><tr><th>层</th><th>触发条件</th><th>呈现</th><th>默认态</th></tr></thead>
+    <tbody>
+      <tr><td>短思考 / 工具前叙述</td><td>&lt; 500 字</td><td>累积进<b>同一行</b>「思考记录 ×N」</td><td>折叠</td></tr>
+      <tr><td>深度思考段</td><td>≥ 500 字</td><td>独立「深度思考 · 第 N 段 · X.Xk 字」</td><td>折叠，展开限高 280px 滚动</td></tr>
+      <tr><td>收尾摘要</td><td>回合完成</td><td>过程区整体折叠成「已完成 N 步 · N 次工具调用 · Xs」</td><td>折叠</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>所有思考/过程块<b>默认折叠</b>，箭头贴右、低对比，hover 才明显；点开用 150ms 缓动展开。</li>
+    <li>计数（×N、段数、字数）要<b>始终显示</b>，空内容绝不建行（上一轮已修）。</li>
+    <li>长段展开后<b>必须限高 + 内部滚动</b>，避免英文推理原文铺满一屏。</li>
+    <li>流式思考中用一个轻 spinner + "正在思考…"占位，定稿即被折叠行替换。</li>
+  </ul>
+  <div class="note ok">这部分上一轮已落地（<code>_mergeThinkingFrag</code> / <code>_makeDeepThinking</code> + app.css 限高）。本文仅作规范固化，改造其它部分时不要破坏它。</div>
+</section>
+
+<!-- 3 -->
+<section id="s3">
+  <h2><span class="no">3</span>工具调用卡片</h2>
+  <p class="lead">工具执行是 AI 应用的高频交互，卡片要做到"可扫读、可展开、状态清晰"。</p>
+  <ul>
+    <li>行结构：<b>图标 + 工具名 + 调用计数 + 状态</b>（执行中=spinner 贴右，完成=✓ 贴右），箭头再贴右。</li>
+    <li><b>同名工具合并</b>成一张卡（显示 ×N），用 <code>call_id</code> 精确归属输出，防止并行串卡（Scout 已做）。</li>
+    <li>默认只显示一行摘要；点开看<b>入参（折叠 JSON）+ 输出</b>，长输出限高滚动。</li>
+    <li>执行中的行：工具名用强调色，spinner 用 <code>margin-left:auto</code> 贴右——<b>不要</b>再给箭头也设 auto（上一轮居中 bug 的根因）。</li>
+  </ul>
+</section>
+
+<!-- 4 -->
+<section id="s4">
+  <h2><span class="no">4</span>输入区（Composer）</h2>
+  <p class="lead">输入框是"停留时间最长"的组件，细节决定顺滑感。</p>
+  <div class="grid2">
+    <div class="card"><div class="t">发送/停止</div><p class="d">输入时=发送；生成中自动切换成<b>停止</b>（方块图标）。
+      一个位置一个主操作，别并排放两个。</p></div>
+    <div class="card"><div class="t">快捷键</div><p class="d"><code>Enter</code> 发送、<code>Shift+Enter</code> 换行；
+      生成中 <code>Esc</code> 停止。按钮 title 里要写明。</p></div>
+    <div class="card"><div class="t">辅助工具行</div><p class="d">附件 / 语音 / 模式选择（快速·思考）/ 模型选择，
+      统一用小图标按钮 + hover 提示；模型选择给跨厂商菜单。</p></div>
+    <div class="card"><div class="t">自动增高</div><p class="d">textarea 随内容增高（设 max-height），
+      不要中途出现内部滚动条；附件以缩略 chips 显示、可删除。</p></div>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="s5">
+  <h2><span class="no">5</span>滚动与定位</h2>
+  <ul>
+    <li>判断"贴底"阈值用 <b>距离底部 &lt; 100px</b>（Scout 已是 100）；满足才自动滚，否则浮出回底按钮。</li>
+    <li>历史会话加载时<b>直接定位到底部</b>（用户最想看最新），而不是顶部。</li>
+    <li>切换会话 / 回到"正在回复的会话"时，重新绑定到最后一个 agent 气泡并贴底（Scout 的 <code>rebindLast</code> 已做）。</li>
+    <li>长消息内的代码块、深度思考段各自内部滚动，不带动外层消息流。</li>
+  </ul>
+</section>
+
+<!-- 6 -->
+<section id="s6">
+  <h2><span class="no">6</span>状态与反馈</h2>
+  <div class="grid2">
+    <div class="card"><div class="t">确认对话框</div><p class="d">危险/不可逆操作用<b>居中模态</b>（遮罩 + 取消/确认），
+      别用浏览器原生 <code>confirm()</code>。确认按钮用危险色。</p></div>
+    <div class="card"><div class="t">轻提示 Toast</div><p class="d">复制成功、保存成功、非致命错误用右上角 toast，
+      自动消失（3s），带语义色图标。不打断输入。</p></div>
+    <div class="card"><div class="t">错误呈现</div><p class="d">请求失败在气泡内显示<b>可重试</b>的错误行
+      （重试按钮），而不是只弹一个全局 alert。</p></div>
+    <div class="card"><div class="t">加载态</div><p class="d">首帧/重连用骨架或呼吸占位，避免空白闪烁；
+      生成中状态徽章常驻元信息行。</p></div>
+  </div>
+  <div class="note warn">Scout 现状：渠道停止等仍用原生 <code>confirm()</code>/<code>alert()</code>（如 <code>index.html:1341/1350</code>）。
+  已有 <code>showConfirmDialog()</code>（模态）但对话外的管理操作还在用原生弹窗——风格不统一，建议统一到模态。</div>
+</section>
+
+<!-- 7 -->
+<section id="s7">
+  <h2><span class="no">7</span>动效节奏</h2>
+  <p class="lead">统一的时长与缓动 token，避免每个交互各设各的速度。建议：</p>
+  <div class="token-row">
+    <span class="token">快交互 120–150ms</span>
+    <span class="token">展开/折叠 180–220ms</span>
+    <span class="token">模态进出 200–260ms</span>
+    <span class="token">ease-out（进入）</span>
+    <span class="token">ease-in（离开）</span>
+  </div>
+  <ul>
+    <li>只动 <code>transform</code> / <code>opacity</code>，别动 width/height/top（掉帧 + 抖动）。</li>
+    <li>流式打字用 CSS 呼吸光标，不用 JS 逐字 setTimeout（省 CPU）。</li>
+    <li>尊重 <code>prefers-reduced-motion</code>：开启时把动效时长降到 0。</li>
+  </ul>
+</section>
+
+<!-- 8 -->
+<section id="s8">
+  <h2><span class="no">8</span>主题与无障碍</h2>
+  <ul>
+    <li>全站走 <b>CSS 变量 token</b>（<code>--c-surface-* / --c-ink-* / --c-line / --c-accent</code>），
+      深/浅色各一套；禁止在 HTML 里写死 hex（上一轮已收敛，保持）。</li>
+    <li>正文对比度 ≥ 4.5:1，次要文字 ≥ 3:1；语义色不只靠颜色，配图标/文字。</li>
+    <li>可点元素有 <code>:focus-visible</code> 焦点环；折叠/卡片可键盘展开。</li>
+    <li>所有按钮/图标按钮有 <code>title</code> 或 <code>aria-label</code>。</li>
+  </ul>
+</section>
+
+<!-- 9 -->
+<section id="s9">
+  <h2><span class="no">9</span>现状对照 + 改造优先级清单</h2>
+  <p class="lead">对 <code>index.html</code> 实扫后的结论。"已有"指上一轮及更早已完成；"缺口"指对照范式还差的部分。</p>
+
+  <div class="note ok">
+    <b>✅ P0 已修复（2026-09-18）</b><br>
+    UI token 重构删掉了深色硬编码类 <code>.bg-[#161616]</code>，但 <code>addSuggestions()</code> 与
+    <code>addFileAttachment()</code> 仍在用它定位气泡容器，导致建议按钮 / 文件附件卡片不渲染。
+    两处均已改为 <code>bubble.querySelector('.agent-content')?.parentElement</code>（即 <code>_ensure()</code> 里的气泡卡片本体），
+    <code>node --check</code> 与 HTTP 冒烟验证通过。
+  </div>
+
+  <table>
+    <thead><tr><th style="width:64px">优先级</th><th>改造项</th><th>Scout 现状</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill p0">P0</span></td>
+        <td>修复 <code>.bg-[#161616]</code> 失效选择器（建议 + 文件附件气泡）</td>
+        <td><span class="pill badge-ok">已修</span> 改为 <code>.agent-content</code> 父容器定位（2026-09-18）</td></tr>
+      <tr><td><span class="pill p0">P0</span></td>
+        <td>过程区折叠分层（思考记录 ×N / 深度思考段 / 收尾摘要）</td>
+        <td><span class="pill badge-ok">已有</span> 上一轮已完成，保持</td></tr>
+      <tr><td><span class="pill p1">P1</span></td>
+        <td>停止按钮常驻生成中、Esc 停止、生成中状态徽章</td>
+        <td><span class="pill badge-ok">已修</span> 已加全局 Esc 停止（图片预览打开时让位），停止按钮 title 含 Esc（2026-09-18）</td></tr>
+      <tr><td><span class="pill p1">P1</span></td>
+        <td>原生 confirm/alert 统一到模态 + toast</td>
+        <td><span class="pill badge-ok">已修</span> 新增 Promise 版 <code>confirmDialog()</code>，全站 12 处原生 confirm + 渠道簇 alert 已统一（2026-09-18）</td></tr>
+      <tr><td><span class="pill p1">P1</span></td>
+        <td>输入框自动增高、附件 chips、textarea 快捷键提示</td>
+        <td><span class="pill badge-ok">已有</span> 自动增高 + 附件 chips（<code>attachments-preview</code>+<code>handleFiles</code>）+ Enter 提示均已存在（2026-09-18 核对确认）</td></tr>
+      <tr><td><span class="pill p2">P2</span></td>
+        <td>消息 hover 操作条（复制/重新生成/反馈）</td>
+        <td><span class="pill p2">部分</span> 有复制/重生成；缺反馈入口</td></tr>
+      <tr><td><span class="pill p2">P2</span></td>
+        <td>动效 token 化（时长/缓动统一）+ prefers-reduced-motion</td>
+        <td><span class="pill p1">部分</span> prefers-reduced-motion 降级已加（app.css）；动效时长 token 化仍待做</td></tr>
+      <tr><td><span class="pill p2">P2</span></td>
+        <td>错误可重试（气泡内重试按钮）替代全局 alert</td>
+        <td><span class="pill p1">部分</span> 气泡已有「重新生成 🔄」按钮（regenerateResponse）可作重试入口；失败 toast 已统一，无原生 alert</td></tr>
+      <tr><td><span class="pill p3">P3</span></td>
+        <td>focus-visible 焦点环、aria-label 全量补齐</td>
+        <td><span class="pill p1">部分</span> focus-visible 已加（app.css）；核心纯图标按钮（侧边栏/回到底部/发送/停止/附件/面板·设置·对话框关闭）已补 <code>aria-label</code>，JS 动态按钮（复制/重生成）已有 <code>title</code> 可回退（2026-09-18）</td></tr>
+      <tr><td><span class="pill p3">P3</span></td>
+        <td>emoji 图标逐步替换为 SVG（含 JS 映射键重构）</td>
+        <td><span class="pill p3">缺</span> 约 339 处，其中 ~237 处嵌 JS 逻辑，需先重构映射表</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>推进进度（2026-09-18 已落地）</b>：P0 选择器修复 ✅、P1 全局 Esc 停止 ✅、P1 原生 confirm/alert 统一为
+    <code>confirmDialog()</code>+toast ✅、P2 focus-visible 焦点环 ✅、P2 prefers-reduced-motion ✅、
+    思考行「×N」段数计数去除 ✅、核心纯图标按钮 aria-label 补齐 ✅。
+    核对确认（已存在，非缺失）：输入框自动增高 + 附件 chips、气泡「重新生成」重试入口。
+    剩余：P2 hover 反馈入口（需后端点赞 API，暂无）/ 动效时长 token 化、P3 aria-label 全量 + emoji→SVG。
+    每做完一批就重建 <code>app.css</code> 并重新 PyInstaller 打包验证（改源码不重打包 = 用户跑的还是旧包）。
+  </div>
+</section>
+
+<footer>Scout 前端交互参考 · 规范 + 已落地改造进度 · 2026-09-18</footer>
+
+</div>
+</body>
+</html>
