@@ -486,16 +486,100 @@ class ToolExecutionMixin:
                         return True
         return False
 
-    async def _gate_permission(self, session: Session, tc: ToolCall, call_id: str) -> bool:
-        """权限门控（2026-09-21）：风险分级 × 用户权限开关.
+    # ── file 工具按 action 精细风险分级（2026-09-22）─────────────────────
+    # 设计原则：读/查绝对安全；增改看路径（系统文件/scout 源码/.git → 审批）；删必审批。
+    _FILE_READONLY_ACTIONS = frozenset({"read", "list"})
+    _FILE_DELETE_ACTIONS = frozenset({"delete"})
+    _FILE_WRITE_ACTIONS = frozenset({"write", "insert", "replace", "edit"})
 
-        两个维度：
-          ① 风险分级 —— never（不可逆）已在 _gate_security_checks 拦截；
-             risky（高危但用户可判断，如 rm -rf build、del ..\\旧目录、重启）走本门控；
-             normal 直接执行。
-          ② 权限开关（输入框，持久化到 config.permission_mode）——
-             ask（默认）：risky 弹窗询问；auto：risky 也直接执行；
-             strict：所有 shell/代码执行与破坏性工具逐条询问。
+    @classmethod
+    def _classify_file_risk(cls, tc: ToolCall) -> tuple[str, str]:
+        """对 file 工具按 action 精细分级.
+
+        - read / list → normal（绝对安全）
+        - delete      → risky（删除必须审批）
+        - write / insert / replace / edit → 检查路径：
+            命中保护路径（系统目录 / scout 源码 / .git / scout 配置目录）→ risky
+            其他 → normal
+        """
+        args = tc.arguments if isinstance(tc.arguments, dict) else {}
+        action = str(args.get("action", "")).strip().lower()
+        path = str(args.get("path", "")).strip()
+
+        if action in cls._FILE_READONLY_ACTIONS:
+            return "normal", ""
+
+        if action in cls._FILE_DELETE_ACTIONS:
+            return "risky", f"该操作将删除文件数据（file delete: {path or '未指定路径'}）"
+
+        if action in cls._FILE_WRITE_ACTIONS:
+            # 检查写入路径是否命中保护区域
+            protected_reason = cls._check_protected_write_path(path)
+            if protected_reason:
+                return "risky", f"该操作将修改受保护路径（file {action}: {protected_reason}）"
+            return "normal", ""
+
+        # 未知 action 按保守策略处理
+        return "risky", f"未知文件操作（file {action}），请确认"
+
+    @classmethod
+    def _check_protected_write_path(cls, path: str) -> str:
+        """判断写入路径是否命中保护区域，命中返回原因描述，否则返回空串.
+
+        保护区域：
+        - 系统敏感目录（SYSTEM_DIRS）
+        - scout 项目源码目录（PROJECT_ROOT）
+        - .git 目录
+        - scout 配置/数据目录（CONFIG_DIR）
+        """
+        if not path:
+            return ""
+        abs_path = os.path.abspath(os.path.expanduser(path))
+
+        # 1) 系统目录
+        try:
+            from scout.security.policy import SYSTEM_DIRS
+            for d in SYSTEM_DIRS:
+                if abs_path == d or abs_path.startswith(d + os.sep):
+                    return f"系统目录 {d}"
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 2) scout 源码目录
+        try:
+            from scout.config.paths import PROJECT_ROOT
+            proj_str = str(PROJECT_ROOT)
+            if abs_path == proj_str or abs_path.startswith(proj_str + os.sep):
+                return f"scout 源码目录 {proj_str}"
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 3) .git 目录
+        if os.sep + ".git" in abs_path or abs_path.endswith(".git"):
+            return "git 仓库元数据 (.git)"
+
+        # 4) scout 配置/数据目录（含密钥、凭据）
+        try:
+            from scout.config.paths import CONFIG_DIR
+            cfg_str = str(CONFIG_DIR)
+            if abs_path == cfg_str or abs_path.startswith(cfg_str + os.sep):
+                return f"scout 配置目录 {cfg_str}"
+        except Exception:  # noqa: BLE001
+            pass
+
+        return ""
+
+    async def _gate_permission(self, session: Session, tc: ToolCall, call_id: str) -> bool:
+        """权限门控（2026-09-21 初版 / 2026-09-22 file 工具按 action 精细分级）.
+
+        风险分级规则：
+          ① shell — 由 classify_shell_risk 三级判定（never / risky / normal）。
+          ② file  — 按 action 精细分级：
+               read/list → normal（不审批）
+               delete    → risky（必审批）
+               write/insert/replace/edit → 命中保护路径(risky)否则(normal)
+          ③ 其他 destructive 工具 → 保持原逻辑 risky。
+          ④ 权限开关：ask(默认) risky 弹窗；auto 全放行；strict 加严。
 
         Returns:
             True 表示已拒绝/拦截（调用方应直接 return）；False 表示放行.
@@ -514,6 +598,9 @@ class ToolExecutionMixin:
                 )
             except Exception:  # noqa: BLE001 — 分类失败按常规处理，不阻塞执行
                 level, reason = "normal", ""
+        elif tc.name == "file":
+            # ★ 2026-09-22：file 工具按 action 精细分级，不再一刀切 destructive
+            level, reason = self._classify_file_risk(tc)
         else:
             tool = ToolRegistry.get_tool(tc.name)
             if tool is not None and getattr(tool.annotations, "destructive", False):

@@ -2073,16 +2073,18 @@
   }
   function fmtK(n) { return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }
   var ctxWarned = false;
+  // 圆环几何常量：viewBox 20x20，r=8，周长 = 2πr ≈ 50.2655
+  var WB_CTX_CIRC = 2 * Math.PI * 8;
   function updCtx() {
     var el = q('#wb-ctx');
     if (!el) return;
     var lmt = parseInt(store('scout_ctx_limit') || '', 10);
     if (!lmt || lmt < 4096) lmt = 128000;
     var used = ctxTokens();
-    var pct = Math.max(0.008, Math.min(1, used / lmt));
-    var lab = q('.wb-ctx-label', el), fill = q('.wb-ctx-fill', el);
+    var pct = Math.max(0, Math.min(1, used / lmt));
+    var lab = q('.wb-ctx-label', el), fg = q('.wb-ctx-ring-fg', el);
     if (lab) lab.textContent = T('上下文') + ' ' + fmtK(used) + ' / ' + fmtK(lmt);
-    if (fill) fill.style.width = (pct * 100).toFixed(1) + '%';
+    if (fg) fg.style.strokeDashoffset = String(WB_CTX_CIRC * (1 - pct));
     el.classList.toggle('wb-ctx-warn', pct >= 0.6 && pct < 0.85);
     el.classList.toggle('wb-ctx-hot', pct >= 0.85);
     el.title = T('本会话上下文估算占用 {n}%，接近上限时建议新开会话', { n: Math.round(pct * 100) });
@@ -2093,17 +2095,36 @@
     if (pct < 0.8) ctxWarned = false;
   }
   function initCtxBar() {
-    var badge = q('#latency-badge');
     var composer = q('#composer');
     if (!composer) return;
-    var row = badge ? badge.parentNode : composer.parentNode;
     if (q('#wb-ctx')) { updCtx(); return; }
+    // ★ 位置：模型徽章那一栏，放在模型按钮前面（模型名左侧）。
+    //   结构: <div.flex 栏> <div.relative> <button#chat-model-btn> </div> <button#send-btn> </div>
+    //   #chat-model-btn 的直接父是 div.relative（它是 flex 栏的直接子），
+    //   所以必须以 div.relative 作为 insertBefore 锚点 —— 传 modelBtn 会因非直接子抛 NotFoundError。
+    var modelBtn = q('#chat-model-btn');
+    var ref = modelBtn ? modelBtn.parentElement : null;   // div.relative
+    var row = (ref && ref.parentElement) || (modelBtn ? modelBtn.closest('div.flex') : null);
+    if (!row) row = composer;
     var el = document.createElement('div');
     el.id = 'wb-ctx';
     el.className = 'wb-ctx';
-    el.innerHTML = '<span class="wb-ctx-label"></span>' +
-      '<span class="wb-ctx-track"><i class="wb-ctx-fill"></i></span>';
-    row.appendChild(el);
+    el.innerHTML =
+      '<svg class="wb-ctx-ring" viewBox="0 0 20 20" aria-hidden="true">' +
+        '<circle class="wb-ctx-ring-bg" cx="10" cy="10" r="8"></circle>' +
+        '<circle class="wb-ctx-ring-fg" cx="10" cy="10" r="8" ' +
+          'stroke-dasharray="' + WB_CTX_CIRC.toFixed(2) + '" ' +
+          'stroke-dashoffset="' + WB_CTX_CIRC.toFixed(2) + '"></circle>' +
+      '</svg>' +
+      '<span class="wb-ctx-label"></span>';
+    // 插到 div.relative（模型按钮包裹层）前面 → 圆环出现在模型徽章左侧
+    if (ref && ref.parentNode === row) {
+      row.insertBefore(el, ref);
+    } else if (ref) {
+      ref.parentNode.insertBefore(el, ref);
+    } else {
+      row.appendChild(el);
+    }
     updCtx();
     var mo = new MutationObserver(debounce(updCtx, 600));
     mo.observe(q('#messages') || document.body, { childList: true, subtree: true, characterData: true });

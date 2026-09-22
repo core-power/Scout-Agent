@@ -520,14 +520,15 @@
   border:0.5px solid rgb(var(--c-line)); border-radius:5px; padding:1px 5px;
 }
 
-/* ═══ 20. 上下文余量 ═══ */
-.wb-ctx{display:flex; align-items:center; gap:7px; font-size:11px; color:rgb(var(--c-ink-4))}
+/* ═══ 20. 上下文余量（圆环，2026-09-22：水平条改圆环，位置挪到模型徽章栏）═══ */
+.wb-ctx{display:flex; align-items:center; gap:6px; font-size:11px; color:rgb(var(--c-ink-4))}
+.wb-ctx-ring{width:20px; height:20px; transform:rotate(-90deg); flex:none; overflow:visible}
+.wb-ctx-ring-bg{fill:none; stroke:rgb(var(--c-surface-4)); stroke-width:3}
+.wb-ctx-ring-fg{fill:none; stroke:rgb(var(--c-ink-4)/.85); stroke-width:3; stroke-linecap:round; transition:stroke-dashoffset 240ms ease}
 .wb-ctx-label{white-space:nowrap; font-variant-numeric:tabular-nums}
-.wb-ctx-track{display:block; width:88px; height:3px; border-radius:2px; background:rgb(var(--c-surface-4)); overflow:hidden}
-.wb-ctx-fill{display:block; height:100%; width:1%; border-radius:2px; background:rgb(var(--c-ink-4)/.8); transition:width 240ms ease}
-.wb-ctx.wb-ctx-warn .wb-ctx-fill{background:rgb(var(--c-warn, 245 158 11))}
+.wb-ctx.wb-ctx-warn .wb-ctx-ring-fg{stroke:rgb(var(--c-warn, 245 158 11))}
 .wb-ctx.wb-ctx-warn .wb-ctx-label{color:rgb(var(--c-warn, 245 158 11))}
-.wb-ctx.wb-ctx-hot .wb-ctx-fill{background:rgb(var(--c-danger))}
+.wb-ctx.wb-ctx-hot .wb-ctx-ring-fg{stroke:rgb(var(--c-danger))}
 .wb-ctx.wb-ctx-hot .wb-ctx-label{color:rgb(var(--c-danger))}
 
 /* ═══ 21. 运行中排队提示 ═══ */
@@ -548,7 +549,7 @@
 }
 
 @media (prefers-reduced-motion: reduce){
-  .wb-ctx-fill{transition:none}
+  .wb-ctx-ring-fg{transition:none}
 }
 
 /* ═══ 23. 文件改动 diff ═══ */
