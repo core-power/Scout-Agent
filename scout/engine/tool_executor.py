@@ -522,6 +522,81 @@ class ToolExecutionMixin:
         # 未知 action 按保守策略处理
         return "risky", f"未知文件操作（file {action}），请确认"
 
+    # ── execute_code 按代码内容分级（2026-09-22）───────────────────────
+    # 该工具 annotations 是 destructive=True，此前**每次**跑 Python 都弹确认，
+    # 而实际绝大多数是算个数、解析文本这类纯读取脚本。这里按代码内容判定：
+    #   命中「写文件 / 起进程 / 删目录 / 发网络请求 / 改注册表 / 驱动桌面」→ risky；
+    #   其余纯计算与读取 → normal，直接放行。
+    _CODE_RISKY_PATTERNS = (
+        (r"\bos\.(system|popen|remove|unlink|rmdir|removedirs|rename|renames|"
+         r"mkdir|makedirs|chmod|chown|kill|truncate|execv|spawnv)\b", "会修改文件系统或启动进程"),
+        (r"\bos\.environ\s*\[[^\]]+\]\s*=", "会修改环境变量"),
+        (r"\bsubprocess\.[A-Za-z]", "会启动外部进程"),
+        (r"\bshutil\.[A-Za-z]", "会移动/复制/删除文件"),
+        (r"\bwrite_text\s*\(|\bwrite_bytes\s*\(", "会写入文件"),
+        (r"\bto_csv\s*\(|\bto_excel\s*\(|\bto_json\s*\(|\bsavefig\s*\(", "会写出数据文件"),
+        (r"\brequests\.[A-Za-z]|\burlopen\s*\(|\bhttp\.client|\bsocket\.[A-Za-z]", "会发起网络请求"),
+        (r"\bwinreg\.[A-Za-z]|\bctypes\.[A-Za-z]", "会访问注册表或系统底层接口"),
+        (r"\beval\s*\(|\bexec\s*\(|\b__import__\s*\(", "会动态执行代码"),
+        (r"\bpyautogui\.[A-Za-z]|\bSendKeys\b", "会驱动桌面界面"),
+    )
+    # open() 的写模式识别：不能用"包含 w/a/x 任一字符"的粗正则 ——
+    # open('a.txt', encoding='utf-8') 里的 'a.txt' 也含 a，会被误判成写文件。
+    # 改为：只把**纯模式字面量**（w / wb / w+ / a / ab / r+ …）且以 w/a/x 开头
+    # 或带 + 的判定为写入；文件名（含 . / - 等字符）天然不匹配。
+    _CODE_OPEN_CALL_RE = re.compile(r"\bopen\s*\(([^()]*)\)")
+    _CODE_MODE_LITERAL_RE = re.compile(r"^['\"]([rwaxbt+]{1,4})['\"]$")
+
+    @classmethod
+    def _code_has_file_write(cls, code: str) -> bool:
+        """识别 open()/Path.open() 是否以写模式打开."""
+        for m in cls._CODE_OPEN_CALL_RE.finditer(code or ""):
+            for arg in cls._split_call_args(m.group(1)):
+                if "=" in arg:  # 跳过 encoding=... 等关键字参数
+                    continue
+                mm = cls._CODE_MODE_LITERAL_RE.match(arg)
+                if mm and (mm.group(1)[0] in "wax" or "+" in mm.group(1)):
+                    return True
+        return False
+
+    @staticmethod
+    def _split_call_args(text: str) -> list[str]:
+        """按顶层逗号切分调用参数（忽略引号内的逗号）."""
+        out: list[str] = []
+        buf: list[str] = []
+        quote = ""
+        for ch in text or "":
+            if quote:
+                buf.append(ch)
+                if ch == quote:
+                    quote = ""
+                continue
+            if ch in "'\"":
+                quote = ch
+                buf.append(ch)
+            elif ch == ",":
+                out.append("".join(buf).strip())
+                buf = []
+            else:
+                buf.append(ch)
+        if buf:
+            out.append("".join(buf).strip())
+        return out
+
+    @classmethod
+    def _classify_code_risk(cls, tc: ToolCall) -> tuple[str, str]:
+        """对 execute_code 按代码内容分级：纯计算/读取放行，有副作用才询问。"""
+        args = tc.arguments if isinstance(tc.arguments, dict) else {}
+        code = str(args.get("code", "") or "")
+        if not code.strip():
+            return "normal", ""
+        if cls._code_has_file_write(code):
+            return "risky", "该代码会写入文件（execute_code）"
+        for pattern, why in cls._CODE_RISKY_PATTERNS:
+            if re.search(pattern, code):
+                return "risky", f"该代码{why}（execute_code）"
+        return "normal", ""
+
     @classmethod
     def _check_protected_write_path(cls, path: str) -> str:
         """判断写入路径是否命中保护区域，命中返回原因描述，否则返回空串.
@@ -569,24 +644,27 @@ class ToolExecutionMixin:
 
         return ""
 
-    async def _gate_permission(self, session: Session, tc: ToolCall, call_id: str) -> bool:
-        """权限门控（2026-09-21 初版 / 2026-09-22 file 工具按 action 精细分级）.
+    # ── 统一风险判定（2026-09-22）─────────────────────────────────────
+    # 设计目标：确认弹窗只对「高危」触发。
+    # 此前的两个高频来源：
+    #   ① _gate_hitl_approval 对 hitl_tools={shell, execute_code} **无条件**弹窗
+    #      → ls / cat / python -c 这类常规操作也每次打断；
+    #   ② strict 模式把 shell/code 一律升为 risky，与权限门控口径不一致。
+    # 现在两道门控共用 _tool_risk 同一判定，且只在 risky 时才问。
+    @staticmethod
+    def _risk_signature(tc: ToolCall, level: str, reason: str, mode: str) -> str:
+        """「本次会话不再询问此类操作」的签名.
 
-        风险分级规则：
-          ① shell — 由 classify_shell_risk 三级判定（never / risky / normal）。
-          ② file  — 按 action 精细分级：
-               read/list → normal（不审批）
-               delete    → risky（必审批）
-               write/insert/replace/edit → 命中保护路径(risky)否则(normal)
-          ③ 其他 destructive 工具 → 保持原逻辑 risky。
-          ④ 权限开关：ask(默认) risky 弹窗；auto 全放行；strict 加严。
-
-        Returns:
-            True 表示已拒绝/拦截（调用方应直接 return）；False 表示放行.
+        粒度取「工具 + 风险等级 + 风险类别」而非具体参数：同类高危操作只问一次，
+        但换一类（例如从"递归删除"换成"强制推送"）仍会重新询问，避免白名单过大。
         """
-        security = getattr(self, "security", None)
-        mode = getattr(security, "permission_mode", "ask") if security else "ask"
+        if mode == "strict":
+            return f"{tc.name}|strict"
+        category = (reason or "").split("\n")[0].strip()[:40]
+        return f"{tc.name}|{level}|{category}"
 
+    def _tool_risk(self, tc: ToolCall, mode: str) -> tuple[str, str]:
+        """统一风险分级：权限门控与 HITL 共用，避免两处口径漂移导致重复/漏弹。"""
         level, reason = "normal", ""
         if tc.name == "shell":
             try:
@@ -601,13 +679,16 @@ class ToolExecutionMixin:
         elif tc.name == "file":
             # ★ 2026-09-22：file 工具按 action 精细分级，不再一刀切 destructive
             level, reason = self._classify_file_risk(tc)
+        elif tc.name == "execute_code":
+            # ★ 2026-09-22：按代码内容分级，纯计算脚本不再每次弹窗
+            level, reason = self._classify_code_risk(tc)
         else:
             tool = ToolRegistry.get_tool(tc.name)
             if tool is not None and getattr(tool.annotations, "destructive", False):
                 level = "risky"
                 reason = f"该操作会修改或删除数据（{tc.name}）"
 
-        # ② 权限模式：strict 连常规 shell 也问；auto 连 risky 都放行
+        # 权限模式：strict 连常规 shell/代码也问；auto 全放行（在调用处处理）
         if mode == "strict" and tc.name in ("shell", "execute_code"):
             preview = str(
                 tc.arguments.get("command") or tc.arguments.get("code") or tc.name
@@ -616,7 +697,51 @@ class ToolExecutionMixin:
         if mode == "strict" and level == "risky" and not reason:
             reason = f"谨慎模式：执行前需确认（{tc.name}）"
 
+        return level, reason
+
+    async def _gate_permission(self, session: Session, tc: ToolCall, call_id: str) -> bool:
+        """权限门控（2026-09-21 初版 / 2026-09-22 重构：只拦高危 + 会话白名单）.
+
+        风险分级规则：
+          ① shell — 由 classify_shell_risk 三级判定（never / risky / normal）；
+          ② file  — 按 action 精细分级（read/list 不拦，delete 必拦，写看路径）；
+          ③ 其他 destructive 工具 → risky；
+          ④ 权限开关：ask(默认) 仅高危弹窗；auto 全放行；strict shell/code 全问。
+
+        用户勾选「本次会话不再询问此类操作」后，同类高危操作不再打断。
+
+        Returns:
+            True 表示已拒绝/拦截（调用方应直接 return）；False 表示放行.
+        """
+        security = getattr(self, "security", None)
+        mode = getattr(security, "permission_mode", "ask") if security else "ask"
+
+        level, reason = self._tool_risk(tc, mode)
+
+        # 记录本次判定，供 HITL 门控复用（避免两道门各判一次、口径不一致）
+        if not hasattr(self, "_risk_by_call"):
+            self._risk_by_call = {}
+        if len(self._risk_by_call) > 512:  # 长会话下防无界增长
+            self._risk_by_call.clear()
+        self._risk_by_call[call_id] = level
+
         need_ask = level == "risky" and mode != "auto"
+
+        # 会话级白名单：用户此前勾选「不再询问此类操作」
+        if need_ask:
+            sig = self._risk_signature(tc, level, reason, mode)
+            approved_set = getattr(self, "_session_approvals", None)
+            if approved_set and sig in approved_set:
+                tc.arguments["_approved"] = True
+                if not hasattr(self, "_approved_call_ids"):
+                    self._approved_call_ids = set()
+                self._approved_call_ids.add(call_id)
+                if self.bus:
+                    await self.bus.emit(
+                        "tool.risky_remembered",
+                        {"tool": tc.name, "reason": reason, "signature": sig},
+                    )
+                return False
 
         if not need_ask:
             if level == "risky":
@@ -640,6 +765,14 @@ class ToolExecutionMixin:
             logger.warning("权限审批通道异常，按拒绝处理: %s", exc)
             approved = False
 
+        # 「本次会话不再询问此类操作」回执（由 WebCallbacks 记录）
+        if approved:
+            remember_tbl = getattr(self.callbacks, "confirm_remember", None)
+            if isinstance(remember_tbl, dict) and remember_tbl.pop(request_id, False):
+                if not hasattr(self, "_session_approvals"):
+                    self._session_approvals = set()
+                self._session_approvals.add(self._risk_signature(tc, level, reason, mode))
+
         if approved:
             tc.arguments["_approved"] = True
             if not hasattr(self, "_approved_call_ids"):
@@ -660,28 +793,49 @@ class ToolExecutionMixin:
         return True
 
     async def _gate_hitl_approval(self, session: Session, tc: ToolCall, call_id: str) -> bool:
-        """HITL 用户确认：危险操作前请求用户确认.
+        """HITL 用户确认：仅对高危操作请求用户确认.
 
-        auto_approve 开启时跳过；自动化运行时无人可确认，由 AutomationPolicy 门控替代。
+        ★ 2026-09-22：此前本门控对 hitl_tools={shell, execute_code} **无条件**弹窗，
+        导致 ls / cat / git status / python -c 等常规操作每次执行都打断用户 ——
+        这是"审核弹窗高频"的主要来源。现在改为：
+          · 复用 _gate_permission 已算出的风险等级，非 risky 一律不弹；
+          · 已在权限门控问过并批准的，不再重复询问；
+          · auto（全部放行）模式下不再追问。
 
         Returns:
             True 表示用户拒绝（调用方应直接 return）；False 表示放行.
         """
-        # Human-in-the-Loop: 危险操作前请求用户确认（auto_approve 开启时跳过；
-
-        # 自动化运行时无人可确认，由 AutomationPolicy 门控替代）
-
         # ★ 2026-09-21：已在 _gate_permission 问过并获批准的，不再重复询问
         if getattr(self, "_approved_call_ids", None) and call_id in self._approved_call_ids:
             return False
 
-        if (
+        if not (
             self.enable_hitl
             and self.security is not None
             and not self.security.auto_approve
             and self.automation_policy is None
-            and tc.name in self.hitl_tools
         ):
+            return False
+
+        # ① 非高危不弹窗（read-only 的 shell/file 等常规操作直接放行）
+        level = getattr(self, "_risk_by_call", {}).get(call_id)
+        if level is None:
+            mode = getattr(self.security, "permission_mode", "ask")
+            level, _reason = self._tool_risk(tc, mode)
+        if level != "risky":
+            return False
+
+        # ② auto 模式：用户已授权全部放行，HITL 不再追问
+        if getattr(self.security, "permission_mode", "ask") == "auto":
+            return False
+
+        # ③ 会话白名单命中：用户已选「不再询问此类操作」
+        sig = self._risk_signature(tc, level, "", getattr(self.security, "permission_mode", "ask"))
+        approved_set = getattr(self, "_session_approvals", None)
+        if approved_set and sig in approved_set:
+            return False
+
+        if tc.name in self.hitl_tools:
             import uuid
 
             request_id = str(uuid.uuid4())[:8]
@@ -706,6 +860,13 @@ class ToolExecutionMixin:
             approved = await self.callbacks.on_confirm(
                 request_id=request_id, tool_name=tc.name, args=tc.arguments, reason=reason
             )
+
+            if approved:
+                remember_tbl = getattr(self.callbacks, "confirm_remember", None)
+                if isinstance(remember_tbl, dict) and remember_tbl.pop(request_id, False):
+                    if not hasattr(self, "_session_approvals"):
+                        self._session_approvals = set()
+                    self._session_approvals.add(sig)
 
             if not approved:
                 obs = Observation(

@@ -323,6 +323,134 @@ def create_web_app(agent=None) -> FastAPI:
     except Exception as e:
         logging.getLogger(__name__).warning(f"文件系统 API 加载失败: {e}")
 
+    # ── 上下文占用统计（2026-09-22）──────────────────────────────────
+    # 输入框的「上下文环」此前用前端 DOM 文本做粗估（cjk/1.4 + 单词/0.75），
+    # 与后端真实口径（ContextManager.estimate_tokens / API 回传 prompt_tokens）
+    # 差 2 倍以上，显示值没有参考价值。这里统一由后端出数，并给出分项占比，
+    # 供点击展开查看「系统提示 / 摘要 / 用户 / 助手 / 工具输出」各占多少。
+    @app.get("/api/context/stats")
+    async def context_stats(session_id: str = ""):
+        try:
+            from scout.context.manager import estimate_tokens
+        except Exception:  # noqa: BLE001
+            estimate_tokens = None
+
+        sid = (session_id or "").strip()
+        cm = getattr(agent, "context_mgr", None)
+        store = getattr(agent, "session_store", None)
+
+        limit = int(getattr(cm, "max_tokens", 0) or 0)
+        if limit <= 0:
+            try:
+                limit = int(os.getenv("SCOUT_CONTEXT_MAX_TOKENS", "0") or 0)
+            except Exception:  # noqa: BLE001
+                limit = 0
+        if limit <= 0:
+            limit = 128000
+
+        session = None
+        if store and sid:
+            try:
+                session = await asyncio.to_thread(store.load_session, sid)
+            except TypeError:
+                try:
+                    session = store.load_session(sid)
+                except Exception:  # noqa: BLE001
+                    session = None
+            except Exception:  # noqa: BLE001
+                session = None
+
+        # API 真实回传值优先；没有就退回本地估算
+        real = 0
+        if cm and sid:
+            try:
+                real = int(cm.real_prompt_tokens(sid) or 0)
+            except Exception:  # noqa: BLE001
+                real = 0
+
+        buckets = {
+            "system": {"label": "系统提示", "tokens": 0, "count": 0},
+            "summary": {"label": "压缩摘要", "tokens": 0, "count": 0},
+            "user": {"label": "用户消息", "tokens": 0, "count": 0},
+            "assistant": {"label": "助手回复", "tokens": 0, "count": 0},
+            "tool": {"label": "工具输出", "tokens": 0, "count": 0},
+        }
+
+        def _tok(text: str) -> int:
+            if not text:
+                return 0
+            if estimate_tokens is not None:
+                return int(estimate_tokens(text))
+            return (len(text) + 3) // 4
+
+        if session is not None:
+            # ★ 用真正发给 LLM 的视图统计（含压缩摘要与工具输出裁剪），
+            #   而不是 session.messages 原始全量——否则显示值会远高于实际占用。
+            msgs = []
+            if cm is not None:
+                try:
+                    msgs = list(cm.build_llm_view(session) or [])
+                except Exception:  # noqa: BLE001 — 视图构建失败退回原始消息
+                    msgs = []
+            if not msgs:
+                msgs = list(getattr(session, "messages", []) or [])
+
+            # 系统提示不在 session.messages 里，单独计入
+            sys_prompt = str(getattr(agent, "system_prompt", "") or "")
+            if sys_prompt:
+                buckets["system"]["tokens"] += _tok(sys_prompt)
+                buckets["system"]["count"] += 1
+
+            for m in msgs:
+                content = getattr(m, "content", "") or ""
+                role = getattr(getattr(m, "role", None), "value", str(getattr(m, "role", "")))
+                role = str(role).lower()
+                if (content or "").startswith("[对话摘要]"):
+                    key = "summary"
+                elif role in ("system", "role.system"):
+                    key = "system"
+                elif role in ("user", "role.user"):
+                    key = "user"
+                elif role in ("tool", "role.tool"):
+                    key = "tool"
+                elif role in ("assistant", "role.assistant"):
+                    key = "assistant"
+                else:
+                    key = "assistant"
+                buckets[key]["tokens"] += _tok(content)
+                buckets[key]["count"] += 1
+
+        est_total = sum(b["tokens"] for b in buckets.values())
+        used = real if real > 0 else est_total
+        source = "real" if real > 0 else "estimate"
+
+        breakdown = []
+        for key, b in buckets.items():
+            # 真实值优先时，分项按比例归一到 used，保证「分项之和 == 显示总量」
+            tokens = b["tokens"]
+            if real > 0 and est_total > 0:
+                tokens = int(round(real * tokens / est_total))
+            breakdown.append(
+                {
+                    "key": key,
+                    "label": b["label"],
+                    "tokens": int(tokens),
+                    "count": int(b["count"]),
+                    "ratio": round(tokens / used, 4) if used > 0 else 0.0,
+                }
+            )
+
+        return {
+            "session_id": sid,
+            "used": int(used),
+            "estimated": int(est_total),
+            "limit": int(limit),
+            "ratio": round(used / limit, 4) if limit > 0 else 0.0,
+            "source": source,
+            "has_session": session is not None,
+            "breakdown": breakdown,
+        }
+
     # 静态文件目录
     static_dir = os.path.join(os.path.dirname(__file__), "static")
 

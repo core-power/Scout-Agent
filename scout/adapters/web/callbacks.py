@@ -79,6 +79,9 @@ class WebCallbacks(Callbacks):
         if not hasattr(self, "pending_confirmations"):
             self.pending_confirmations: dict = {}
         self.pending_confirmations[request_id] = future
+        # 「本次会话不再询问此类操作」回执表：request_id → bool，由执行器取用
+        if not hasattr(self, "confirm_remember"):
+            self.confirm_remember: dict = {}
         # 兼容旧路径：若已挂 adapter 引用则同步注册（SSE 等走 adapter 表的场景）
         if getattr(self, "_adapter", None):
             self._adapter._pending_confirmations[request_id] = future
@@ -91,8 +94,13 @@ class WebCallbacks(Callbacks):
         })
         # 等待用户响应（超时 60 秒）
         try:
-            approved = await asyncio.wait_for(future, timeout=60.0)
-            return approved
+            result = await asyncio.wait_for(future, timeout=60.0)
+            # 前端可回 bool（旧协议）或 {"approved":..,"remember":..}（新协议）
+            if isinstance(result, dict):
+                if result.get("remember"):
+                    self.confirm_remember[request_id] = True
+                return bool(result.get("approved"))
+            return bool(result)
         except asyncio.TimeoutError:
             # 超时默认拒绝；清理注册表防泄漏
             self.pending_confirmations.pop(request_id, None)

@@ -225,8 +225,14 @@ function iconHtml(name, cls, style) {
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
     </svg>
     <span class="text-sm text-ink-1">发现新版本 <b id="update-version" class="text-ink-1">v0.0.0</b></span>
-    <a id="update-link" href="#" target="_blank" rel="noopener" class="text-xs font-medium text-ink-1 bg-success hover:bg-success px-2.5 py-1 rounded-lg transition">立即升级</a>
+    <!-- 一键升级：后端下载 → 弹窗确认 → 应用进度 → 原位替换 exe 并重启（2026-09-22） -->
+    <button id="update-go" class="text-xs font-medium text-ink-1 bg-success hover:opacity-90 px-2.5 py-1 rounded-lg transition">立即升级</button>
+    <a id="update-link" href="#" target="_blank" rel="noopener" class="hidden text-xs text-ink-3 hover:text-ink-1 underline px-1 transition" title="在浏览器中手动下载">手动下载</a>
     <button id="update-close" class="text-ink-3 hover:text-ink-1 text-sm leading-none px-1 transition" title="关闭">✕</button>
+    <span id="update-status" class="hidden text-2xs text-ink-3 tabular"></span>
+    <div id="update-progress" class="hidden absolute left-2 right-2 bottom-1 h-0.5 bg-surface-4 rounded overflow-hidden">
+        <i class="block h-full bg-success transition-all duration-300" style="width:0%"></i>
+    </div>
 </div>
 <!-- ═══════════════ 登录界面 ═══════════════ -->
 <div id="login-overlay" class="fixed inset-0 z-toast bg-surface-0 flex items-center justify-center hidden">
@@ -987,6 +993,11 @@ function iconHtml(name, cls, style) {
                             <span class="inline-block w-2 h-2 bg-success rounded-full mr-2"></span>
                             有新版本可用
                         </div>
+                        <!-- 桌面版：一键就地升级（下载 → 确认 → 原位替换 exe） -->
+                        <button id="update-now-btn" onclick="updateNowFromSettings()" class="hidden mt-3 w-full px-4 py-2 rounded-lg bg-success hover:opacity-90 text-on-solid text-sm font-medium transition">
+                            立即升级
+                        </button>
+                        <div id="update-settings-status" class="hidden mt-2 text-2xs text-ink-3 tabular"></div>
                     </div>
                     
                     <div class="bg-surface-3 border border-line rounded-lg p-4">
@@ -5111,9 +5122,14 @@ function showConfirmDialog(data) {
                 <h3 class="text-lg font-semibold text-ink-1">需要确认</h3>
             </div>
             <p class="text-ink-2 mb-4">${escapeHtml(reason)}</p>
-            <div class="bg-scrim/30 rounded p-3 mb-4 max-h-40 overflow-y-auto">
-                <pre class="text-xs text-ink-3 whitespace-pre-wrap">${JSON.stringify(args, null, 2)}</pre>
+            <div id="confirm-args-${request_id}" class="bg-scrim/30 rounded p-3 mb-3 max-h-40 overflow-y-auto">
+                <pre class="text-xs text-ink-3 whitespace-pre-wrap">${escapeHtml(fmtConfirmArgs(tool_name, args))}</pre>
             </div>
+            <label class="flex items-center gap-2 mb-4 select-none cursor-pointer">
+                <input type="checkbox" id="confirm-remember-${request_id}"
+                       class="w-4 h-4 rounded border-line bg-surface-4 text-accent">
+                <span class="text-xs text-ink-3">本次会话不再询问此类操作</span>
+            </label>
             <div class="flex gap-3">
                 <button id="confirm-reject-${request_id}" class="flex-1 px-4 py-2 rounded bg-surface-4 hover:bg-surface-5 text-ink-1 transition-colors">
                     拒绝
@@ -5127,14 +5143,17 @@ function showConfirmDialog(data) {
     
     document.body.appendChild(modal);
     
+    const rememberEl = document.getElementById(`confirm-remember-${request_id}`);
+    const readRemember = () => !!(rememberEl && rememberEl.checked);
+    
     // 绑定事件
     document.getElementById(`confirm-approve-${request_id}`).onclick = () => {
-        sendConfirmResponse(request_id, true);
+        sendConfirmResponse(request_id, true, readRemember());
         modal.remove();
     };
     
     document.getElementById(`confirm-reject-${request_id}`).onclick = () => {
-        sendConfirmResponse(request_id, false);
+        sendConfirmResponse(request_id, false, readRemember());
         modal.remove();
     };
     
@@ -5146,12 +5165,41 @@ function showConfirmDialog(data) {
     } catch (e) {}
 }
 
-function sendConfirmResponse(requestId, approved) {
+// 把工具参数整理成人能一眼看懂的一行（shell/code 只显示主体，其余走 JSON）
+function fmtConfirmArgs(toolName, args) {
+    if (!args || typeof args !== 'object') return String(args ?? '');
+    var skip = { _approved: 1, _risk_level: 1, _risk_reason: 1 };
+    var main = '';
+    if (toolName === 'shell') {
+        var cmd = String(args.command || '');
+        var argv = Array.isArray(args.args) ? args.args.join(' ') : '';
+        main = (cmd + ' ' + argv).trim();
+    } else if (toolName === 'execute_code') {
+        main = String(args.code || '');
+    } else if (toolName === 'file') {
+        main = String(args.action || '') + ' ' + String(args.path || '');
+        if (args.content != null) main += '\n' + String(args.content);
+    }
+    var lines = [];
+    if (main) lines.push(main);
+    Object.keys(args).forEach(function (k) {
+        if (skip[k]) return;
+        if (toolName === 'shell' && (k === 'command' || k === 'args')) return;
+        if (toolName === 'execute_code' && k === 'code') return;
+        if (toolName === 'file' && (k === 'action' || k === 'path' || k === 'content')) return;
+        var v = args[k];
+        lines.push(k + ': ' + (typeof v === 'object' ? JSON.stringify(v) : String(v)));
+    });
+    return lines.join('\n');
+}
+
+function sendConfirmResponse(requestId, approved, remember) {
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
             type: 'confirm_response',
             request_id: requestId,
-            approved: approved
+            approved: approved,
+            remember: !!remember
         }));
     }
 }
@@ -7501,6 +7549,9 @@ async function saveKnowledgePage() {
 function addSchedulerTask() { return addCronTask(); }
 
 // 版本管理功能
+// 保存最近一次检查结果，供设置页「立即升级」复用
+let _latestUpdateInfo = null;
+
 async function checkForUpdates() {
     const updateIndicator = document.getElementById('update-indicator');
     const currentVersion = document.getElementById('current-version');
@@ -7519,17 +7570,33 @@ async function checkForUpdates() {
             }
         }
         
+        // 桌面版：设置页直接给一个「立即升级」（与横幅走同一套流程）
+        const nowBtn = document.getElementById('update-now-btn');
+        if (nowBtn) {
+            _latestUpdateInfo = (data.desktop && data.update_available) ? data : null;
+            nowBtn.classList.toggle('hidden', !_latestUpdateInfo);
+        }
+        
         if (currentVersion) {
             currentVersion.textContent = `v${data.current_version}`;
         }
         
-        // 桌面绿色版：右上角更新横幅（自动提示 + 一键跳转下载）
+        // 桌面绿色版：右上角更新横幅（自动提示 + 一键升级）
         if (data.desktop && data.update_available) {
             showUpdateBanner(data);
         }
     } catch (error) {
         console.error('检查更新失败:', error);
     }
+}
+
+// 设置页入口：就地升级（与横幅共用 startDesktopUpdate）
+function updateNowFromSettings() {
+    if (!_latestUpdateInfo) {
+        updateToast('暂无可用更新', 'info');
+        return;
+    }
+    startDesktopUpdate(_latestUpdateInfo);
 }
 
 // 桌面版更新横幅（关闭后 24 小时内不再提示该版本）
@@ -7542,13 +7609,191 @@ function showUpdateBanner(data) {
         if (dismissed.version === data.latest_version && Date.now() < (dismissed.at || 0) + 86400000) return;
     } catch (e) { /* 忽略存储异常 */ }
     document.getElementById('update-version').textContent = 'v' + data.latest_version;
-    document.getElementById('update-link').href = data.download_url || data.html_url || 'https://github.com/core-power/scout-agent/releases';
+    const link = document.getElementById('update-link');
+    if (link) link.href = data.download_url || data.html_url || 'https://github.com/core-power/scout-agent/releases';
     banner.classList.remove('hidden');
+
+    const goBtn = document.getElementById('update-go');
+    if (goBtn) {
+        goBtn.onclick = () => startDesktopUpdate(data);
+    }
     document.getElementById('update-close').onclick = () => {
-        banner.classList.add('hidden');
+        hideUpdateBanner();
         try {
             localStorage.setItem('scout-update-dismissed', JSON.stringify({ version: data.latest_version, at: Date.now() }));
         } catch (e) { /* 忽略 */ }
+    };
+}
+
+function hideUpdateBanner() {
+    const b = document.getElementById('update-banner');
+    if (b) b.classList.add('hidden');
+}
+
+function setUpdateProgress(pct, text) {
+    const bar = document.getElementById('update-progress');
+    if (bar) {
+        if (pct == null) {
+            bar.classList.add('hidden');
+        } else {
+            bar.classList.remove('hidden');
+            const fill = bar.querySelector('i');
+            if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+        }
+    }
+    ['update-status', 'update-settings-status'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = text || '';
+        el.classList.toggle('hidden', !text);
+    });
+}
+
+/* ── 桌面版就地升级（2026-09-22）────────────────────────────────
+   流程：后端下载（进度）→ 下载完弹「是否更新」→ 确认后应用（进度）
+   → 由外部 updater 进程原位替换 exe 并重启 Scout。
+   运行中的 exe 在 Windows 上被占用无法自替换，所以最后一步必须
+   由独立进程在 Scout 退出后完成，应用期间界面只展示进度。 */
+let _updatePolling = false;
+
+// 轻量 toast 适配：优先用页面内置 toast，缺失时退回 console，避免抛错中断流程
+function updateToast(msg, type) {
+    try {
+        const t = window.toast;
+        const kind = (type === 'error') ? 'error' : (type === 'warn' || type === 'warning') ? 'warning' : (type || 'info');
+        if (t && typeof t[kind] === 'function') { t[kind](msg); return; }
+    } catch (e) { /* 忽略 */ }
+    console.warn('[update]', msg);
+}
+
+async function startDesktopUpdate(data) {
+    const goBtn = document.getElementById('update-go');
+    const closeBtn = document.getElementById('update-close');
+    if (goBtn) goBtn.disabled = true;
+    if (closeBtn) closeBtn.classList.add('hidden');
+
+    const url = data && (data.download_url || '');
+    const version = data ? data.latest_version : '';
+    setUpdateProgress(0, '准备下载…');
+
+    try {
+        const r = await fetch('/api/version/update/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ download_url: url, version: version })
+        });
+        const j = await r.json();
+        if (!r.ok || j.ok === false) {
+            setUpdateProgress(null, '');
+            if (goBtn) goBtn.disabled = false;
+            if (closeBtn) closeBtn.classList.remove('hidden');
+            // 非桌面 / 源码模式：退回手动下载
+            const link = document.getElementById('update-link');
+            if (link) link.classList.remove('hidden');
+            updateToast(j.message || '无法开始更新', 'error');
+            return;
+        }
+        pollUpdateStatus(version);
+    } catch (e) {
+        setUpdateProgress(null, '');
+        if (goBtn) goBtn.disabled = false;
+        if (closeBtn) closeBtn.classList.remove('hidden');
+        updateToast('更新请求失败: ' + e.message, 'error');
+    }
+}
+
+function pollUpdateStatus(version) {
+    if (_updatePolling) return;
+    _updatePolling = true;
+    let asked = false;
+
+    const timer = setInterval(async () => {
+        let s;
+        try {
+            const r = await fetch('/api/version/update/status');
+            s = await r.json();
+        } catch (e) {
+            return; // 服务重启中（应用阶段会短暂断连），继续轮询
+        }
+        if (!s.active) return;
+
+        if (s.state === 'downloading') {
+            const mb = (s.downloaded / 1048576).toFixed(1);
+            const total = s.total ? ' / ' + (s.total / 1048576).toFixed(1) + ' MB' : '';
+            setUpdateProgress(s.percent, `下载更新包 ${mb}${total}`);
+        } else if (s.state === 'ready') {
+            setUpdateProgress(100, '下载完成');
+            const goBtn = document.getElementById('update-go');
+            if (goBtn) goBtn.disabled = false;
+            if (!asked) {
+                asked = true;
+                clearInterval(timer);
+                _updatePolling = false;
+                confirmApplyUpdate(version);
+            }
+        } else if (s.state === 'applying') {
+            setUpdateProgress(100, '正在应用更新，程序即将重启…');
+            clearInterval(timer);
+            _updatePolling = false;
+        } else if (s.state === 'error' || s.state === 'cancelled') {
+            clearInterval(timer);
+            _updatePolling = false;
+            setUpdateProgress(null, '');
+            const goBtn = document.getElementById('update-go');
+            if (goBtn) goBtn.disabled = false;
+            const closeBtn = document.getElementById('update-close');
+            if (closeBtn) closeBtn.classList.remove('hidden');
+            if (s.state === 'error') updateToast(s.message || '更新失败', 'error');
+        }
+    }, 600);
+}
+
+// 下载完成后的「是否更新」确认弹窗
+function confirmApplyUpdate(version) {
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 z-modal flex items-center justify-center bg-black/50';
+    overlay.innerHTML = `
+        <div class="bg-surface-2 border border-line rounded-xl p-5 w-[380px] max-w-[92vw]">
+            <div class="flex items-center gap-3 mb-3">
+                <div class="w-9 h-9 rounded-full bg-success/20 flex items-center justify-center shrink-0">
+                    <svg class="w-5 h-5 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                </div>
+                <h3 class="text-base font-semibold text-ink-1">更新已就绪</h3>
+            </div>
+            <p class="text-sm text-ink-2 mb-1">新版本 <b class="text-ink-1">v${escapeHtml(version || '')}</b> 已下载完成。</p>
+            <p class="text-xs text-ink-3 mb-4">点击「立即更新」后 Scout 会关闭并在原位置替换为新版程序，完成后自动重新启动。</p>
+            <div class="flex gap-3">
+                <button id="upd-later" class="flex-1 px-4 py-2 rounded-lg bg-surface-4 hover:bg-surface-5 text-ink-1 text-sm transition">稍后</button>
+                <button id="upd-now" class="flex-1 px-4 py-2 rounded-lg bg-success hover:opacity-90 text-ink-1 text-sm font-medium transition">立即更新</button>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    const done = () => overlay.remove();
+    document.getElementById('upd-later').onclick = () => {
+        setUpdateProgress(null, '');
+        done();
+    };
+    document.getElementById('upd-now').onclick = async () => {
+        done();
+        setUpdateProgress(100, '正在应用更新…');
+        try {
+            const r = await fetch('/api/version/update/apply', { method: 'POST' });
+            const j = await r.json();
+            if (!r.ok || j.ok === false) {
+                setUpdateProgress(null, '');
+                updateToast(j.message || '应用更新失败', 'error');
+                return;
+            }
+            setUpdateProgress(100, '更新已启动，程序即将重启…');
+            // 服务会在 2 秒内退出，界面停在当前状态直到被关闭
+            const t = document.getElementById('update-go');
+            if (t) t.disabled = true;
+        } catch (e) {
+            setUpdateProgress(100, '正在重启…');
+        }
     };
 }
 

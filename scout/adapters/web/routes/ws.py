@@ -145,10 +145,15 @@ class WsRoutes:
                     if data.get("type") == "confirm_response":
                         request_id = data.get("request_id")
                         approved = data.get("approved", False)
+                        # remember：用户勾选「本次会话不再询问此类操作」，后端据此
+                        # 把该风险签名记进会话白名单，后续同类操作不再打断。
+                        remember = bool(data.get("remember", False))
                         if request_id and request_id in self._pending_confirmations:
                             future = self._pending_confirmations.pop(request_id)
                             if not future.done():
-                                future.set_result(approved)
+                                future.set_result(
+                                    {"approved": bool(approved), "remember": remember}
+                                )
                         continue
 
                     user_msg = data.get("content", "")
@@ -364,10 +369,13 @@ class WsRoutes:
                                         # HITL 确认响应同样需处理，避免卡住
                                         request_id = msg.get("request_id")
                                         approved = msg.get("approved", False)
+                                        remember = bool(msg.get("remember", False))
                                         if request_id and request_id in self._pending_confirmations:
                                             future = self._pending_confirmations.pop(request_id)
                                             if not future.done():
-                                                future.set_result(approved)
+                                                future.set_result(
+                                                    {"approved": bool(approved), "remember": remember}
+                                                )
                                     else:
                                         # 2026-08-11: 非控制消息（chat 等）缓存到队列，避免被丢弃
                                         await _pending_msgs.put(msg)

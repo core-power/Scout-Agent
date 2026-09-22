@@ -96,6 +96,18 @@ class TaggedCallbacks:
         self.agent_name = agent_name
         self.delegation_id = delegation_id
 
+    def __getattr__(self, name: str):
+        """未包装的属性透传给被包装的 callbacks.
+
+        ★ 2026-09-22：执行器需要读 WebCallbacks 上的状态容器（如 confirm_remember
+        「本次会话不再询问」回执表），包装层没有该属性 → getattr 静默拿到 None
+        → 功能失效。这里统一转发，避免以后每加一个回调侧状态都要改包装类。
+        """
+        inner = self.__dict__.get("_inner")
+        if inner is not None:
+            return getattr(inner, name)
+        raise AttributeError(name)
+
     def _tag_metadata(self, metadata: dict | None) -> dict:
         md = dict(metadata or {})
         md["agent_role"] = self.agent_role

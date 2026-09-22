@@ -2062,7 +2062,12 @@
     });
   }
 
-  /* ════════ 20. 上下文余量 ════════ */
+  /* ════════ 20. 上下文余量 ════════
+     ★ 2026-09-22 修正：
+       原实现用 DOM 文本做粗估（cjk/1.4 + 单词/0.75 + 1500），与后端真实口径
+       （ContextManager.estimate_tokens，或 API 回传的 prompt_tokens）差 2 倍以上，
+       且完全看不到"到底是谁占了"。现在改为后端 /api/context/stats 出数 + 分项占比，
+       点击圆环展开明细；后端不可用时才回落到本地粗估并显示 ~ 前缀。 */
   function ctxTokens() {
     var box = q('#messages');
     var txt = box ? (box.innerText || box.textContent || '') : '';
@@ -2072,27 +2077,116 @@
     return Math.round(cjk / 1.4 + words / 0.75 + 1500);
   }
   function fmtK(n) { return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }
+  // 后端返回的分项配色（对应 --c-* token）
+  var CTX_COLORS = {
+    system: 'rgb(var(--c-accent))',
+    summary: 'rgb(var(--c-warn))',
+    user: 'rgb(var(--c-info))',
+    assistant: 'rgb(var(--c-agent))',
+    tool: 'rgb(var(--c-success))'
+  };
   var ctxWarned = false;
+  var ctxState = null;      // 后端返回的最新统计
+  var ctxLoading = false;
   // 圆环几何常量：viewBox 20x20，r=8，周长 = 2πr ≈ 50.2655
   var WB_CTX_CIRC = 2 * Math.PI * 8;
+
+  function ctxLimit() {
+    var lmt = parseInt(store('scout_ctx_limit') || '', 10);
+    if (!lmt || lmt < 4096) lmt = (ctxState && ctxState.limit) || 128000;
+    return lmt;
+  }
+  function currentSid() {
+    try {
+      if (typeof currentSessionId !== 'undefined' && currentSessionId) return String(currentSessionId);
+    } catch (e) {}
+    try { return localStorage.getItem('scout_last_session') || ''; } catch (e) { return ''; }
+  }
+  function fetchCtx() {
+    if (ctxLoading) return;
+    var sid = currentSid();
+    ctxLoading = true;
+    var url = '/api/context/stats' + (sid ? ('?session_id=' + encodeURIComponent(sid)) : '');
+    fetch(url).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      ctxLoading = false;
+      if (!d || typeof d !== 'object') return;
+      ctxState = d;
+      updCtx();
+    })['catch'](function () { ctxLoading = false; });
+  }
+  function ctxPct() {
+    var lmt = ctxLimit();
+    var used = ctxState ? ctxState.used : ctxTokens();
+    return Math.max(0, Math.min(1, used / lmt));
+  }
   function updCtx() {
     var el = q('#wb-ctx');
     if (!el) return;
-    var lmt = parseInt(store('scout_ctx_limit') || '', 10);
-    if (!lmt || lmt < 4096) lmt = 128000;
-    var used = ctxTokens();
+    var lmt = ctxLimit();
+    var real = !!(ctxState && ctxState.has_session);
+    var used = ctxState ? ctxState.used : ctxTokens();
     var pct = Math.max(0, Math.min(1, used / lmt));
     var lab = q('.wb-ctx-label', el), fg = q('.wb-ctx-ring-fg', el);
-    if (lab) lab.textContent = T('上下文') + ' ' + fmtK(used) + ' / ' + fmtK(lmt);
+    if (lab) lab.textContent = T('上下文') + ' ' + (real ? '' : '~') + fmtK(used) + ' / ' + fmtK(lmt);
     if (fg) fg.style.strokeDashoffset = String(WB_CTX_CIRC * (1 - pct));
     el.classList.toggle('wb-ctx-warn', pct >= 0.6 && pct < 0.85);
     el.classList.toggle('wb-ctx-hot', pct >= 0.85);
-    el.title = T('本会话上下文估算占用 {n}%，接近上限时建议新开会话', { n: Math.round(pct * 100) });
+    el.title = T('本会话上下文占用 {n}%（点击展开分项占比）', { n: Math.round(pct * 100) });
     if (pct >= 0.85 && !ctxWarned) {
       ctxWarned = true;
       try { if (typeof window.showToast === 'function') window.showToast(T('上下文接近上限，建议新开会话'), 'warn'); } catch (e) {}
     }
     if (pct < 0.8) ctxWarned = false;
+    if (q('.wb-ctx-pop', el)) paintCtxPop(el);
+  }
+  function paintCtxPop(el) {
+    var pop = q('.wb-ctx-pop', el);
+    if (!pop) return;
+    var d = ctxState;
+    if (!d || !d.has_session) {
+      pop.innerHTML = '<h4>' + T('上下文占用') + '</h4>' +
+        '<div class="wb-ctx-hint">' + T('暂无会话统计，先发一条消息即可查看分项占用') + '</div>';
+      return;
+    }
+    var rows = '';
+    (d.breakdown || []).forEach(function (b) {
+      if (!b.tokens && !b.count) return;
+      var pctOfTotal = Math.round((b.ratio || 0) * 1000) / 10;
+      rows += '<div class="wb-ctx-row">' +
+        '<span class="wb-ctx-dot" style="background:' + (CTX_COLORS[b.key] || 'rgb(var(--c-ink-4))') + '"></span>' +
+        '<span class="wb-ctx-name">' + T(b.label) + '</span>' +
+        '<span class="wb-ctx-bar"><i style="width:' + Math.max(2, Math.min(100, pctOfTotal)) + '%;background:' +
+          (CTX_COLORS[b.key] || 'rgb(var(--c-ink-4))') + '"></i></span>' +
+        '<span class="wb-ctx-num">' + fmtK(b.tokens) + ' · ' + pctOfTotal + '%</span>' +
+        '</div>';
+    });
+    pop.innerHTML =
+      '<h4><span>' + T('上下文分项占用') + '</span>' +
+        '<span class="wb-ctx-src">' + (d.source === 'real' ? T('API 实测值') : T('本地估算')) + '</span></h4>' +
+      rows +
+      '<div class="wb-ctx-total"><span>' + T('合计') + '</span><span>' +
+        fmtK(d.used) + ' / ' + fmtK(d.limit) + '（' + Math.round((d.ratio || 0) * 100) + '%）</span></div>' +
+      '<div class="wb-ctx-hint">' + T('工具输出占比过高时，可新开会话或清理历史') + '</div>';
+  }
+  function toggleCtxPop() {
+    var el = q('#wb-ctx');
+    if (!el) return;
+    var pop = q('.wb-ctx-pop', el);
+    if (pop) { pop.remove(); return; }
+    pop = document.createElement('div');
+    pop.className = 'wb-ctx-pop';
+    el.appendChild(pop);
+    paintCtxPop(el);
+    fetchCtx();
+    setTimeout(function () {
+      if (!pop.isConnected) return;
+      document.addEventListener('mousedown', function out(e) {
+        if (!pop.isConnected) { document.removeEventListener('mousedown', out); return; }
+        if (el.contains(e.target)) return;
+        pop.remove();
+        document.removeEventListener('mousedown', out);
+      });
+    }, 0);
   }
   function initCtxBar() {
     var composer = q('#composer');
@@ -2125,9 +2219,23 @@
     } else {
       row.appendChild(el);
     }
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('aria-label', T('上下文占用，点击展开分项占比'));
+    el.addEventListener('click', function (e) { e.preventDefault(); toggleCtxPop(); });
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCtxPop(); }
+    });
+
     updCtx();
-    var mo = new MutationObserver(debounce(updCtx, 600));
+    fetchCtx();
+    // 会话切换时后端口径会变，重新取数（debounce 内同时刷新视图与后端）
+    var mo = new MutationObserver(debounce(function () { updCtx(); fetchCtx(); }, 900));
     mo.observe(q('#messages') || document.body, { childList: true, subtree: true, characterData: true });
+    // 空闲期轮询一次，避免"生成结束后数字停在旧值"
+    try {
+      setInterval(function () { if (!document.hidden) fetchCtx(); }, 30000);
+    } catch (e) {}
   }
 
   /* ════════ 21. 运行中排队下一条 ════════

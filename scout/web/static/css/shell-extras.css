@@ -531,6 +531,42 @@
 .wb-ctx.wb-ctx-hot .wb-ctx-ring-fg{stroke:rgb(var(--c-danger))}
 .wb-ctx.wb-ctx-hot .wb-ctx-label{color:rgb(var(--c-danger))}
 
+/* ---------- 20b. 上下文环：可点击展开展示分项占比（2026-09-22） ----------
+   原来只有一个百分比数字，既没口径说明也没法看"到底谁占了"；
+   现在点击弹出分项条：系统提示 / 压缩摘要 / 用户 / 助手 / 工具输出。 */
+.wb-ctx{position:relative; cursor:pointer; user-select:none}
+.wb-ctx:hover .wb-ctx-label{color:rgb(var(--c-ink-2))}
+.wb-ctx-pop{
+  position:absolute; bottom:calc(100% + 10px); left:-6px; z-index:60;
+  min-width:248px; max-width:320px; padding:11px 13px 12px;
+  border-radius:12px; background:rgb(var(--c-surface-2));
+  border:1px solid rgb(var(--c-line-strong));
+  box-shadow:0 10px 26px rgb(var(--c-shadow)/.28);
+  color:rgb(var(--c-ink-1)); font-size:12px; line-height:1.5;
+}
+.wb-ctx-pop[hidden]{display:none}
+.wb-ctx-pop h4{
+  margin:0 0 8px; font-size:12px; font-weight:600; color:rgb(var(--c-ink-1));
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+}
+.wb-ctx-pop .wb-ctx-src{font-weight:400; font-size:11px; color:rgb(var(--c-ink-4))}
+.wb-ctx-row{display:flex; align-items:center; gap:8px; margin-top:6px}
+.wb-ctx-row .wb-ctx-dot{width:8px; height:8px; border-radius:2px; flex:none}
+.wb-ctx-row .wb-ctx-name{flex:none; width:62px; color:rgb(var(--c-ink-2))}
+.wb-ctx-row .wb-ctx-bar{
+  flex:1; height:6px; border-radius:3px; background:rgb(var(--c-surface-4)); overflow:hidden;
+}
+.wb-ctx-row .wb-ctx-bar i{display:block; height:100%; border-radius:3px}
+.wb-ctx-row .wb-ctx-num{
+  flex:none; width:76px; text-align:right; color:rgb(var(--c-ink-3));
+  font-variant-numeric:tabular-nums; font-size:11px;
+}
+.wb-ctx-pop .wb-ctx-total{
+  margin-top:9px; padding-top:8px; border-top:1px solid rgb(var(--c-line));
+  display:flex; justify-content:space-between; font-size:11px; color:rgb(var(--c-ink-3));
+}
+.wb-ctx-pop .wb-ctx-hint{margin-top:7px; font-size:11px; color:rgb(var(--c-ink-4))}
+
 /* ═══ 21. 运行中排队提示 ═══ */
 .wb-queue-chip{
   align-items:center; gap:8px; margin:0 2px 6px;
