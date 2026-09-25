@@ -44,6 +44,26 @@ if defined STALE (
     echo.
 )
 
+rem ------------------------------------------------------------
+rem  前端静态文件编码守卫
+rem
+rem  2026-09 事故后加的硬拦截：曾有一次人工编辑把 scout\web\static 下多个
+rem  HTML 按 GBK 误读重存成双重编码乱码（绯荤粺鐩戞控 = 系统监控），且损坏版
+rem  随 v1.0.0.4 提交进 git。这里在打包前扫描静态文件，发现乱码即阻断，
+rem  避免损坏版再次扩散进 exe / 绿色版。
+rem ------------------------------------------------------------
+echo [0.5/6] 检查前端静态文件编码（防双重编码乱码）...
+python tools\check_html_encoding.py
+if errorlevel 1 (
+    echo.
+    echo  [x] 静态文件存在双重编码乱码，已阻断打包。
+    echo      修复：从干净源（git 历史/其它副本）恢复被损坏文件，
+    echo      切勿用未指定编码的编辑器保存 HTML/JS。
+    echo.
+    pause
+    exit /b 1
+)
+
 echo [1/6] 准备虚拟环境 (.venv-desktop) ...
 if not exist ".venv-desktop" (
     python -m venv .venv-desktop || (echo [x] 创建虚拟环境失败，请确认已安装 Python 3.11+ & pause & exit /b 1)
