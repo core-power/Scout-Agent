@@ -179,6 +179,18 @@ class SessionStore:
                 INSERT INTO messages_fts(rowid, content, session_id)
                 VALUES (new.id, new.content, new.session_id);
             END"""
+            # ★ 2026-09-25：SQLite 分支此前从未建过索引（CREATE INDEX 全都只写在
+            # PG 分支），messages 表全表扫描，会话列表 N+1 一次 800ms+。
+            # IF NOT EXISTS 幂等，存量库下次启动自动补齐，毫秒级开销。
+            script += """;
+            CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id);
+            CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_session_role_seq
+                ON messages(session_id, role, seq);
+            CREATE INDEX IF NOT EXISTS idx_archive_session
+                ON messages_archive(session_id, role)"""
             await self._storage.execute_script(script)
         else:
             # PostgreSQL: 使用 $N 占位符
@@ -211,6 +223,10 @@ class SessionStore:
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
+            -- ★ 2026-09-25：会话列表预览查「该会话首条 user 消息」，
+            -- 单列索引下长会话要全扫 role 过滤；复合索引直达。
+            CREATE INDEX IF NOT EXISTS idx_messages_session_role_seq
+                ON messages(session_id, role, seq);
 
             CREATE TABLE IF NOT EXISTS messages_archive (
                 id SERIAL PRIMARY KEY,
@@ -858,10 +874,14 @@ class SessionStore:
                     )
                     return
 
-            async with db.transaction():
-                await db.execute("DELETE FROM messages WHERE session_id = $1", (session.id,))
+            # ★ 2026-09-24 修复：必须用事务句柄 tx（而非外层 db）执行块内语句。
+            #   ① 外层 db.execute 会重复获取 SQLiteStorage 的连接锁（不可重入）→ 死锁；
+            #   ② 且 db.execute 每条都 commit，会使 DELETE/INSERT 非原子（事务形同虚设）。
+            #   tx.* 不逐条提交，由 transaction() 统一 COMMIT/ROLLBACK，真正保证「全删+全插」原子。
+            async with db.transaction() as tx:
+                await tx.execute("DELETE FROM messages WHERE session_id = $1", (session.id,))
                 if rows:
-                    await db.executemany(
+                    await tx.executemany(
                         "INSERT INTO messages (session_id, role, content, sender, source, reasoning, metadata, timestamp, seq) "
                         "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                         rows,
@@ -928,34 +948,44 @@ class SessionStore:
         )
 
     async def async_list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
-        """列出会话元数据（含首条消息预览）."""
+        """列出会话元数据（含首条消息预览）.
+
+        ★ 2026-09-25 性能修复：原实现每条会话再单独查一次首条消息（N+1），
+        100 个会话 = 101 次 aiosqlite 往返 ≈ 800ms，且 /api/status 3 秒轮询
+        一次，把整个事件循环卡出顿挫。改为单条 SQL 用相关子查询取预览，
+        配合 (session_id, role, seq) 复合索引，每次都是索引直达。
+        """
+        import re as _re
+
         db = await self._ensure_storage()
         rows = await db.fetchall(
-            "SELECT * FROM sessions ORDER BY updated_at DESC LIMIT $1 OFFSET $2",
+            "SELECT s.*, ("
+            " SELECT m.content FROM messages m"
+            " WHERE m.session_id = s.id AND m.role = 'user'"
+            " ORDER BY m.seq ASC LIMIT 1"
+            ") AS _preview_raw "
+            "FROM sessions s ORDER BY s.updated_at DESC LIMIT $1 OFFSET $2",
             (limit, offset),
         )
         results = []
         for row in rows:
             r = dict(row)
+            raw_preview = r.pop("_preview_raw", None)
             if isinstance(r.get("extra"), str):
                 try:
                     r["extra"] = json.loads(r["extra"])
                 except (json.JSONDecodeError, TypeError):
                     r["extra"] = {}
-            # 补充首条消息预览（剥离 runtime_context 系统注入）
+            # 首条消息预览（剥离 runtime_context 系统注入）
             try:
-                first = await db.fetchone(
-                    "SELECT content FROM messages WHERE session_id = $1 AND role = 'user' "
-                    "ORDER BY seq ASC LIMIT 1",
-                    (row["id"],),
-                )
-                if first and first.get("content"):
-                    import re as _re
-                    _c = first["content"]
+                if raw_preview:
+                    _c = raw_preview
                     _c = _re.sub(r"<runtime_context>[\s\S]*?</runtime_context>", "", _c)
                     _c = _re.sub(r"<memories>[\s\S]*?</memories>", "", _c)
                     _c = _re.sub(r"<skills>[\s\S]*?</skills>", "", _c)
                     r["preview"] = _c.strip()[:100]
+                else:
+                    r["preview"] = ""
             except Exception:
                 r["preview"] = ""
             results.append(r)

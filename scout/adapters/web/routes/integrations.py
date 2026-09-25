@@ -210,7 +210,7 @@ class YourPluginName(Plugin):
                     # 尝试直接解析
                     try:
                         result_data = json.loads(result["response"], strict=False)
-                    except:
+                    except Exception:
                         return JSONResponse({"error": "AI 返回格式错误"}, status_code=500)
                 else:
                     json_str = json_match.group(1)
@@ -246,7 +246,13 @@ class YourPluginName(Plugin):
                 if self._agent.memory_store:
                     status["memories"] = len(self._agent.memory_store.list_recent(limit=1000))
                 if self._agent.session_store:
-                    status["sessions"] = len(self._agent.session_store.list_sessions(limit=1000))
+                    # ★ 2026-09-25：改用 async 原生调用。原同步包装 list_sessions()
+                    # 在 async 端点里会 _run_async → 开新线程+新事件循环并阻塞
+                    # 等待（future.result(timeout=30)），每次轮询卡死整个事件循环
+                    # 数百 ms（WebSocket/流式输出一起顿）。
+                    status["sessions"] = len(
+                        await self._agent.session_store.async_list_sessions(limit=1000)
+                    )
                 if self._agent.bus:
                     status["events"] = len(self._agent.bus.get_history(limit=1000))
                 if self._agent.security:
@@ -264,7 +270,7 @@ class YourPluginName(Plugin):
         _net_prev = {"t": 0.0, "sent": 0, "recv": 0}
 
         @self.app.get("/api/system/stats")
-        async def get_system_stats():
+        def get_system_stats():
             """系统资源占用（CPU / 内存 / 磁盘 / 网络）.
 
             「系统监控」页（monitor.html）从它上线起就在轮询这个接口，
@@ -272,6 +278,9 @@ class YourPluginName(Plugin):
             四张指标卡永远停在 0%。psutil 本来就在 requirements 里，
             这里补齐它。psutil 缺失时返回 ok=False，前端据此提示，
             而不是假装有数据。
+
+            ★ 2026-09-25：psutil cpu_percent(interval=0.15) 是阻塞采样，
+            不能放 async def（会卡事件循环 3 秒一次）。改普通 def 走线程池。
             """
             try:
                 import psutil  # 延迟导入：没装也不影响其它接口

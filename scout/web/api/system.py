@@ -12,8 +12,8 @@ last_net_time = None
 
 
 @router.get("/stats")
-async def get_system_stats() -> Dict[str, Any]:
-    """获取系统资源统计"""
+def get_system_stats() -> Dict[str, Any]:
+    """获取系统资源统计（同步 def：psutil 阻塞采样走线程池，不卡事件循环）"""
     
     # CPU 信息
     cpu_percent = psutil.cpu_percent(interval=0.1)
@@ -76,8 +76,8 @@ async def get_system_stats() -> Dict[str, Any]:
 
 
 @router.get("/processes")
-async def get_processes() -> Dict[str, Any]:
-    """获取进程列表"""
+def get_processes() -> Dict[str, Any]:
+    """获取进程列表（同步 def：psutil process_iter 阻塞走线程池）"""
     processes = []
     
     for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'status']):

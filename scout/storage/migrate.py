@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_session_role_seq ON messages(session_id, role, seq);
+CREATE INDEX IF NOT EXISTS idx_archive_session ON messages_archive(session_id, role);
 
 -- 消息归档表
 CREATE TABLE IF NOT EXISTS messages_archive (
