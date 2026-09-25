@@ -17,6 +17,551 @@ import logging
 
 logger = logging.getLogger("scout.adapters.web")
 
+# ── Provider 预设（2026-09-23 自 list_providers 内联提升为模块级）──
+# /api/context/stats 需要 resolve_model_context_length() 按模型查
+# context_length 标定上下文圆环分母，预设必须可跨路由复用。
+_PROVIDER_PRESETS = [
+    {
+        "id": "dashscope",
+        "name": "阿里云 DashScope (百炼)",
+        "default_model": "qwen3.7-plus",
+        "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "models": [
+    {"id": "qwen3.8-max", "name": "Qwen3.8 Max (旗舰·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1000000, "released": "2026-07"},
+    {"id": "qwen3.7-max", "name": "Qwen3.7 Max (旗舰)", "capabilities": ["text","code","reasoning"], "context_length": 1000000, "released": "2026-06"},
+    {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus (多模态·推荐)", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2026-06"},
+    {"id": "qwen3.7-flash", "name": "Qwen3.7 Flash (快速)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2026-06"},
+    {"id": "qwen3-max", "name": "Qwen3 Max", "capabilities": ["text","code","reasoning"], "context_length": 262144, "released": "2025-10"},
+    {"id": "qwen3.6-plus", "name": "Qwen3.6 Plus (多模态)", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2025-08"},
+    {"id": "qwen3-235b-a22b", "name": "Qwen3 235B (开源旗舰·推理)", "capabilities": ["text","code","reasoning"], "context_length": 128000, "released": "2025-04"},
+    {"id": "qwen3-32b", "name": "Qwen3 32B (开源)", "capabilities": ["text","code","reasoning"], "context_length": 128000, "released": "2025-04"},
+    {"id": "qwq-plus", "name": "QwQ Plus (推理专用)", "capabilities": ["text","code","reasoning"], "context_length": 131072, "released": "2025-01"},
+    {"id": "qwen-plus", "name": "通义千问 Plus (高性价比)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2024-05"},
+    {"id": "qwen-turbo", "name": "通义千问 Turbo (最快)", "capabilities": ["text"], "context_length": 1000000, "released": "2024-05"},
+    {"id": "qwen-max", "name": "通义千问 Max", "capabilities": ["text","code"], "context_length": 131072, "released": "2023-11"},
+    {"id": "qwen-long", "name": "通义千问 Long (超长文本)", "capabilities": ["text"], "context_length": 10000000, "released": "2024-05"},
+    {"id": "qwen3-coder-plus", "name": "Qwen3 Coder Plus (代码专用)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2025-04"},
+    {"id": "qwen-coder-plus", "name": "通义千问 Coder", "capabilities": ["text","code"], "context_length": 131072, "released": "2024-05"},
+    {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro (百炼·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1000000, "released": "2026-05"},
+    {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash (百炼·快速)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2026-05"},
+    {"id": "deepseek-v4-flash-0731", "name": "DeepSeek V4 Flash 0731 (百炼)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2026-07"},
+    {"id": "kimi/kimi-k3", "name": "Kimi K3 (百炼·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1048576, "released": "2026-01"},
+    {"id": "glm-5.2", "name": "GLM-5.2 (百炼·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1048576, "released": "2026-04"},
+    {"id": "MiniMax/MiniMax-M3", "name": "MiniMax M3 (百炼)", "capabilities": ["text","code","reasoning"], "released": "2025-12"},
+    {"id": "xiaomi/mimo-v2.5-pro", "name": "小米 MiMo v2.5 Pro (百炼)", "capabilities": ["text","code"], "released": "2025-09"},
+    ],
+        "vision_models": [
+    {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus (推荐)", "context_length": 1000000, "released": "2026-06"},
+    {"id": "qwen3.6-plus", "name": "Qwen3.6 Plus", "context_length": 1000000, "released": "2025-08"},
+    {"id": "qwen-vl-max", "name": "通义千问 VL Max (最强)", "released": "2024-08"},
+    {"id": "qwen-vl-plus", "name": "通义千问 VL Plus", "released": "2024-08"},
+    ],
+        "embedding_models": [
+    {"id": "qwen3.7-text-embedding", "name": "Qwen3.7 Text Embedding (最新)", "released": "2026-07"},
+    {"id": "qwen3-text-embedding-4b", "name": "Qwen3 Text Embedding 4B (1024维)", "released": "2025-05"},
+    {"id": "qwen3-text-embedding-0.6b", "name": "Qwen3 Text Embedding 0.6B (轻量·1024维)", "released": "2025-05"},
+    {"id": "text-embedding-v5", "name": "Text Embedding V5 (1024维·最新)", "released": "2025-11"},
+    {"id": "text-embedding-v4", "name": "Text Embedding V4 (1024维)", "released": "2025-01"},
+    {"id": "text-embedding-v3", "name": "Text Embedding V3 (1024维)", "released": "2024-01"},
+    {"id": "text-embedding-v2", "name": "Text Embedding V2 (1536维)", "released": "2023-01"},
+    ],
+        "image_models": [
+    {"id": "qwen-image-3.0-pro", "name": "Qwen Image 3.0 Pro (最新·高质量)", "released": "2026-03"},
+    {"id": "qwen-image-3.0", "name": "Qwen Image 3.0", "released": "2026-03"},
+    {"id": "qwen-image-2.0-pro", "name": "Qwen Image 2.0 Pro (推荐)", "released": "2026-04"},
+    {"id": "wan2.7-image-pro", "name": "通义万相 2.7 Pro", "released": "2026-01"},
+    {"id": "wan2.7-image", "name": "通义万相 2.7", "released": "2026-01"},
+    {"id": "qwen-image-max", "name": "Qwen Image Max", "released": "2025-12"},
+    {"id": "qwen-image-plus-2026-01-09", "name": "Qwen Image Plus (2026-01)", "released": "2026-01"},
+    ],
+    },
+    {
+        "id": "deepseek",
+        "name": "DeepSeek",
+        "default_model": "deepseek-chat",
+        "default_base_url": "https://api.deepseek.com/v1",
+        "models": [
+    {"id": "deepseek-chat", "name": "DeepSeek-V4 (通用对话·最新)", "capabilities": ["text","code"], "context_length": 131072, "released": "2026-05"},
+    {"id": "deepseek-reasoner", "name": "DeepSeek-R1 (深度推理·满血)", "capabilities": ["text","code","reasoning"], "context_length": 131072, "released": "2025-01"},
+    {"id": "deepseek-v3.1", "name": "DeepSeek-V3.1 (增强版)", "capabilities": ["text","code"], "context_length": 131072, "released": "2025-10"},
+    {"id": "deepseek-r1-distill-llama-70b", "name": "DeepSeek-R1 蒸馏 70B (经济)", "capabilities": ["text","reasoning"], "context_length": 131072, "released": "2025-01"},
+    {"id": "deepseek-r1-distill-qwen-32b", "name": "DeepSeek-R1 蒸馏 32B (经济)", "capabilities": ["text","reasoning"], "context_length": 131072, "released": "2025-01"},
+    ],
+    },
+    {
+        "id": "zhipu",
+        "name": "智谱 BigModel",
+        "default_model": "glm-5.2",
+        "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "models": [
+    {"id": "glm-5.2", "name": "GLM-5.2 (旗舰·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1048576, "released": "2026-04"},
+    {"id": "glm-5-plus", "name": "GLM-5 Plus (增强)", "capabilities": ["text","code","reasoning"], "context_length": 204800, "released": "2025-12"},
+    {"id": "glm-5-flash", "name": "GLM-5 Flash (快速·免费)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2025-12"},
+    {"id": "glm-5", "name": "GLM-5", "capabilities": ["text","code","reasoning"], "context_length": 204800, "released": "2025-09"},
+    {"id": "glm-4-plus", "name": "GLM-4 Plus", "capabilities": ["text","code"], "context_length": 128000, "released": "2024-08"},
+    {"id": "glm-4", "name": "GLM-4", "capabilities": ["text","code"], "context_length": 128000, "released": "2024-06"},
+    {"id": "glm-4-air", "name": "GLM-4 Air (轻量)", "capabilities": ["text"], "context_length": 128000, "released": "2024-06"},
+    {"id": "glm-4-flash", "name": "GLM-4 Flash (免费)", "capabilities": ["text"], "context_length": 128000, "released": "2024-06"},
+    {"id": "glm-4-long", "name": "GLM-4 Long (超长文本)", "capabilities": ["text"], "context_length": 128000, "released": "2024-08"},
+    {"id": "glm-4v-plus", "name": "GLM-4V Plus (视觉理解·最新)", "capabilities": ["text","vision"], "context_length": 128000, "released": "2024-08"},
+    {"id": "glm-4v", "name": "GLM-4V (视觉)", "capabilities": ["text","vision"], "context_length": 128000, "released": "2024-06"},
+    ],
+        "vision_models": [
+    {"id": "glm-4v-plus", "name": "GLM-4V Plus (推荐)", "context_length": 128000, "released": "2024-08"},
+    {"id": "glm-4v", "name": "GLM-4V", "context_length": 128000, "released": "2024-06"},
+    ],
+        "embedding_models": [
+    {"id": "embedding-3", "name": "智谱 Embedding-3 (2048维)", "released": "2024-08"},
+    {"id": "embedding-2", "name": "智谱 Embedding-2 (1024维)", "released": "2023-01"},
+    ],
+        "image_models": [
+    {"id": "cogview-4", "name": "CogView-4 (最新)", "released": "2025-09"},
+    {"id": "cogview-3-plus", "name": "CogView-3 Plus", "released": "2024-12"},
+    {"id": "cogview-3-flash", "name": "CogView-3 Flash (免费)", "released": "2024-12"},
+    ],
+    },
+    {
+        "id": "moonshot",
+        "name": "Moonshot (Kimi)",
+        "default_model": "kimi-k3",
+        "default_base_url": "https://api.moonshot.cn/v1",
+        "models": [
+    {"id": "kimi-k3", "name": "Kimi K3 (旗舰·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1048576, "released": "2026-01"},
+    {"id": "kimi-k2-thinking", "name": "Kimi K2 Thinking (推理增强)", "capabilities": ["text","code","reasoning"], "context_length": 262144, "released": "2025-08"},
+    {"id": "kimi-k2", "name": "Kimi K2", "capabilities": ["text","code","reasoning"], "context_length": 131072, "released": "2025-07"},
+    {"id": "moonshot-v1-8k", "name": "Kimi 8K", "capabilities": ["text","code"], "context_length": 8000, "released": "2023-10"},
+    {"id": "moonshot-v1-32k", "name": "Kimi 32K", "capabilities": ["text","code"], "context_length": 32000, "released": "2023-10"},
+    {"id": "moonshot-v1-128k", "name": "Kimi 128K (超长上下文)", "capabilities": ["text","code"], "context_length": 128000, "released": "2023-10"},
+    {"id": "moonshot-v1-256k", "name": "Kimi 256K (超长上下文)", "capabilities": ["text","code"], "context_length": 256000, "released": "2024-05"},
+    ],
+        "embedding_models": [
+    {"id": "embedding-1", "name": "Moonshot Embedding (1024维)", "released": "2024-03"},
+    ],
+    },
+    {
+        "id": "volcano",
+        "name": "火山引擎 (豆包)",
+        "default_model": "doubao-1.5-pro-32k",
+        "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "models": [
+    {"id": "doubao-1.5-pro-32k", "name": "豆包 1.5 Pro 32K (最新)", "capabilities": ["text","code"], "context_length": 32000, "released": "2025-01"},
+    {"id": "doubao-1.5-pro-256k", "name": "豆包 1.5 Pro 256K (超长)", "capabilities": ["text","code"], "context_length": 256000, "released": "2025-01"},
+    {"id": "doubao-1.5-lite-32k", "name": "豆包 1.5 Lite 32K (经济)", "capabilities": ["text"], "context_length": 32000, "released": "2025-01"},
+    {"id": "doubao-pro-32k", "name": "豆包 Pro 32K", "capabilities": ["text","code"], "context_length": 32000, "released": "2024-05"},
+    {"id": "doubao-pro-128k", "name": "豆包 Pro 128K", "capabilities": ["text","code"], "context_length": 128000, "released": "2024-05"},
+    {"id": "doubao-vision-pro", "name": "豆包 Vision Pro (视觉理解)", "capabilities": ["text","vision"], "context_length": 32000, "released": "2024-08"},
+    {"id": "doubao-1.5-vision-pro-32k", "name": "豆包 1.5 Vision Pro (最新视觉)", "capabilities": ["text","vision"], "context_length": 32000, "released": "2025-01"},
+    ],
+        "vision_models": [
+    {"id": "doubao-1.5-vision-pro-32k", "name": "豆包 1.5 Vision Pro (推荐)", "context_length": 32000, "released": "2025-01"},
+    {"id": "doubao-vision-pro", "name": "豆包 Vision Pro", "context_length": 32000, "released": "2024-08"},
+    ],
+        "embedding_models": [
+    {"id": "doubao-embedding-large-text-250715", "name": "豆包 Embedding Large (1024维·最新)", "released": "2025-07"},
+    {"id": "doubao-embedding-large-text-241215", "name": "豆包 Embedding Large (1024维)", "released": "2024-12"},
+    {"id": "doubao-embedding", "name": "豆包 Embedding (1024维)", "released": "2024-05"},
+    ],
+    },
+    {
+        "id": "openai",
+        "name": "OpenAI",
+        "default_model": "gpt-4o",
+        "default_base_url": "https://api.openai.com/v1",
+        "models": [
+    {"id": "gpt-4.1", "name": "GPT-4.1 (最新·多模态)", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2025-04"},
+    {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini (高性价比)", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2025-04"},
+    {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano (最轻量)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2025-04"},
+    {"id": "o3", "name": "o3 (深度推理·最强)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2025-04"},
+    {"id": "o4-mini", "name": "o4 Mini (推理·快速)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2025-04"},
+    {"id": "gpt-4o", "name": "GPT-4o (多模态)", "capabilities": ["text","vision","code"], "context_length": 128000, "released": "2024-05"},
+    {"id": "gpt-4o-mini", "name": "GPT-4o Mini (高性价比)", "capabilities": ["text","vision","code"], "context_length": 128000, "released": "2024-07"},
+    {"id": "o1", "name": "o1 (推理)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2024-09"},
+    {"id": "o1-mini", "name": "o1 Mini (推理)", "capabilities": ["text","reasoning"], "context_length": 128000, "released": "2024-09"},
+    {"id": "o3-mini", "name": "o3 Mini (推理)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2025-01"},
+    {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "capabilities": ["text","vision","code"], "context_length": 128000, "released": "2023-11"},
+    ],
+        "vision_models": [
+    {"id": "gpt-4.1", "name": "GPT-4.1 (推荐)", "context_length": 1000000, "released": "2025-04"},
+    {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "context_length": 1000000, "released": "2025-04"},
+    {"id": "gpt-4o", "name": "GPT-4o", "context_length": 128000, "released": "2024-05"},
+    {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "context_length": 128000, "released": "2024-07"},
+    ],
+        "embedding_models": [
+    {"id": "text-embedding-3-large", "name": "Embedding 3 Large (3072维)", "released": "2024-01"},
+    {"id": "text-embedding-3-small", "name": "Embedding 3 Small (1536维)", "released": "2024-01"},
+    {"id": "text-embedding-ada-002", "name": "Embedding Ada 002 (1536维·经典)", "released": "2022-12"},
+    ],
+        "image_models": [
+    {"id": "gpt-image-1", "name": "GPT Image 1 (最新)", "released": "2025-04"},
+    {"id": "dall-e-3", "name": "DALL-E 3 (高质量)", "released": "2023-10"},
+    {"id": "dall-e-2", "name": "DALL-E 2 (经济)", "released": "2022-11"},
+    ],
+    },
+    {
+        "id": "claude",
+        "name": "Anthropic Claude",
+        "default_model": "claude-sonnet-4-20250514",
+        "default_base_url": "https://api.anthropic.com/v1",
+        "models": [
+    {"id": "claude-opus-4-20250514", "name": "Claude Opus 4 (最强·最新)", "capabilities": ["text","vision","code","reasoning"], "context_length": 200000, "released": "2025-05"},
+    {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4 (推荐·最新)", "capabilities": ["text","vision","code","reasoning"], "context_length": 200000, "released": "2025-05"},
+    {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "capabilities": ["text","vision","code"], "context_length": 200000, "released": "2024-10"},
+    {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku (快速)", "capabilities": ["text","vision","code"], "context_length": 200000, "released": "2024-10"},
+    {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus", "capabilities": ["text","vision","code"], "context_length": 200000, "released": "2024-02"},
+    ],
+        "vision_models": [
+    {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4 (推荐)", "context_length": 200000, "released": "2025-05"},
+    {"id": "claude-opus-4-20250514", "name": "Claude Opus 4", "context_length": 200000, "released": "2025-05"},
+    {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "context_length": 200000, "released": "2024-10"},
+    ],
+    },
+    {
+        "id": "gemini",
+        "name": "Google Gemini",
+        "default_model": "gemini-2.5-pro",
+        "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "models": [
+    {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro (旗舰·最新·推理)", "capabilities": ["text","vision","code","reasoning"], "context_length": 2000000, "released": "2025-03"},
+    {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash (快速·推理·最新)", "capabilities": ["text","vision","code","reasoning"], "context_length": 1048576, "released": "2025-03"},
+    {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash (多模态)", "capabilities": ["text","vision","code"], "context_length": 1048576, "released": "2024-12"},
+    {"id": "gemini-2.0-flash-thinking-exp", "name": "Gemini 2.0 Thinking (推理实验)", "capabilities": ["text","vision","code","reasoning"], "context_length": 1048576, "released": "2024-12"},
+    {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro (超长上下文)", "capabilities": ["text","vision","code"], "context_length": 2000000, "released": "2024-02"},
+    {"id": "gemini-1.5-flash", "name": "Gemini 1.5 Flash", "capabilities": ["text","vision","code"], "context_length": 1048576, "released": "2024-02"},
+    ],
+        "vision_models": [
+    {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro (推荐)", "released": "2025-03"},
+    {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "context_length": 1048576, "released": "2025-03"},
+    {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "context_length": 1048576, "released": "2024-12"},
+    ],
+        "embedding_models": [
+    {"id": "gemini-embedding-001", "name": "Gemini Embedding (最新·3072维)", "released": "2025-10"},
+    {"id": "text-embedding-004", "name": "Gemini Text Embedding (768维)", "released": "2024-12"},
+    {"id": "text-embedding-001", "name": "Gemini Text Embedding 001 (旧版)", "released": "2023-12"},
+    ],
+    },
+    {
+        "id": "openrouter",
+        "name": "OpenRouter (聚合)",
+        "default_model": "anthropic/claude-sonnet-4",
+        "default_base_url": "https://openrouter.ai/api/v1",
+        "models": [
+    {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4", "capabilities": ["text","vision","code","reasoning"], "context_length": 200000, "released": "2025-05"},
+    {"id": "anthropic/claude-opus-4", "name": "Claude Opus 4 (最强)", "capabilities": ["text","vision","code","reasoning"], "context_length": 200000, "released": "2025-05"},
+    {"id": "google/gemini-2.5-pro", "name": "Gemini 2.5 Pro", "capabilities": ["text","vision","code","reasoning"], "context_length": 1048576, "released": "2025-03"},
+    {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash", "capabilities": ["text","vision","code","reasoning"], "context_length": 1048576, "released": "2025-03"},
+    {"id": "openai/gpt-4.1", "name": "GPT-4.1", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2025-04"},
+    {"id": "openai/o3", "name": "o3 (推理)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2025-04"},
+    {"id": "qwen/qwen3-235b-a22b", "name": "Qwen3 235B (开源旗舰)", "capabilities": ["text","code","reasoning"], "context_length": 128000, "released": "2025-04"},
+    {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1", "capabilities": ["text","code","reasoning"], "context_length": 128000, "released": "2025-01"},
+    {"id": "deepseek/deepseek-chat", "name": "DeepSeek V3", "capabilities": ["text","code"], "context_length": 128000, "released": "2024-12"},
+    {"id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B", "capabilities": ["text","code"], "context_length": 131072, "released": "2024-12"},
+    {"id": "google/gemini-2.0-flash-exp:free", "name": "Gemini 2.0 Flash (免费)", "capabilities": ["text","vision","code"], "context_length": 1048576, "released": "2024-12"},
+    ],
+        "embedding_models": [
+    {"id": "openai/text-embedding-3-large", "name": "Embedding 3 Large", "released": "2024-01"},
+    {"id": "openai/text-embedding-3-small", "name": "Embedding 3 Small", "released": "2024-01"},
+    ],
+    },
+    ]
+
+
+def _resolve_ctx_with_source(provider: str, model: str) -> tuple[int, str]:
+    """查模型上下文窗口，返回 (tokens, source).
+
+    source ∈ {"name", "preset", ""}：
+      - "name"  = 由模型名自带的窗口后缀推断（doubao-pro-32k → 32000）
+      - "preset"= 命中厂商预设目录里标注的 context_length
+      - ""      = 都没命中，由调用方回退默认值
+    ★ 2026-09-23：/api/context/stats 据此把上下文圆环的分母跟随当前所选模型
+    （如 doubao-pro-32k → 32000），而不是恒用 128000——否则 32k 模型的占用
+    百分比会低估 4 倍。预设原内联在 list_providers 里，为复用提升为模块级。
+    """
+    p = str(provider or "").strip().lower()
+    m = str(model or "").strip()
+    if not p or not m:
+        return 0, ""
+    # ① 先按模型名自带的窗口后缀推断（自定义端点/未收录模型也能认出来）：
+    #    doubao-pro-32k → 32000、xxx-128k → 128000、gemini-1m → 1000000
+    #    注意只匹配 k/m 单位后缀，避免把参数量（qwen3.8-27b 的 27b）误当窗口
+    import re as _re
+    _mm = _re.search(r"[-_@](\d+(?:\.\d+)?)\s*([km])(?:[-_]|$)", m.lower())
+    if _mm:
+        try:
+            num = float(_mm.group(1))
+            unit = _mm.group(2)
+            if unit == "k" and 4 <= num <= 10000:
+                return int(num * 1000), "name"
+            if unit == "m" and 1 <= num <= 10:
+                return int(num * 1000000), "name"
+        except (TypeError, ValueError):
+            pass
+    for preset in _PROVIDER_PRESETS:
+        if str(preset.get("id", "")).lower() != p:
+            continue
+        for mm in preset.get("models", []):
+            if str(mm.get("id", "")) == m:
+                try:
+                    return int(mm.get("context_length") or 0), "preset"
+                except (TypeError, ValueError):
+                    return 0, ""
+    return 0, ""
+
+
+def resolve_model_context_length(provider: str, model: str) -> int:
+    """只取窗口数值（无标注返回 0，由调用方回退默认值）— 兼容旧调用方。"""
+    return _resolve_ctx_with_source(provider, model)[0]
+
+
+def capability_key(provider: str, model: str) -> str:
+    """模型能力覆盖表的键：``<provider>:<model>``（provider 空时用 ``*``）."""
+    return f"{str(provider or '').strip().lower() or '*'}:{str(model or '').strip()}"
+
+
+# ── 思考强度：统一档位 → 各家参数（2026-09-24）──
+# 各家参数名完全不同（Qwen 用 thinking_budget、OpenAI o/GPT-5 用 reasoning_effort、
+# Claude 用 thinking.budget_tokens、OpenRouter 用 reasoning.effort），发错参数会 400。
+# 因此 UI 只暴露统一档位，由这里按厂商翻译成该模型认识的参数。
+_THINKING_BUDGETS = {"low": 1024, "medium": 8192, "high": 32768}
+
+
+def resolve_thinking_style(provider: str, model: str) -> str:
+    """判定模型的思考参数风格.
+
+    返回其一：
+      qwen          — enable_thinking + thinking_budget（Qwen3 / 百炼 DashScope）
+      openai        — reasoning_effort（o1/o3/o4/GPT-5，不接受 enable_thinking）
+      anthropic     — thinking.{type,budget_tokens}（Claude；OpenRouter 走 openrouter）
+      openrouter    — reasoning.{effort}（OpenRouter 聚合层，模型名含 "/"）
+      gemini        — reasoning_effort（Google OpenAI 兼容层）
+      bool_only     — 仅 enable_thinking 布尔（DeepSeek / GLM / Kimi / 其它）
+    """
+    p = str(provider or "").strip().lower()
+    m = str(model or "").strip().lower()
+    if p == "openrouter" or ("/" in m and not m.startswith("anthropic/") and p not in ("dashscope",)):
+        return "openrouter"
+    if p in ("claude", "anthropic") or m.startswith("anthropic/") or m.startswith("claude"):
+        return "anthropic"
+    if p in ("gemini", "google") or m.startswith("gemini") or m.startswith("google/"):
+        return "gemini"
+    if p == "openai" or m.startswith("gpt-5"):
+        return "openai"
+    import re as _re2
+    if _re2.match(r"^o\d", m):
+        return "openai"
+    if p in ("dashscope", "qwen", "bailian") or m.startswith("qwen"):
+        return "qwen"
+    return "bool_only"
+
+
+def build_thinking_extra(style: str, effort: str) -> tuple[dict, str]:
+    """把统一档位翻译成该模型的请求参数.
+
+    返回 (extra_body, 人类可读说明)。extra_body 为空 dict 表示不注入任何参数
+    （auto：由模型/服务端默认决定）。
+    """
+    e = str(effort or "auto").strip().lower()
+    if e not in ("off", "low", "medium", "high"):
+        return {}, "未注入（auto：沿用模型默认）"
+    if style == "openai":
+        # o 系列 / GPT-5：只能给 reasoning_effort，且推理无法完全关闭
+        lvl = "low" if e == "off" else e
+        return {"reasoning_effort": lvl}, f"reasoning_effort={lvl}" + (
+            "（该系列无法完全关闭推理，off 已按 low 发送）" if e == "off" else "")
+    if style == "anthropic":
+        if e == "off":
+            return {"thinking": {"type": "disabled"}}, "thinking.type=disabled"
+        return (
+            {"thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGETS[e]}},
+            f"thinking.type=enabled, budget_tokens={_THINKING_BUDGETS[e]}",
+        )
+    if style == "openrouter":
+        if e == "off":
+            return {"reasoning": {"effort": "low"}}, "reasoning.effort=low（该通道不支持完全关闭）"
+        return {"reasoning": {"effort": e}}, f"reasoning.effort={e}"
+    if style == "gemini":
+        lvl = "low" if e == "off" else e
+        return {"reasoning_effort": lvl}, f"reasoning_effort={lvl}"
+    if style == "qwen":
+        if e == "off":
+            return {"enable_thinking": False}, "enable_thinking=false"
+        return (
+            {"enable_thinking": True, "thinking_budget": _THINKING_BUDGETS[e]},
+            f"enable_thinking=true, thinking_budget={_THINKING_BUDGETS[e]}",
+        )
+    # bool_only：DeepSeek / GLM / Kimi / 未收录模型 —— 只有开关，没有 budget
+    if e == "off":
+        return {"enable_thinking": False}, "enable_thinking=false（该模型不支持强度分档）"
+    return (
+        {"enable_thinking": True},
+        "enable_thinking=true（该模型不支持强度分档，仅开关思维链）",
+    )
+
+
+def resolve_model_vision(provider: str, model: str) -> tuple[bool, str]:
+    """判定模型是否支持图片输入，返回 (bool, source).
+
+    source ∈ {"preset", "name", ""}（"" = 判断不了，按不支持处理，用户可在设置里改）。
+    """
+    p = str(provider or "").strip().lower()
+    m = str(model or "").strip()
+    ml = m.lower()
+    for preset in _PROVIDER_PRESETS:
+        if str(preset.get("id", "")).lower() != p:
+            continue
+        for mm in preset.get("models", []):
+            if str(mm.get("id", "")) == m:
+                caps = mm.get("capabilities") or []
+                return ("vision" in caps), "preset"
+    # 未收录：按模型名特征猜（视觉模型命名有规律）
+    if any(k in ml for k in ("-vl", "vision", "4o", "4.1", "gpt-5", "claude-3",
+                             "claude-sonnet-4", "claude-opus-4", "gemini", "qwen3.7-plus",
+                             "qwen3.6-plus", "glm-4v", "doubao-1.5-vision")):
+        return True, "name"
+    return False, ""
+
+
+# ── 厂商推荐视觉兜底模型（2026-09-24）────────────────────────────────────
+# 主模型不支持图片输入且用户未显式配置时，自动用该厂商的视觉模型
+# "识图成文字"再交给主模型（三级兜底的第二级）。只推荐同厂商模型——
+# 复用主厂商的 api_key/base_url，不引入跨厂商凭据复杂度。
+# 原则：选该厂商官方在售的轻量 VL（兜底场景是"描述图片"，不需要旗舰）；
+# 无视觉 API 的厂商（deepseek 等）不设条目 → 路由判 none。
+_VISION_FALLBACKS: dict[str, str] = {
+    "dashscope": "qwen-vl-max",
+    "openai": "gpt-4o-mini",
+    "volcano": "doubao-1.5-vision-pro-32k",
+    "zhipu": "glm-4v-plus",
+    "gemini": "gemini-2.5-flash",
+    "openrouter": "google/gemini-2.5-flash",
+}
+
+
+def resolve_vision_fallback(provider: str) -> str:
+    """返回该厂商的推荐视觉兜底模型 id；无则空串."""
+    p = str(provider or "").strip().lower()
+    return _VISION_FALLBACKS.get(p, "")
+
+
+def resolve_vision_route(cfg) -> dict:
+    """视觉路由统一判定（三级兜底），vision 工具/desktop/capabilities 共用.
+
+    返回 {path, model, base_url, source}:
+      path ∈ {"main", "fallback", "none"}
+        main     — 主模型直收图片（最优路径）
+        fallback — 由视觉模型先识图成文字再交主模型
+        none     — 无任何可用路径
+      model/base_url — 实际执行 VL 调用应使用的模型与端点（main 时=主模型）
+      source ∈ {"user", "override", "preset", "name", "auto-fallback", ""}
+
+    优先级（2026-09-24 设计定稿）：
+      ① 旧配置显式填了 vision_model → fallback(该模型)（兼容不动）
+      ② 用户明确开启 override=True → main
+      ③ 用户明确关闭 override=False → none（尊重用户，不做兜底）
+      ④ 未设置 + 主模型支持视觉（预设/名称）→ main
+      ⑤ 未设置 + 不支持 + 厂商有推荐视觉模型 → fallback(推荐)
+      ⑥ 都不满足 → none
+    """
+    provider = (getattr(cfg, "vision_provider", "") or getattr(cfg, "provider", "") or "").strip()
+    model = (getattr(cfg, "model", "") or "").strip()
+    base_url = (getattr(cfg, "base_url", "") or "").strip()
+
+    # ① 显式 vision_model 兼容（沿用旧行为：非空即用）
+    vision_model = (getattr(cfg, "vision_model", "") or "").strip()
+    if vision_model:
+        return {"path": "fallback", "model": vision_model,
+                "base_url": base_url, "source": "user"}
+
+    overrides = getattr(cfg, "model_vision_overrides", None) or {}
+    key = f"{provider}:{model}"
+    forced = overrides.get(key)
+    if isinstance(forced, bool):
+        if forced:
+            return {"path": "main", "model": model, "base_url": base_url,
+                    "source": "override"}
+        return {"path": "none", "model": "", "base_url": base_url,
+                "source": "override"}
+
+    try:
+        ok, src = resolve_model_vision(provider, model)
+    except Exception:  # noqa: BLE001 — 判定失败按不支持继续走兜底
+        ok, src = False, ""
+    if ok:
+        return {"path": "main", "model": model, "base_url": base_url,
+                "source": src or "preset"}
+
+    # ⑤ 厂商推荐兜底
+    fb = resolve_vision_fallback(provider)
+    if fb:
+        return {"path": "fallback", "model": fb, "base_url": base_url,
+                "source": "auto-fallback"}
+    return {"path": "none", "model": "", "base_url": base_url, "source": ""}
+
+
+def resolve_model_capabilities(
+    provider: str,
+    model: str,
+    context_overrides: dict | None = None,
+    vision_overrides: dict | None = None,
+    effort: str = "auto",
+    vision_model: str = "",
+) -> dict:
+    """汇总一个模型的三项可配能力（供设置 UI 与 /api/context/stats 复用）."""
+    key = capability_key(provider, model)
+    ctx_over = (context_overrides or {}).get(key) or 0
+    try:
+        ctx_over = int(ctx_over)
+    except (TypeError, ValueError):
+        ctx_over = 0
+    if ctx_over > 0:
+        ctx, ctx_src = ctx_over, "user"
+    else:
+        ctx, ctx_src = _resolve_ctx_with_source(provider, model)
+    if ctx <= 0:
+        ctx, ctx_src = 0, ""
+
+    vis_over = (vision_overrides or {}).get(key)
+    if isinstance(vis_over, bool):
+        vision, vis_src = vis_over, "user"
+    else:
+        vision, vis_src = resolve_model_vision(provider, model)
+
+    style = resolve_thinking_style(provider, model)
+    extra, applied = build_thinking_extra(style, effort)
+
+    # 视觉路由三态（main/fallback/none + 实际生效模型）供 UI 展示。
+    # ★ vision_model：带上已保存的手动兜底（2026-09-24 方案 A），否则 UI 会把
+    #   用户手动选的兜底模型误显示成"自动推荐"的那个。
+    from types import SimpleNamespace as _CapCfg
+    route = resolve_vision_route(_CapCfg(
+        vision_provider="",
+        provider=str(provider or ""),
+        model=str(model or ""),
+        base_url="",
+        vision_model=str(vision_model or ""),
+        model_vision_overrides=dict(vision_overrides or {}),
+    ))
+    return {
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "context_length": ctx,
+        "context_source": ctx_src,  # user / preset / name / ""（未识别）
+        "thinking_style": style,
+        "thinking_effort": effort,
+        "thinking_extra": extra,
+        "thinking_applied": applied,
+        "thinking_supported_levels": (
+            ["auto", "off", "low", "medium", "high"]
+        ),
+        "vision": vision,
+        "vision_source": vis_src,  # user / preset / name / ""
+        "vision_route": route["path"],  # main / fallback / none
+        "vision_route_model": (
+            route["model"] if route["path"] == "fallback" else ""
+        ),
+        "vision_route_source": route["source"],  # user / auto-fallback / ...
+    }
+
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -101,6 +646,32 @@ class ConfigRoutes:
                 mode = str(req["agent_mode"]).strip().lower()
                 if mode in ("react", "multi_agent"):
                     config.agent_mode = mode
+            # ── 模型能力（2026-09-24）：上下文窗口 / 思考强度 / 视觉，按模型记忆 ──
+            if "model_context_overrides" in req and isinstance(req["model_context_overrides"], dict):
+                over = getattr(config, "model_context_overrides", None) or {}
+                over = dict(over)
+                for k, v in req["model_context_overrides"].items():
+                    try:
+                        n = int(v)
+                    except (TypeError, ValueError):
+                        continue
+                    if n > 0:
+                        over[str(k)] = n
+                    else:
+                        over.pop(str(k), None)  # 0/空 = 清除覆盖，回到自动识别
+                config.model_context_overrides = over
+            if "model_vision_overrides" in req and isinstance(req["model_vision_overrides"], dict):
+                vover = dict(getattr(config, "model_vision_overrides", None) or {})
+                for k, v in req["model_vision_overrides"].items():
+                    if v is None:
+                        vover.pop(str(k), None)  # null = 清除覆盖，回到自动判断
+                    else:
+                        vover[str(k)] = bool(v)
+                config.model_vision_overrides = vover
+            if "reasoning_effort" in req:
+                eff = str(req["reasoning_effort"] or "auto").strip().lower()
+                if eff in ("auto", "off", "low", "medium", "high"):
+                    config.reasoning_effort = eff
             if "vision_model" in req:
                 config.vision_model = req["vision_model"]
             if "embedding_model" in req:
@@ -280,249 +851,7 @@ class ConfigRoutes:
                 """按 released 降序排列，无日期的排最后."""
                 return sorted(models, key=lambda m: m.get("released", "0000-00"), reverse=True)
 
-            raw_providers = [
-                {
-                    "id": "dashscope",
-                    "name": "阿里云 DashScope (百炼)",
-                    "default_model": "qwen3.7-plus",
-                    "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                    "models": [
-                {"id": "qwen3.8-max", "name": "Qwen3.8 Max (旗舰·最新)", "capabilities": ["text","code","reasoning"], "released": "2026-07"},
-                {"id": "qwen3.7-max", "name": "Qwen3.7 Max (旗舰)", "capabilities": ["text","code","reasoning"], "released": "2026-06"},
-                {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus (多模态·推荐)", "capabilities": ["text","vision","code"], "released": "2026-06"},
-                {"id": "qwen3.7-flash", "name": "Qwen3.7 Flash (快速)", "capabilities": ["text","code"], "released": "2026-06"},
-                {"id": "qwen3-max", "name": "Qwen3 Max", "capabilities": ["text","code","reasoning"], "released": "2025-10"},
-                {"id": "qwen3.6-plus", "name": "Qwen3.6 Plus (多模态)", "capabilities": ["text","vision","code"], "released": "2025-08"},
-                {"id": "qwen3-235b-a22b", "name": "Qwen3 235B (开源旗舰·推理)", "capabilities": ["text","code","reasoning"], "released": "2025-04"},
-                {"id": "qwen3-32b", "name": "Qwen3 32B (开源)", "capabilities": ["text","code","reasoning"], "released": "2025-04"},
-                {"id": "qwq-plus", "name": "QwQ Plus (推理专用)", "capabilities": ["text","code","reasoning"], "released": "2025-01"},
-                {"id": "qwen-plus", "name": "通义千问 Plus (高性价比)", "capabilities": ["text","code"], "released": "2024-05"},
-                {"id": "qwen-turbo", "name": "通义千问 Turbo (最快)", "capabilities": ["text"], "released": "2024-05"},
-                {"id": "qwen-max", "name": "通义千问 Max", "capabilities": ["text","code"], "released": "2023-11"},
-                {"id": "qwen-long", "name": "通义千问 Long (超长文本)", "capabilities": ["text"], "context_length": 10000000, "released": "2024-05"},
-                {"id": "qwen3-coder-plus", "name": "Qwen3 Coder Plus (代码专用)", "capabilities": ["text","code"], "released": "2025-04"},
-                {"id": "qwen-coder-plus", "name": "通义千问 Coder", "capabilities": ["text","code"], "released": "2024-05"},
-                {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro (百炼·最新)", "capabilities": ["text","code","reasoning"], "released": "2026-05"},
-                {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash (百炼·快速)", "capabilities": ["text","code"], "released": "2026-05"},
-                {"id": "deepseek-v4-flash-0731", "name": "DeepSeek V4 Flash 0731 (百炼)", "capabilities": ["text","code"], "released": "2026-07"},
-                {"id": "kimi/kimi-k3", "name": "Kimi K3 (百炼·最新)", "capabilities": ["text","code","reasoning"], "released": "2026-01"},
-                {"id": "glm-5.2", "name": "GLM-5.2 (百炼·最新)", "capabilities": ["text","code","reasoning"], "released": "2026-04"},
-                {"id": "MiniMax/MiniMax-M3", "name": "MiniMax M3 (百炼)", "capabilities": ["text","code","reasoning"], "released": "2025-12"},
-                {"id": "xiaomi/mimo-v2.5-pro", "name": "小米 MiMo v2.5 Pro (百炼)", "capabilities": ["text","code"], "released": "2025-09"},
-                ],
-                    "vision_models": [
-                {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus (推荐)", "released": "2026-06"},
-                {"id": "qwen3.6-plus", "name": "Qwen3.6 Plus", "released": "2025-08"},
-                {"id": "qwen-vl-max", "name": "通义千问 VL Max (最强)", "released": "2024-08"},
-                {"id": "qwen-vl-plus", "name": "通义千问 VL Plus", "released": "2024-08"},
-                ],
-                    "embedding_models": [
-                {"id": "qwen3.7-text-embedding", "name": "Qwen3.7 Text Embedding (最新)", "released": "2026-07"},
-                {"id": "qwen3-text-embedding-4b", "name": "Qwen3 Text Embedding 4B (1024维)", "released": "2025-05"},
-                {"id": "qwen3-text-embedding-0.6b", "name": "Qwen3 Text Embedding 0.6B (轻量·1024维)", "released": "2025-05"},
-                {"id": "text-embedding-v5", "name": "Text Embedding V5 (1024维·最新)", "released": "2025-11"},
-                {"id": "text-embedding-v4", "name": "Text Embedding V4 (1024维)", "released": "2025-01"},
-                {"id": "text-embedding-v3", "name": "Text Embedding V3 (1024维)", "released": "2024-01"},
-                {"id": "text-embedding-v2", "name": "Text Embedding V2 (1536维)", "released": "2023-01"},
-                ],
-                    "image_models": [
-                {"id": "qwen-image-3.0-pro", "name": "Qwen Image 3.0 Pro (最新·高质量)", "released": "2026-03"},
-                {"id": "qwen-image-3.0", "name": "Qwen Image 3.0", "released": "2026-03"},
-                {"id": "qwen-image-2.0-pro", "name": "Qwen Image 2.0 Pro (推荐)", "released": "2026-04"},
-                {"id": "wan2.7-image-pro", "name": "通义万相 2.7 Pro", "released": "2026-01"},
-                {"id": "wan2.7-image", "name": "通义万相 2.7", "released": "2026-01"},
-                {"id": "qwen-image-max", "name": "Qwen Image Max", "released": "2025-12"},
-                {"id": "qwen-image-plus-2026-01-09", "name": "Qwen Image Plus (2026-01)", "released": "2026-01"},
-                ],
-                },
-                {
-                    "id": "deepseek",
-                    "name": "DeepSeek",
-                    "default_model": "deepseek-chat",
-                    "default_base_url": "https://api.deepseek.com/v1",
-                    "models": [
-                {"id": "deepseek-chat", "name": "DeepSeek-V4 (通用对话·最新)", "capabilities": ["text","code"], "released": "2026-05"},
-                {"id": "deepseek-reasoner", "name": "DeepSeek-R1 (深度推理·满血)", "capabilities": ["text","code","reasoning"], "released": "2025-01"},
-                {"id": "deepseek-v3.1", "name": "DeepSeek-V3.1 (增强版)", "capabilities": ["text","code"], "released": "2025-10"},
-                {"id": "deepseek-r1-distill-llama-70b", "name": "DeepSeek-R1 蒸馏 70B (经济)", "capabilities": ["text","reasoning"], "released": "2025-01"},
-                {"id": "deepseek-r1-distill-qwen-32b", "name": "DeepSeek-R1 蒸馏 32B (经济)", "capabilities": ["text","reasoning"], "released": "2025-01"},
-                ],
-                },
-                {
-                    "id": "zhipu",
-                    "name": "智谱 BigModel",
-                    "default_model": "glm-5.2",
-                    "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
-                    "models": [
-                {"id": "glm-5.2", "name": "GLM-5.2 (旗舰·最新)", "capabilities": ["text","code","reasoning"], "released": "2026-04"},
-                {"id": "glm-5-plus", "name": "GLM-5 Plus (增强)", "capabilities": ["text","code","reasoning"], "released": "2025-12"},
-                {"id": "glm-5-flash", "name": "GLM-5 Flash (快速·免费)", "capabilities": ["text","code"], "released": "2025-12"},
-                {"id": "glm-5", "name": "GLM-5", "capabilities": ["text","code","reasoning"], "released": "2025-09"},
-                {"id": "glm-4-plus", "name": "GLM-4 Plus", "capabilities": ["text","code"], "released": "2024-08"},
-                {"id": "glm-4", "name": "GLM-4", "capabilities": ["text","code"], "released": "2024-06"},
-                {"id": "glm-4-air", "name": "GLM-4 Air (轻量)", "capabilities": ["text"], "released": "2024-06"},
-                {"id": "glm-4-flash", "name": "GLM-4 Flash (免费)", "capabilities": ["text"], "released": "2024-06"},
-                {"id": "glm-4-long", "name": "GLM-4 Long (超长文本)", "capabilities": ["text"], "context_length": 128000, "released": "2024-08"},
-                {"id": "glm-4v-plus", "name": "GLM-4V Plus (视觉理解·最新)", "capabilities": ["text","vision"], "released": "2024-08"},
-                {"id": "glm-4v", "name": "GLM-4V (视觉)", "capabilities": ["text","vision"], "released": "2024-06"},
-                ],
-                    "vision_models": [
-                {"id": "glm-4v-plus", "name": "GLM-4V Plus (推荐)", "released": "2024-08"},
-                {"id": "glm-4v", "name": "GLM-4V", "released": "2024-06"},
-                ],
-                    "embedding_models": [
-                {"id": "embedding-3", "name": "智谱 Embedding-3 (2048维)", "released": "2024-08"},
-                {"id": "embedding-2", "name": "智谱 Embedding-2 (1024维)", "released": "2023-01"},
-                ],
-                    "image_models": [
-                {"id": "cogview-4", "name": "CogView-4 (最新)", "released": "2025-09"},
-                {"id": "cogview-3-plus", "name": "CogView-3 Plus", "released": "2024-12"},
-                {"id": "cogview-3-flash", "name": "CogView-3 Flash (免费)", "released": "2024-12"},
-                ],
-                },
-                {
-                    "id": "moonshot",
-                    "name": "Moonshot (Kimi)",
-                    "default_model": "kimi-k3",
-                    "default_base_url": "https://api.moonshot.cn/v1",
-                    "models": [
-                {"id": "kimi-k3", "name": "Kimi K3 (旗舰·最新)", "capabilities": ["text","code","reasoning"], "released": "2026-01"},
-                {"id": "kimi-k2-thinking", "name": "Kimi K2 Thinking (推理增强)", "capabilities": ["text","code","reasoning"], "released": "2025-08"},
-                {"id": "kimi-k2", "name": "Kimi K2", "capabilities": ["text","code","reasoning"], "released": "2025-07"},
-                {"id": "moonshot-v1-8k", "name": "Kimi 8K", "capabilities": ["text","code"], "context_length": 8000, "released": "2023-10"},
-                {"id": "moonshot-v1-32k", "name": "Kimi 32K", "capabilities": ["text","code"], "context_length": 32000, "released": "2023-10"},
-                {"id": "moonshot-v1-128k", "name": "Kimi 128K (超长上下文)", "capabilities": ["text","code"], "context_length": 128000, "released": "2023-10"},
-                {"id": "moonshot-v1-256k", "name": "Kimi 256K (超长上下文)", "capabilities": ["text","code"], "context_length": 256000, "released": "2024-05"},
-                ],
-                    "embedding_models": [
-                {"id": "embedding-1", "name": "Moonshot Embedding (1024维)", "released": "2024-03"},
-                ],
-                },
-                {
-                    "id": "volcano",
-                    "name": "火山引擎 (豆包)",
-                    "default_model": "doubao-1.5-pro-32k",
-                    "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
-                    "models": [
-                {"id": "doubao-1.5-pro-32k", "name": "豆包 1.5 Pro 32K (最新)", "capabilities": ["text","code"], "context_length": 32000, "released": "2025-01"},
-                {"id": "doubao-1.5-pro-256k", "name": "豆包 1.5 Pro 256K (超长)", "capabilities": ["text","code"], "context_length": 256000, "released": "2025-01"},
-                {"id": "doubao-1.5-lite-32k", "name": "豆包 1.5 Lite 32K (经济)", "capabilities": ["text"], "context_length": 32000, "released": "2025-01"},
-                {"id": "doubao-pro-32k", "name": "豆包 Pro 32K", "capabilities": ["text","code"], "context_length": 32000, "released": "2024-05"},
-                {"id": "doubao-pro-128k", "name": "豆包 Pro 128K", "capabilities": ["text","code"], "context_length": 128000, "released": "2024-05"},
-                {"id": "doubao-vision-pro", "name": "豆包 Vision Pro (视觉理解)", "capabilities": ["text","vision"], "released": "2024-08"},
-                {"id": "doubao-1.5-vision-pro-32k", "name": "豆包 1.5 Vision Pro (最新视觉)", "capabilities": ["text","vision"], "released": "2025-01"},
-                ],
-                    "vision_models": [
-                {"id": "doubao-1.5-vision-pro-32k", "name": "豆包 1.5 Vision Pro (推荐)", "released": "2025-01"},
-                {"id": "doubao-vision-pro", "name": "豆包 Vision Pro", "released": "2024-08"},
-                ],
-                    "embedding_models": [
-                {"id": "doubao-embedding-large-text-250715", "name": "豆包 Embedding Large (1024维·最新)", "released": "2025-07"},
-                {"id": "doubao-embedding-large-text-241215", "name": "豆包 Embedding Large (1024维)", "released": "2024-12"},
-                {"id": "doubao-embedding", "name": "豆包 Embedding (1024维)", "released": "2024-05"},
-                ],
-                },
-                {
-                    "id": "openai",
-                    "name": "OpenAI",
-                    "default_model": "gpt-4o",
-                    "default_base_url": "https://api.openai.com/v1",
-                    "models": [
-                {"id": "gpt-4.1", "name": "GPT-4.1 (最新·多模态)", "capabilities": ["text","vision","code"], "released": "2025-04"},
-                {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini (高性价比)", "capabilities": ["text","vision","code"], "released": "2025-04"},
-                {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano (最轻量)", "capabilities": ["text","code"], "released": "2025-04"},
-                {"id": "o3", "name": "o3 (深度推理·最强)", "capabilities": ["text","code","reasoning"], "released": "2025-04"},
-                {"id": "o4-mini", "name": "o4 Mini (推理·快速)", "capabilities": ["text","code","reasoning"], "released": "2025-04"},
-                {"id": "gpt-4o", "name": "GPT-4o (多模态)", "capabilities": ["text","vision","code"], "released": "2024-05"},
-                {"id": "gpt-4o-mini", "name": "GPT-4o Mini (高性价比)", "capabilities": ["text","vision","code"], "released": "2024-07"},
-                {"id": "o1", "name": "o1 (推理)", "capabilities": ["text","code","reasoning"], "released": "2024-09"},
-                {"id": "o1-mini", "name": "o1 Mini (推理)", "capabilities": ["text","reasoning"], "released": "2024-09"},
-                {"id": "o3-mini", "name": "o3 Mini (推理)", "capabilities": ["text","code","reasoning"], "released": "2025-01"},
-                {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "capabilities": ["text","vision","code"], "released": "2023-11"},
-                ],
-                    "vision_models": [
-                {"id": "gpt-4.1", "name": "GPT-4.1 (推荐)", "released": "2025-04"},
-                {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "released": "2025-04"},
-                {"id": "gpt-4o", "name": "GPT-4o", "released": "2024-05"},
-                {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "released": "2024-07"},
-                ],
-                    "embedding_models": [
-                {"id": "text-embedding-3-large", "name": "Embedding 3 Large (3072维)", "released": "2024-01"},
-                {"id": "text-embedding-3-small", "name": "Embedding 3 Small (1536维)", "released": "2024-01"},
-                {"id": "text-embedding-ada-002", "name": "Embedding Ada 002 (1536维·经典)", "released": "2022-12"},
-                ],
-                    "image_models": [
-                {"id": "gpt-image-1", "name": "GPT Image 1 (最新)", "released": "2025-04"},
-                {"id": "dall-e-3", "name": "DALL-E 3 (高质量)", "released": "2023-10"},
-                {"id": "dall-e-2", "name": "DALL-E 2 (经济)", "released": "2022-11"},
-                ],
-                },
-                {
-                    "id": "claude",
-                    "name": "Anthropic Claude",
-                    "default_model": "claude-sonnet-4-20250514",
-                    "default_base_url": "https://api.anthropic.com/v1",
-                    "models": [
-                {"id": "claude-opus-4-20250514", "name": "Claude Opus 4 (最强·最新)", "capabilities": ["text","vision","code","reasoning"], "released": "2025-05"},
-                {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4 (推荐·最新)", "capabilities": ["text","vision","code","reasoning"], "released": "2025-05"},
-                {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "capabilities": ["text","vision","code"], "released": "2024-10"},
-                {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku (快速)", "capabilities": ["text","vision","code"], "released": "2024-10"},
-                {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus", "capabilities": ["text","vision","code"], "released": "2024-02"},
-                ],
-                    "vision_models": [
-                {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4 (推荐)", "released": "2025-05"},
-                {"id": "claude-opus-4-20250514", "name": "Claude Opus 4", "released": "2025-05"},
-                {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "released": "2024-10"},
-                ],
-                },
-                {
-                    "id": "gemini",
-                    "name": "Google Gemini",
-                    "default_model": "gemini-2.5-pro",
-                    "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-                    "models": [
-                {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro (旗舰·最新·推理)", "capabilities": ["text","vision","code","reasoning"], "context_length": 2000000, "released": "2025-03"},
-                {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash (快速·推理·最新)", "capabilities": ["text","vision","code","reasoning"], "released": "2025-03"},
-                {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash (多模态)", "capabilities": ["text","vision","code"], "released": "2024-12"},
-                {"id": "gemini-2.0-flash-thinking-exp", "name": "Gemini 2.0 Thinking (推理实验)", "capabilities": ["text","vision","code","reasoning"], "released": "2024-12"},
-                {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro (超长上下文)", "capabilities": ["text","vision","code"], "context_length": 2000000, "released": "2024-02"},
-                {"id": "gemini-1.5-flash", "name": "Gemini 1.5 Flash", "capabilities": ["text","vision","code"], "released": "2024-02"},
-                ],
-                    "vision_models": [
-                {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro (推荐)", "released": "2025-03"},
-                {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "released": "2025-03"},
-                {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "released": "2024-12"},
-                ],
-                    "embedding_models": [
-                {"id": "gemini-embedding-001", "name": "Gemini Embedding (最新·3072维)", "released": "2025-10"},
-                {"id": "text-embedding-004", "name": "Gemini Text Embedding (768维)", "released": "2024-12"},
-                {"id": "text-embedding-001", "name": "Gemini Text Embedding 001 (旧版)", "released": "2023-12"},
-                ],
-                },
-                {
-                    "id": "openrouter",
-                    "name": "OpenRouter (聚合)",
-                    "default_model": "anthropic/claude-sonnet-4",
-                    "default_base_url": "https://openrouter.ai/api/v1",
-                    "models": [
-                {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4", "capabilities": ["text","vision","code","reasoning"], "released": "2025-05"},
-                {"id": "anthropic/claude-opus-4", "name": "Claude Opus 4 (最强)", "capabilities": ["text","vision","code","reasoning"], "released": "2025-05"},
-                {"id": "google/gemini-2.5-pro", "name": "Gemini 2.5 Pro", "capabilities": ["text","vision","code","reasoning"], "released": "2025-03"},
-                {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash", "capabilities": ["text","vision","code","reasoning"], "released": "2025-03"},
-                {"id": "openai/gpt-4.1", "name": "GPT-4.1", "capabilities": ["text","vision","code"], "released": "2025-04"},
-                {"id": "openai/o3", "name": "o3 (推理)", "capabilities": ["text","code","reasoning"], "released": "2025-04"},
-                {"id": "qwen/qwen3-235b-a22b", "name": "Qwen3 235B (开源旗舰)", "capabilities": ["text","code","reasoning"], "released": "2025-04"},
-                {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1", "capabilities": ["text","code","reasoning"], "released": "2025-01"},
-                {"id": "deepseek/deepseek-chat", "name": "DeepSeek V3", "capabilities": ["text","code"], "released": "2024-12"},
-                {"id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B", "capabilities": ["text","code"], "released": "2024-12"},
-                {"id": "google/gemini-2.0-flash-exp:free", "name": "Gemini 2.0 Flash (免费)", "capabilities": ["text","vision","code"], "released": "2024-12"},
-                ],
-                    "embedding_models": [
-                {"id": "openai/text-embedding-3-large", "name": "Embedding 3 Large", "released": "2024-01"},
-                {"id": "openai/text-embedding-3-small", "name": "Embedding 3 Small", "released": "2024-01"},
-                ],
-                },
-                ]
+            raw_providers = _PROVIDER_PRESETS
 
                     # 按发布时间降序排列所有模型列表
             for p in raw_providers:
@@ -607,6 +936,32 @@ class ConfigRoutes:
                 "provider_groups": groups,
                 "models": flat,
             }
+
+        @self.app.get("/api/models/capabilities")
+        async def model_capabilities(request: Request):
+            """查询某模型的三项可配能力（上下文窗口 / 思考强度 / 视觉）.
+
+            ★ 2026-09-24：设置面板「模型能力」卡片据此渲染，并把用户手动覆盖
+            （model_context_overrides / model_vision_overrides / reasoning_effort）
+            一并算进去 —— 用户改完立即能看到"实际生效值 + 来源"。
+            """
+            if not self._require_auth(request):
+                return JSONResponse({"error": "未授权"}, status_code=401)
+            config = self.config_mgr.load()
+            provider = request.query_params.get("provider")
+            model = request.query_params.get("model")
+            if provider is None:
+                provider = config.provider
+            if model is None:
+                model = config.model
+            return resolve_model_capabilities(
+                provider,
+                model,
+                context_overrides=getattr(config, "model_context_overrides", None) or {},
+                vision_overrides=getattr(config, "model_vision_overrides", None) or {},
+                effort=str(getattr(config, "reasoning_effort", "auto") or "auto").lower(),
+                vision_model=str(getattr(config, "vision_model", "") or ""),
+            )
 
         @self.app.post("/api/config/test")
         async def test_config(request: Request):
@@ -717,22 +1072,25 @@ class ConfigRoutes:
 
         # ── LLM 用量监控 API ──
 
+        # ★ 2026-09-25：sync sqlite3 查询（~100-200ms）不能放在 async def 里——
+        # 会阻塞整个事件循环（LLM 流式/WebSocket 全卡住）。改成普通 def，
+        # FastAPI 自动放线程池执行。
         @self.app.get("/api/usage/summary")
-        async def usage_summary(period: str = "day"):
+        def usage_summary(period: str = "day"):
             """获取 token 消耗统计. period: day/week/month/year."""
             from scout.llm.tracker import LLMUsageTracker
             tracker = LLMUsageTracker()
             return tracker.get_summary(period)
 
         @self.app.get("/api/usage/daily")
-        async def usage_daily(days: int = 30):
+        def usage_daily(days: int = 30):
             """获取每日 token 消耗趋势."""
             from scout.llm.tracker import LLMUsageTracker
             tracker = LLMUsageTracker()
             return {"data": tracker.get_daily(days)}
 
         @self.app.get("/api/usage/recent")
-        async def usage_recent(limit: int = 20):
+        def usage_recent(limit: int = 20):
             """获取最近的调用记录."""
             from scout.llm.tracker import LLMUsageTracker
             tracker = LLMUsageTracker()
