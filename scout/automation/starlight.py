@@ -12,6 +12,7 @@ import json
 import logging
 import asyncio
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -89,6 +90,47 @@ class StarlightDistiller:
         self.last_run: datetime | None = None
         self.last_result: dict | None = None
         self._scheduler_task: asyncio.Task | None = None
+        self._catchup_task: asyncio.Task | None = None
+        # ★ 桌面「用完就关」补偿：last_run 必须落盘，否则进程重启就忘了
+        # 上次什么时候跑过，启动补偿会每次启动都误触发。
+        self._load_persisted_state()
+
+    # ── 持久化（last_run 落盘） ──────────────────────────────────
+    @property
+    def _state_path(self) -> Path:
+        from scout.config.paths import DATA_DIR
+        return DATA_DIR / "starlight_state.json"
+
+    def _load_persisted_state(self):
+        """从磁盘恢复 last_run，让重启后的启动补偿能正确判断是否落后."""
+        try:
+            p = self._state_path
+            if not p.exists():
+                return
+            data = json.loads(p.read_text(encoding="utf-8"))
+            lr = data.get("last_run")
+            if lr:
+                self.last_run = datetime.fromisoformat(lr)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"读取星夜凝萃状态文件失败（忽略）: {e}")
+
+    def _persist_state(self):
+        """把 last_run 写到磁盘."""
+        try:
+            p = self._state_path
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(
+                json.dumps(
+                    {
+                        "last_run": self.last_run.isoformat() if self.last_run else None,
+                        "updated_at": datetime.now().isoformat(),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"写入星夜凝萃状态文件失败: {e}")
 
     def set_config(self, **kwargs):
         """更新配置."""
@@ -104,6 +146,12 @@ class StarlightDistiller:
         # create_task 因无事件循环失败"导致的 never awaited 泄漏警告。
         loop = asyncio.get_running_loop()  # 无事件循环时在此抛 RuntimeError
         self._scheduler_task = loop.create_task(self._schedule_loop())
+        # ★ 2026-09-25：启动补偿跟随调度器挂载。补偿若只在 server.py lifespan
+        # 挂载，懒加载模式下 agent 建立晚于 lifespan，get_starlight() 为 None，
+        # 补偿永远挂不上（实测 --no-gui / 首次对话前均如此）。挂在调度器
+        # 成功启动之后，无论 lifespan 还是 init_starlight 触发都覆盖。
+        if self._catchup_task is None or self._catchup_task.done():
+            self._catchup_task = loop.create_task(self.maybe_catch_up())
         logger.info(f"星夜凝萃调度器已启动，每天 {self.config['schedule_hour']}:00 执行")
 
     def stop_scheduler(self):
@@ -111,6 +159,8 @@ class StarlightDistiller:
         if self._scheduler_task and not self._scheduler_task.done():
             self._scheduler_task.cancel()
             logger.info("星夜凝萃调度器已停止")
+        if self._catchup_task and not self._catchup_task.done():
+            self._catchup_task.cancel()
 
     async def _schedule_loop(self):
         """定时调度循环 — 每天在指定时间执行."""
@@ -356,6 +406,7 @@ class StarlightDistiller:
 
         # 记录结果
         self.last_run = datetime.now()
+        self._persist_state()  # ★ 落盘，供下次启动的补偿判断
         self.last_result = {
             "timestamp": self.last_run.isoformat(),
             "sessions_processed": len(conversations),
@@ -376,6 +427,44 @@ class StarlightDistiller:
                 for m in unique_memories
             ],
         }
+
+    async def maybe_catch_up(self, delay_seconds: float = 5.0) -> dict | None:
+        """启动补偿 — 桌面「用完就关」场景下定时器等不到 2 点，
+        改为每次启动时检查：若上次运行已落后（从未跑过 / 距今 >24h），
+        则延迟数秒后自动补跑一次，把昨天的对话凝萃掉。
+
+        - 不依赖进程常驻，契合 Windows 桌面用完即关的习惯。
+        - 受 min_conversations 门槛约束，对话不足时 run() 自行跳过（不调 LLM）。
+        - 仅当落后时触发，last_run 已落盘，正常情况不会重复跑。
+
+        Returns:
+            补跑结果 dict；未触发（不落后 / 未启用）时返回 None。
+        """
+        try:
+            if not self.config["enabled"]:
+                return None
+
+            now = datetime.now()
+            if self.last_run is not None:
+                elapsed = now - self.last_run
+                # 24h 内的运行视为「刚跑过」，跳过补偿
+                if elapsed < timedelta(hours=self.config["lookback_hours"]):
+                    logger.debug(
+                        f"星夜凝萃上次运行于 {elapsed.total_seconds()/3600:.1f}h 前，无需启动补偿"
+                    )
+                    return None
+
+            logger.info("检测到星夜凝萃落后（从未运行或 >24h），启动补偿凝萃...")
+            await asyncio.sleep(delay_seconds)
+            result = await self.run(force=False)
+            logger.info(f"星夜凝萃启动补偿完成: {result.get('message', '')}")
+            return result
+        except asyncio.CancelledError:
+            logger.info("星夜凝萃启动补偿被取消")
+            return None
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"星夜凝萃启动补偿异常: {e}", exc_info=True)
+            return None
 
     def get_status(self) -> dict:
         """获取星夜凝萃状态."""

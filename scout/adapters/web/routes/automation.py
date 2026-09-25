@@ -16,7 +16,6 @@ import logging
 import uuid
 
 # logger 归一：保持与原 web.py 相同的日志器名（行为不变）
-import logging
 
 logger = logging.getLogger("scout.adapters.web")
 
@@ -200,84 +199,11 @@ class AutomationRoutes:
             except Exception as e:
                 return JSONResponse({"error": f"配置更新失败: {e}"}, status_code=400)
 
-    def _setup_webhook_routes(self):
-        """Webhook API."""
-
-        # ── Webhook API ──
-
-        @self.app.get("/api/webhooks")
-        async def list_webhooks():
-            """列出所有 Webhook."""
-            return {"webhooks": self._get_webhooks()}
-
-        @self.app.post("/api/webhooks")
-        async def create_webhook(req: Request):
-            """创建 Webhook — 返回带 token 的 URL."""
-            import secrets as _secrets
-            body = await req.json()
-            name = body.get("name", "unnamed")
-            task = body.get("task", "")
-            if not task:
-                return JSONResponse({"error": "task 不能为空"}, status_code=400)
-            token = _secrets.token_urlsafe(24)
-            webhook = {
-                "id": token,
-                "name": name,
-                "task": task,
-                "url": f"http://localhost:{self.port}/api/webhook/{token}",
-                "created_at": datetime.now().isoformat(),
-                "call_count": 0,
-                "last_called": "",
-            }
-            self._save_webhook(webhook)
-            return {"status": "ok", "webhook": webhook}
-
-        @self.app.delete("/api/webhooks/{token}")
-        async def delete_webhook(token: str):
-            """删除 Webhook."""
-            self._delete_webhook(token)
-            return {"status": "ok"}
-
-        @self.app.post("/api/webhook/{token}")
-        async def trigger_webhook(token: str, req: Request):
-            """Webhook 触发 — 执行关联任务."""
-            webhook = self._find_webhook(token)
-            if not webhook:
-                return JSONResponse({"error": "Webhook 不存在"}, status_code=404)
-            # 更新调用计数
-            webhook["call_count"] = webhook.get("call_count", 0) + 1
-            webhook["last_called"] = datetime.now().isoformat()
-            self._save_webhook(webhook)
-
-            # 提取可选的附加参数
-            try:
-                body = await req.json()
-                extra = body.get("message", "")
-            except Exception:
-                extra = ""
-
-            task = webhook.get("task", "")
-            if extra:
-                task = f"{task}\n\n[Webhook 附加数据]\n{extra}"
-
-            # 异步执行任务（不阻塞 webhook 响应）
-            # P0: 优先走 AutomationRunner（策略门控 + 运行留痕 + 结果验证）
-            runner = self._get_automation_runner()
-            if runner:
-                _t = asyncio.create_task(runner.run_webhook_task(task, webhook.get("name", "")))
-                self._bg_tasks.add(_t)
-                _t.add_done_callback(self._bg_tasks.discard)
-                return {"status": "accepted", "message": "任务已提交执行（无人值守模式）", "webhook": webhook["name"]}
-            if self._agent:
-                import copy
-                session = Session(id=str(uuid.uuid4()))
-                agent_copy = copy.copy(self._agent)
-                agent_copy.callbacks = NullCallbacks()
-                _t = asyncio.create_task(agent_copy.run_conversation(task, session))
-                self._bg_tasks.add(_t)
-                _t.add_done_callback(self._bg_tasks.discard)
-                return {"status": "accepted", "message": "任务已提交执行", "webhook": webhook["name"]}
-            return JSONResponse({"error": "Agent 未配置"}, status_code=500)
+    # ★ 2026-09-25：Webhook 管理 API（/api/webhooks CRUD + /api/webhook/{token}
+    # 触发）已按需求移除。相关辅助方法（_get_webhooks/_save_webhook/
+    # _delete_webhook/_find_webhook）与前端 webhooks.html 一并删除；
+    # IM 渠道回调（channels.py 的飞书/企微/微信 webhook）不受影响。
+    # 需要时从 git 历史恢复。
 
     def _setup_automation_routes(self):
         """P0/P1 自动化与自进化 API（2026-08-13）.
@@ -505,17 +431,39 @@ class AutomationRoutes:
                     if branch:
                         cmd += ["--branch", branch]
                     cmd += [url, tmp_dir]
+                    from scout.core.platform import terminate_process_tree
+                    # 用 Popen 而非 run：超时时能拿到 pid 做**跨平台进程树**终止，
+                    # 避免 git 孙进程（git-remote-https.exe）成孤儿。encoding 显式
+                    # UTF-8，中文 Windows 下不再按 GBK 误解码 git 输出。
+                    _creationflags = 0
+                    if os.name == "nt":
+                        _creationflags = (
+                            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+                        )
+                    _popen_kwargs = {"creationflags": _creationflags} if os.name == "nt" else {}
+                    if os.name != "nt":
+                        # POSIX：独立会话，便于 killpg 杀整个进程组
+                        _popen_kwargs["start_new_session"] = True
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        **_popen_kwargs,
+                    )
                     try:
-                        _nowin = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45, start_new_session=True, **_nowin)
-                    except subprocess.TimeoutExpired as _te:
+                        _out, _err = proc.communicate(timeout=45)
+                    except subprocess.TimeoutExpired:
+                        terminate_process_tree(proc)
                         try:
-                            os.killpg(os.getpgid(_te.pid), signal.SIGKILL)
+                            proc.communicate(timeout=5)  # 回收管道，防僵尸
                         except Exception:
                             pass
                         return JSONResponse({"error": "克隆超时（45s）。请检查网络后重试"}, status_code=400)
-                    if result.returncode != 0:
-                        return JSONResponse({"error": f"克隆失败: {result.stderr.strip()[:200]}"}, status_code=400)
+                    if proc.returncode != 0:
+                        return JSONResponse({"error": f"克隆失败: {(_err or '').strip()[:200]}"}, status_code=400)
                     repo_fetched = True
 
                 if not repo_fetched:

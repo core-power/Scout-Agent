@@ -23,6 +23,7 @@ from scout.adapters.web.routes.observability import ObservabilityRoutes
 from scout.adapters.web.routes.integrations import IntegrationRoutes
 from scout.adapters.web.routes.chat import ChatRoutes
 from scout.adapters.web.routes.ws import WsRoutes
+from scout.adapters.web.routes.feedback import FeedbackRoutes
 
 import asyncio
 import json
@@ -78,7 +79,7 @@ class WebAdapter(
     AuthRoutes, A2aRoutes, VoiceRoutes, ChannelRoutes, AutomationRoutes,
     SessionRoutes, MemoryRoutes, KnowledgeRoutes, GoalRoutes,
     ConfigRoutes, SkillRoutes, ObservabilityRoutes, IntegrationRoutes,
-    ChatRoutes, WsRoutes,
+    ChatRoutes, WsRoutes, FeedbackRoutes,
 ):
     """Web API 适配器 — 挂载到 FastAPI app."""
 
@@ -89,9 +90,8 @@ class WebAdapter(
         self._sessions: dict[str, Session] = {}
         self.config_mgr = ConfigManager()
         self.auth_mgr = AuthManager()
-        self._webhooks_path = _SCOUT_DATA_DIR / "webhooks.json"
-        self._webhooks_path.parent.mkdir(parents=True, exist_ok=True)
-        
+        # ★ 2026-09-25：webhooks.json 存储已随 Webhook 管理功能移除。
+
         # 渠道管理器 — 单例模式
         from scout.adapters.channel_manager import ChannelManager
         self._channel_manager = ChannelManager()
@@ -118,13 +118,14 @@ class WebAdapter(
         self._bg_tasks: set = set()
         self._active_ws_connections: set = set()
         self._pending_confirmations: dict[str, asyncio.Future] = {}  # Human-in-the-Loop 确认请求
+        self._pending_clarifications: dict[str, asyncio.Future] = {}  # ask_user 澄清请求（2026-09-23）
+        self._pending_watchdogs: dict[str, asyncio.Future] = {}  # 空转看门狗「继续/停止」征询（2026-09-24）
         self._setup_event_bus_subscription()
 
         # 通知分发器 — 跨渠道主动推送（IM/邮件），复用 channel_manager
         self._setup_notify_dispatcher()
 
-        # 文件系统监听 — 主动感知目录变化（复用 bus，事件驱动自动化）
-        self._setup_file_watcher()
+        # ★ 2026-09-25：文件系统监听（_setup_file_watcher）已按需求移除。
 
         # 语音模块 — 按环境变量构建 ASR/TTS（无配置时为空处理器，不影响启动）
         from scout.voice.factory import build_voice_handler
@@ -147,43 +148,9 @@ class WebAdapter(
             logger.warning("get_session_store() 失败，会话存储不可用", exc_info=True)
             return None
 
-    # ── Webhook 存储 ──
-
-    def _load_webhooks(self) -> list[dict]:
-        if self._webhooks_path.exists():
-            with open(self._webhooks_path, encoding="utf-8") as f:
-                return json.load(f)
-        return []
-
-    def _save_all_webhooks(self, hooks: list[dict]) -> None:
-        with open(self._webhooks_path, "w", encoding="utf-8") as f:
-            json.dump(hooks, f, indent=2, ensure_ascii=False)
-
-    def _get_webhooks(self) -> list[dict]:
-        return self._load_webhooks()
-
-    def _find_webhook(self, token: str) -> dict | None:
-        for h in self._load_webhooks():
-            if h.get("id") == token:
-                return h
-        return None
-
-    def _save_webhook(self, webhook: dict) -> None:
-        hooks = self._load_webhooks()
-        # upsert
-        found = False
-        for i, h in enumerate(hooks):
-            if h.get("id") == webhook["id"]:
-                hooks[i] = webhook
-                found = True
-                break
-        if not found:
-            hooks.append(webhook)
-        self._save_all_webhooks(hooks)
-
-    def _delete_webhook(self, token: str) -> None:
-        hooks = [h for h in self._load_webhooks() if h.get("id") != token]
-        self._save_all_webhooks(hooks)
+    # ★ 2026-09-25：Webhook 存储（_load_webhooks/_save_all_webhooks/
+    # _get_webhooks/_find_webhook/_save_webhook/_delete_webhook）已随
+    # Webhook 管理功能移除。
 
     # ── 自动化执行器（P0 无人值守运行栈，2026-08-13）──
 
@@ -438,6 +405,16 @@ class WebAdapter(
                 f"记忆工程化注入失败（跨会话记忆退化为手动 memory_save）: {_mem_err}"
             )
 
+        # ── 模型能力：思考强度 + 视觉（2026-09-24，用户在设置里配）──
+        # 视觉：用户覆盖表命中即强制，否则交给 Agent 按模型能力自动判断（None）
+        _vis_over = getattr(config, "model_vision_overrides", None) or {}
+        try:
+            from scout.adapters.web.routes.config import capability_key
+            _vis_forced = _vis_over.get(capability_key(config.provider, config.model))
+        except Exception:  # noqa: BLE001
+            _vis_forced = None
+        _vision_input = bool(_vis_forced) if isinstance(_vis_forced, bool) else None
+
         new_agent = Agent(
             llm=llm,
             max_turns=config.max_turns or 60,  # 2026-08-31：0 值兜底，防止旧配置缺省导致预算 0 步立即耗尽
@@ -445,6 +422,9 @@ class WebAdapter(
             temperature=config.temperature,
             deep_thinking=config.deep_thinking,
             agent_mode=config.agent_mode,
+            reasoning_effort=str(getattr(config, "reasoning_effort", "auto") or "auto").lower(),
+            vision_input=_vision_input,
+            model_provider=config.provider or "",
             embedding_provider=embedding_provider,
             auto_approve=config.auto_approve,
             permission_mode=getattr(config, "permission_mode", "ask") or "ask",
@@ -492,20 +472,8 @@ class WebAdapter(
             logger.warning(f"通知分发器初始化失败: {e}")
             self._notify_dispatcher = None
 
-    def _setup_file_watcher(self):
-        """初始化文件系统监听器 — 感知目录变化并广播 fs.event 事件.
-
-        监听任务在 FastAPI lifespan 启动时统一拉起（见 server.py），
-        此处仅创建实例并注入 bus。
-        """
-        try:
-            from scout.bus.hub import bus as event_bus
-            from scout.automation.watcher import get_watcher
-            watcher = get_watcher(bus=event_bus)
-            self._file_watcher = watcher
-        except Exception as e:
-            logger.warning(f"文件监听器初始化失败: {e}")
-            self._file_watcher = None
+    # ★ 2026-09-25：_setup_file_watcher / _file_watcher 已随文件监听功能移除
+    # （全库无其他消费者，已 grep 确认）。
 
     async def broadcast_notification(self, data: dict):
         """向所有活跃的 WebSocket 连接广播通知."""
@@ -574,12 +542,12 @@ class WebAdapter(
         self._setup_tool_routes()
         self._setup_channel_routes()
         self._setup_mcp_routes()
-        self._setup_webhook_routes()
         self._setup_automation_routes()
         self._setup_agent_routes()
         self._setup_gateway_routes()
         self._setup_plugin_routes()
         self._setup_voice_routes()
+        self._setup_feedback_routes()
         self._setup_websocket_endpoint()
 
     @staticmethod

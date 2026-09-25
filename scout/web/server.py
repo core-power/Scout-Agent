@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -67,14 +68,14 @@ def _get_allowed_origins() -> list[str]:
 
 
 def _is_initialization_whitelist(path: str) -> bool:
-    """未初始化凭证阶段仍放行的路径（登录引导 / 外部 webhook / 静态资源）.
+    """未初始化凭证阶段仍放行的路径（登录引导 / 静态资源）.
 
     /api/files/download 不在白名单内：无凭证时同样返回 401，
     避免默认暴露下下载用户目录文件。
+    ★ 2026-09-25：外部 webhook 放行已随 Webhook 管理功能移除。
     """
     return (
         path.startswith("/api/auth")
-        or path.startswith("/api/webhook")
         or path.startswith("/static")
         or path.startswith("/.well-known")
     )
@@ -86,19 +87,18 @@ def create_web_app(agent=None) -> FastAPI:
     async def _lifespan(app: FastAPI):
         # 启动时：立即清理一次旧日志 + 启动后台清理循环
         cleanup_task = asyncio.create_task(_log_cleanup_loop())
-        watcher_task = None
         try:
-            # 启动文件系统监听器（主动感知）
-            try:
-                from scout.bus.hub import bus as event_bus
-                from scout.automation.watcher import get_watcher
-                watcher_task = asyncio.create_task(get_watcher(bus=event_bus).start())
-            except Exception as e:
-                logging.getLogger(__name__).warning(f"文件监听器启动失败: {e}")
+            # ★ 2026-09-25：文件监听器（FileWatcher）已按需求移除 —— Windows 桌面
+            # 场景用不上，且启动即拉起 watchdog 监听增加常驻开销。相关模块
+            # （automation/watcher.py、watcher_api.py、watcher.html）已删除，
+            # 需要时从 git 历史恢复。
 
             # ★ 2026-09-01 修复：星夜凝萃调度器在此（事件循环就绪后）补启动。
             # init_starlight 在同步上下文调用时无事件循环，create_task 失败，
             # 导致定时蒸馏协程从未运行（"no running event loop" / never awaited）。
+            # ★ 2026-09-25：启动补偿（maybe_catch_up）改由 start_scheduler()
+            # 成功后自行挂载 —— 此处 agent 未就绪时 get_starlight() 为 None，
+            # 单独挂载会落空（实测）。
             try:
                 from scout.automation.starlight import get_starlight
                 _sl = get_starlight()
@@ -124,12 +124,6 @@ def create_web_app(agent=None) -> FastAPI:
                 await cleanup_task
             except (asyncio.CancelledError, Exception):
                 pass
-            if watcher_task:
-                watcher_task.cancel()
-                try:
-                    await watcher_task
-                except (asyncio.CancelledError, Exception):
-                    pass
 
             # ★ 2026-09-14：退出兜底落盘 —— 把内存中的活跃会话写盘。此前只在
             # 回合收尾落盘（且工具中途不落库），正常关闭时「未收尾回合」或
@@ -220,9 +214,7 @@ def create_web_app(agent=None) -> FastAPI:
             )
             if not is_protected:
                 return await call_next(request)
-            # webhook 放行（token 在路径中）
-            if path.startswith("/api/webhook"):
-                return await call_next(request)
+            # ★ 2026-09-25：webhook 放行已随 Webhook 管理功能移除。
             # auth 白名单放行（统一按 /api/auth 前缀）
             if path.startswith("/api/auth"):
                 return await call_next(request)
@@ -271,7 +263,14 @@ def create_web_app(agent=None) -> FastAPI:
     app.add_middleware(AuthMiddleware)
 
     # 挂载 Web 适配器（API 路由）
-    WebAdapter(app, agent)
+    _web_adapter = WebAdapter(app, agent)
+    # ★ 2026-09-23：暴露到 app.state —— 桌面版 create_web_app() 不传 agent，
+    #   真实 agent 由 adapter 在配置加载后 rebuild 出来。运行时接口（如
+    #   /api/context/stats）靠它拿到真实 agent，否则全程按 None 降级。
+    try:
+        app.state.web_adapter = _web_adapter
+    except Exception:  # noqa: BLE001
+        pass
     
     # 挂载插件 API 路由
     try:
@@ -309,12 +308,7 @@ def create_web_app(agent=None) -> FastAPI:
     except Exception as e:
         logging.getLogger(__name__).warning(f"通知管理 API 加载失败: {e}")
 
-    # 挂载文件监听管理 API 路由（主动感知）
-    try:
-        from scout.automation.watcher_api import router as watcher_router
-        app.include_router(watcher_router, tags=["watcher"])
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"文件监听管理 API 加载失败: {e}")
+    # ★ 2026-09-25：文件监听管理 API（watcher_api）已随功能移除。
 
     # 挂载文件系统浏览 API（文件树/读取/保存，2026-08-30）
     try:
@@ -329,27 +323,101 @@ def create_web_app(agent=None) -> FastAPI:
     # 差 2 倍以上，显示值没有参考价值。这里统一由后端出数，并给出分项占比，
     # 供点击展开查看「系统提示 / 摘要 / 用户 / 助手 / 工具输出」各占多少。
     @app.get("/api/context/stats")
-    async def context_stats(session_id: str = ""):
+    async def context_stats(
+        request: Request,
+        session_id: str = "",
+        provider: str = "",
+        model: str = "",
+    ):
+        """上下文圆环统计 — 2026-09-23 精准化改造.
+
+        修复的精度缺口（此前显示值系统性偏低）：
+        ① 系统提示只在有会话消息时才计入 → 新会话显示 ~0（实际每请求都带系统提示）
+        ② 工具 schema（每次请求必发，可达数万 token）完全没计入
+        ③ 实测值（prompt_tokens）观测点之后新增的消息不补差 → 低估最后一轮增量
+        ④ limit 恒为 128000，不跟随所选模型的真实窗口（32k 模型占用低估 4 倍）
+
+        ★ 关键前提（2026-09-23 夜）：闭包里的 ``agent`` 在桌面版**恒为 None** ——
+        desktop/launcher.py 调的是 create_web_app()（不传 agent），真实 agent 由
+        WebAdapter 在配置加载后 rebuild 出来并挂在 adapter._agent 上。此前本接口
+        全程按 agent=None 走：读不到 context_mgr / session_store / 活跃会话，
+        has_session 永远 false、used 恒等于「系统提示+工具定义」，对话再长也不动。
+        现在运行时解析真实 agent（adapter → ToolRegistry._main_agent 兜底）。
+        """
         try:
             from scout.context.manager import estimate_tokens
         except Exception:  # noqa: BLE001
             estimate_tokens = None
 
-        sid = (session_id or "").strip()
-        cm = getattr(agent, "context_mgr", None)
-        store = getattr(agent, "session_store", None)
+        agent_rt = agent
+        if agent_rt is None:
+            _ad = getattr(getattr(request, "app", None), "state", None)
+            _ad = getattr(_ad, "web_adapter", None) if _ad is not None else None
+            agent_rt = getattr(_ad, "_agent", None) or None
+        if agent_rt is None:
+            try:
+                from scout.tools.registry import ToolRegistry
+                agent_rt = getattr(ToolRegistry, "_main_agent", None) or None
+            except Exception:  # noqa: BLE001
+                agent_rt = None
 
-        limit = int(getattr(cm, "max_tokens", 0) or 0)
+        sid = (session_id or "").strip()
+        cm = getattr(agent_rt, "context_mgr", None)
+        store = getattr(agent_rt, "session_store", None)
+
+        # ── limit 分母：用户手动覆盖 > 模型标注/名称推断 > 环境变量 > 默认 128000 ──
+        # ★ 2026-09-24：不再把 cm.max_tokens（**压缩治理阈值**）当分母。
+        #   它是"到多少 token 触发自动压缩"的策略值（默认 32768），与模型上下文
+        #   窗口是两回事——用它当分母会让 128k 窗口的模型显示 33k，占用率虚高 4 倍
+        #   （用户实测：真实 8% 显示成 31%）。未收录模型宁可用保守默认值。
+        # ★ 2026-09-24（2）：用户在设置里手填的窗口长度优先级最高（按 provider:model
+        #   记忆），未收录模型/自建端点不必再被 128000 硬套。
+        limit = 0
+        try:
+            from scout.adapters.web.routes.config import (
+                capability_key,
+                resolve_model_context_length,
+            )
+            _cfg = None
+            try:
+                from scout.config.manager import ConfigManager
+                _cfg = ConfigManager().load()
+            except Exception:  # noqa: BLE001
+                _cfg = None
+            if not provider and _cfg is not None:
+                provider = _cfg.provider or ""
+            if not model and _cfg is not None:
+                model = _cfg.model or ""
+            if model and _cfg is not None:
+                _over = getattr(_cfg, "model_context_overrides", None) or {}
+                try:
+                    limit = int(_over.get(capability_key(provider, model)) or 0)
+                    limit_source = "user"
+                except (TypeError, ValueError):
+                    limit = 0
+            if limit <= 0 and model:
+                limit = int(resolve_model_context_length(provider, model) or 0)
+                limit_source = "model"
+        except Exception:  # noqa: BLE001
+            limit = 0
         if limit <= 0:
             try:
                 limit = int(os.getenv("SCOUT_CONTEXT_MAX_TOKENS", "0") or 0)
+                limit_source = "env"
             except Exception:  # noqa: BLE001
                 limit = 0
         if limit <= 0:
             limit = 128000
+            limit_source = "default"
 
+        # ★ 2026-09-23 实时性：生成期间消息只 append 进内存 session（落盘要到
+        # 回合收尾），磁盘 load 拿到的是旧版本 → 整轮生成中数值不动。
+        # 优先读 agent 的活跃会话注册表（内存版，含实时工具输出），无活跃才读磁盘。
         session = None
-        if store and sid:
+        active_sessions = getattr(agent_rt, "_active_sessions", None) or {}
+        if sid and sid in active_sessions:
+            session = active_sessions[sid]
+        if session is None and store and sid:
             try:
                 session = await asyncio.to_thread(store.load_session, sid)
             except TypeError:
@@ -362,14 +430,17 @@ def create_web_app(agent=None) -> FastAPI:
 
         # API 真实回传值优先；没有就退回本地估算
         real = 0
+        obs_meta = {}
         if cm and sid:
             try:
                 real = int(cm.real_prompt_tokens(sid) or 0)
+                obs_meta = cm.real_prompt_meta(sid) or {}
             except Exception:  # noqa: BLE001
                 real = 0
 
         buckets = {
             "system": {"label": "系统提示", "tokens": 0, "count": 0},
+            "tools": {"label": "工具定义", "tokens": 0, "count": 0},
             "summary": {"label": "压缩摘要", "tokens": 0, "count": 0},
             "user": {"label": "用户消息", "tokens": 0, "count": 0},
             "assistant": {"label": "助手回复", "tokens": 0, "count": 0},
@@ -383,60 +454,116 @@ def create_web_app(agent=None) -> FastAPI:
                 return int(estimate_tokens(text))
             return (len(text) + 3) // 4
 
+        # ① 系统提示：每次请求必发，无论有无会话消息都要计入（修 ~0 显示）
+        sys_prompt = str(getattr(agent_rt, "system_prompt", "") or "")
+        if sys_prompt:
+            buckets["system"]["tokens"] += _tok(sys_prompt)
+            buckets["system"]["count"] += 1
+
+        # ② 工具 schema：每次请求必发（修复此前完全漏计的数万 token）
+        try:
+            from scout.tools.registry import ToolRegistry
+            tools_json = json.dumps(
+                ToolRegistry.schemas(compact=True), ensure_ascii=False
+            )
+            if tools_json and tools_json != "[]":
+                buckets["tools"]["tokens"] += _tok(tools_json)
+                buckets["tools"]["count"] += len(ToolRegistry.all_tools())
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ③ 消息：按「观测前 / 观测后」分开估算——
+        #    实测值(prompt_tokens)覆盖观测点之前的全部内容（系统提示+工具+历史），
+        #    观测点之后的增量（最后一轮回复/工具输出）按估算补进显示值。
+        #    切片对齐 raw session.messages（观测点记录的就是它的长度；
+        #    build_llm_view 会裁剪工具输出，索引对不上）。
+        obs_msg_count = obs_meta.get("msg_count") if isinstance(obs_meta, dict) else None
+        has_obs = real > 0 and isinstance(obs_msg_count, int)
+
+        def _bucket_key(m) -> str:
+            content = getattr(m, "content", "") or ""
+            role = getattr(getattr(m, "role", None), "value", str(getattr(m, "role", "")))
+            role = str(role).lower()
+            if (content or "").startswith("[对话摘要]"):
+                return "summary"
+            if role in ("system", "role.system"):
+                return "system"
+            if role in ("user", "role.user"):
+                return "user"
+            if role in ("tool", "role.tool"):
+                return "tool"
+            return "assistant"
+
+        # post_buckets：观测后增量（按面值进分项）；pre_role：观测前历史按角色
+        # 的估算值（实测值摊回时保持归属近似正确）
+        post_buckets = {k: 0 for k in buckets}
+        pre_role = {k: 0 for k in buckets}
+        pre_msgs_est = 0
+
         if session is not None:
-            # ★ 用真正发给 LLM 的视图统计（含压缩摘要与工具输出裁剪），
-            #   而不是 session.messages 原始全量——否则显示值会远高于实际占用。
-            msgs = []
-            if cm is not None:
-                try:
-                    msgs = list(cm.build_llm_view(session) or [])
-                except Exception:  # noqa: BLE001 — 视图构建失败退回原始消息
-                    msgs = []
-            if not msgs:
-                msgs = list(getattr(session, "messages", []) or [])
+            raw_msgs = list(getattr(session, "messages", []) or [])
+            if has_obs:
+                cut = max(0, min(obs_msg_count, len(raw_msgs)))
+                for m in raw_msgs[cut:]:
+                    post_buckets[_bucket_key(m)] += _tok(getattr(m, "content", "") or "")
+                for m in raw_msgs[:cut]:
+                    t = _tok(getattr(m, "content", "") or "")
+                    pre_role[_bucket_key(m)] += t
+                    pre_msgs_est += t
+            else:
+                # 无实测：用 LLM 视图全量估算（视图含压缩摘要与工具输出裁剪，
+                # 才是真正发给 LLM 的内容；原始全量会远高于实际占用）
+                msgs = []
+                if cm is not None:
+                    try:
+                        msgs = list(cm.build_llm_view(session) or [])
+                    except Exception:  # noqa: BLE001 — 视图构建失败退回原始消息
+                        msgs = []
+                if not msgs:
+                    msgs = raw_msgs
+                for m in msgs:
+                    buckets[_bucket_key(m)]["tokens"] += _tok(getattr(m, "content", "") or "")
+                    buckets[_bucket_key(m)]["count"] += 1
 
-            # 系统提示不在 session.messages 里，单独计入
-            sys_prompt = str(getattr(agent, "system_prompt", "") or "")
-            if sys_prompt:
-                buckets["system"]["tokens"] += _tok(sys_prompt)
-                buckets["system"]["count"] += 1
-
-            for m in msgs:
-                content = getattr(m, "content", "") or ""
-                role = getattr(getattr(m, "role", None), "value", str(getattr(m, "role", "")))
-                role = str(role).lower()
-                if (content or "").startswith("[对话摘要]"):
-                    key = "summary"
-                elif role in ("system", "role.system"):
-                    key = "system"
-                elif role in ("user", "role.user"):
-                    key = "user"
-                elif role in ("tool", "role.tool"):
-                    key = "tool"
-                elif role in ("assistant", "role.assistant"):
-                    key = "assistant"
-                else:
-                    key = "assistant"
-                buckets[key]["tokens"] += _tok(content)
-                buckets[key]["count"] += 1
-
+        # 本地全量估算参考值（estimated 字段）：观测点路径下 buckets 只装了
+        # 系统提示+工具定义，需补上观测前历史与观测后增量才是完整估算
         est_total = sum(b["tokens"] for b in buckets.values())
-        used = real if real > 0 else est_total
-        source = "real" if real > 0 else "estimate"
+        if has_obs and session is not None:
+            est_total += pre_msgs_est + sum(post_buckets.values())
+
+        if real > 0:
+            source = "real"
+            # 实测值摊回：base = 系统提示 + 工具定义 + 观测前历史（都在实测里），
+            # 按各自估算占比把 real 摊到分项；观测后增量按面值叠加。
+            # 保证「分项之和 == 显示总量」且归属近似正确。
+            base_est = buckets["system"]["tokens"] + buckets["tools"]["tokens"] + pre_msgs_est
+            if has_obs and session is not None:
+                used = real + sum(post_buckets.values())
+                scale = real / base_est if base_est > 0 else 1.0
+                for key, b in buckets.items():
+                    b["tokens"] = int(round(
+                        (buckets[key]["tokens"] + pre_role[key]) * scale
+                    )) + post_buckets[key]
+            else:
+                # 有实测但无观测点元数据（旧会话）：显示实测值，分项按全量估算
+                # 比例归一（无法补差，保持旧行为）
+                used = real
+                scale = real / est_total if est_total > 0 else 1.0
+                for _key, b in buckets.items():
+                    b["tokens"] = int(round(b["tokens"] * scale))
+        else:
+            used = est_total
+            source = "estimate"
 
         breakdown = []
         for key, b in buckets.items():
-            # 真实值优先时，分项按比例归一到 used，保证「分项之和 == 显示总量」
-            tokens = b["tokens"]
-            if real > 0 and est_total > 0:
-                tokens = int(round(real * tokens / est_total))
             breakdown.append(
                 {
                     "key": key,
                     "label": b["label"],
-                    "tokens": int(tokens),
+                    "tokens": int(b["tokens"]),
                     "count": int(b["count"]),
-                    "ratio": round(tokens / used, 4) if used > 0 else 0.0,
+                    "ratio": round(b["tokens"] / used, 4) if used > 0 else 0.0,
                 }
             )
 
@@ -444,7 +571,9 @@ def create_web_app(agent=None) -> FastAPI:
             "session_id": sid,
             "used": int(used),
             "estimated": int(est_total),
+            "real_observed": int(real),
             "limit": int(limit),
+            "limit_source": limit_source,
             "ratio": round(used / limit, 4) if limit > 0 else 0.0,
             "source": source,
             "has_session": session is not None,
@@ -501,15 +630,7 @@ def create_web_app(agent=None) -> FastAPI:
     async def notify_page():
         return FileResponse(os.path.join(static_dir, "notify.html"), headers=_nocache)
 
-    # /watcher 返回文件监听页面（目录监听/事件流）
-    @app.get("/watcher")
-    async def watcher_page():
-        return FileResponse(os.path.join(static_dir, "watcher.html"), headers=_nocache)
-
-    # /webhooks 返回 Webhook 管理页面
-    @app.get("/webhooks")
-    async def webhooks_page():
-        return FileResponse(os.path.join(static_dir, "webhooks.html"), headers=_nocache)
+    # ★ 2026-09-25：/watcher、/webhooks 页面已随功能移除。
 
     # /events 返回事件总线观测页面（事件流 + DLQ）
     @app.get("/events")

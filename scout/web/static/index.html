@@ -447,18 +447,7 @@ function iconHtml(name, cls, style) {
                             </svg>
                             运行观测
                         </a>
-                        <a href="/watcher" class="w-full px-4 py-2.5 text-left text-sm text-ink-2 hover:bg-surface-3 transition-colors flex items-center gap-2">
-                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-                            </svg>
-                            文件监听
-                        </a>
-                        <a href="/webhooks" class="w-full px-4 py-2.5 text-left text-sm text-ink-2 hover:bg-surface-3 transition-colors flex items-center gap-2">
-                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.38-5.727a4 4 0 015.656 0l4 4a4 4 0 01-5.656 5.656l-1.1-1.1m1.1-5.556l-4 4"/>
-                            </svg>
-                            Webhook 管理
-                        </a>
+                        <!-- ★ 2026-09-25：「文件监听」「Webhook 管理」入口已随功能移除 -->
                         <a href="/events" class="w-full px-4 py-2.5 text-left text-sm text-ink-2 hover:bg-surface-3 transition-colors flex items-center gap-2">
                             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -714,8 +703,50 @@ function iconHtml(name, cls, style) {
                         <div id="cfg-model-caps" class="flex flex-wrap gap-1.5"></div>
                         <p id="cfg-key-hint" class="text-xs text-ink-3"></p>
                     </div>
-                    <!-- ── 视觉理解模型组（可独立选厂商） ── -->
+                    <!-- ── 模型能力（上下文 / 思考强度 / 视觉，2026-09-24 用户可配）── -->
                     <div class="border border-line rounded-xl p-4 space-y-3 bg-surface-3">
+                        <div class="flex items-center justify-between">
+                            <p class="text-sm font-semibold text-ink-1"><span data-i18n="模型能力">模型能力</span> <span class="text-ink-3 font-normal text-xs" data-i18n="(上下文与视觉按模型分别记忆，思考档位全局生效)">(上下文与视觉按模型分别记忆，思考档位全局生效)</span></p>
+                            <span id="cfg-cap-model" class="text-tiny px-2 py-0.5 rounded-full bg-surface-3 text-ink-3 font-mono"></span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-3">
+                            <div>
+                                <label class="block text-xs text-ink-3 mb-1.5" data-i18n="上下文长度 (tokens)">上下文长度 (tokens)</label>
+                                <input id="cfg-context-length" type="number" min="1000" step="1000" class="w-full px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60" placeholder="自动识别" data-i18n-placeholder="自动识别">
+                                <p id="cfg-context-source" class="text-xs text-ink-3 mt-1"></p>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-ink-3 mb-1.5" data-i18n="思考强度">思考强度</label>
+                                <select id="cfg-reasoning-effort" class="w-full px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60">
+                                    <option value="auto" data-i18n="自动（沿用默认）">自动（沿用默认）</option>
+                                    <option value="off" data-i18n="关闭">关闭</option>
+                                    <option value="low" data-i18n="低">低</option>
+                                    <option value="medium" data-i18n="中">中</option>
+                                    <option value="high" data-i18n="高">高</option>
+                                </select>
+                                <p id="cfg-thinking-applied" class="text-xs text-ink-3 mt-1"></p>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-ink-3 mb-1.5" data-i18n="视觉能力">视觉能力</label>
+                                <select id="cfg-vision-capability" class="w-full px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60">
+                                    <option value="auto" data-i18n="自动判断">自动判断</option>
+                                    <option value="on" data-i18n="支持图片输入">支持图片输入</option>
+                                    <option value="off" data-i18n="关闭图片处理">关闭图片处理</option>
+                                </select>
+                                <p id="cfg-vision-source" class="text-xs text-ink-3 mt-1"></p>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs text-ink-3 mb-1.5" data-i18n="兜底视觉模型（可选）">兜底视觉模型（可选）</label>
+                            <select id="cfg-vision-fallback-model" onchange="onSelectChange(this.id)" class="w-full px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60"></select>
+                            <input data-i18n-placeholder="输入自定义模型名，回车确认（Esc 取消）" id="cfg-vision-fallback-custom" type="text" class="hidden w-full px-3 py-2 rounded-lg bg-surface-3 border border-accent/50 text-ink-1 text-sm focus:outline-none font-mono mt-2" placeholder="输入自定义模型名，回车确认（Esc 取消）" onkeydown="customInputKey(event, this.id)">
+                            <p class="text-xs text-ink-3 mt-1">主模型不看图时，用这个模型识图成文字。默认自动推荐当前厂商的视觉模型；若推荐模型未开通/无权限，从列表选一个你可用的，或选"自定义"手动填模型 ID。</p>
+                        </div>
+                        <p class="text-xs text-ink-3">思考强度按厂商自动翻译：Qwen/百炼 → thinking_budget，OpenAI o·GPT-5 → reasoning_effort，Claude → thinking.budget_tokens，DeepSeek/GLM/Kimi → enable_thinking（仅开关）。上下文长度留空 = 自动识别（未识别时回退 128000，可在此手填真实窗口）。</p>
+                    </div>
+                    <!-- ── 视觉理解模型组（2026-09-24 起不再单独配置：跟随主模型视觉能力开关）──
+                         DOM 保留以保证 loadConfig/saveConfig/onProviderChange('vision') 不报错，仅隐藏展示 -->
+                    <div class="border border-line rounded-xl p-4 space-y-3 bg-surface-3 hidden" id="cfg-vision-group">
                         <div class="flex items-center justify-between">
                             <p class="text-sm font-semibold text-ink-1"><span data-i18n="视觉理解模型">视觉理解模型</span> <span class="text-ink-3 font-normal text-xs" data-i18n="(图片识别、OCR、图表分析)">(图片识别、OCR、图表分析)</span></p>
                             <span class="text-tiny px-2 py-0.5 rounded-full bg-surface-3 text-ink-3" data-i18n="(可选独立服务商)">(可选独立服务商)</span>
@@ -1565,6 +1596,7 @@ function handleEvent(event) {
         case 'thinking': event.data.started ? agentBubble.showThinking() : agentBubble.hideThinking(); break;
         case 'reasoning': agentBubble.handleReasoning(event.data.content); break;
         case 'step': agentBubble.setStep(event.data.step, event.data.total); break;
+        case 'usage_live': agentBubble.setLiveUsage(event.data); break;
         case 'status': {
             agentBubble.setStatus(event.data.status);
             // Multi-Agent 模式：任务开始（thinking/acting）就显示规划面板
@@ -1630,18 +1662,29 @@ function handleEvent(event) {
         case 'reflection': agentBubble.showReflection(event.data.hint); break;
         case 'goals_extracted': showExtractedGoals(event.data.goals); break;
         case 'confirm_request': showConfirmDialog(event.data); break;
+        case 'clarify_request': showClarifyDialog(event.data); break;
+        case 'clarify_cancelled': closeClarifyDialogs(event.data.request_id); break;
+        case 'watchdog_request': showWatchdogDialog(event.data); break;
+        case 'watchdog_cancelled': closeWatchdogDialogs(event.data.request_id); break;
         case 'file': agentBubble.addFileAttachment(event.data); break;
         case 'done': {
             agentBubble.hideThinking();
+            closeClarifyDialogs();  // 回合结束，残留的澄清弹窗一律关闭
+            closeWatchdogDialogs(); // 回合结束，残留的看门狗弹窗一律关闭
             // Multi-Agent 汇总展示（从最终文本提取摘要）
             const finalText = agentBubble.getCurText();
             if (agentBubble._maActive && finalText) agentBubble.showMaSummary(finalText);
-            agentBubble.finalize(event.data.steps || 0, event.data.usage || null);
+            // 若本回合是用户在看门狗弹窗里主动「停止」→ 标记为「已中断」（保留已产出）
+            agentBubble.finalize(event.data.steps || 0, event.data.usage || null, !!window._wdUserStopped);
+            window._wdUserStopped = false;
             onGenerationDone();
+            // 回合刚结束：real token 观测值已更新，立即刷新上下文圆环
+            // （不等 throttle 2.5s 窗口，2026-09-23 实时性修复）
+            try { window.dispatchEvent(new CustomEvent('scout-ctx-refresh')); } catch (e) {}
             break;
         }
-        case 'cancelled': agentBubble.hideThinking(); agentBubble.finalize(0); onGenerationDone(); break;
-        case 'error': agentBubble.hideThinking(); agentBubble.setError(event.data.error); onGenerationDone(); break;
+        case 'cancelled': agentBubble.hideThinking(); closeClarifyDialogs(); closeWatchdogDialogs(); window._wdUserStopped = false; agentBubble.finalize(0, null, true); onGenerationDone(); try { window.dispatchEvent(new CustomEvent('scout-ctx-refresh')); } catch (e) {} break;
+        case 'error': agentBubble.hideThinking(); closeClarifyDialogs(); closeWatchdogDialogs(); window._wdUserStopped = false; agentBubble.setError(event.data.error); onGenerationDone(); try { window.dispatchEvent(new CustomEvent('scout-ctx-refresh')); } catch (e) {} break;
         case 'notification': {
             // 后端 EventBus 广播的通知（跨渠道推送 + WebSocket 实时广播）
             // data 兼容两种结构：{type,title,message,level} 或 {data:{...}}
@@ -1762,6 +1805,8 @@ class AgentBubble {
                 </div>
                 <div class="flex items-center gap-1 mt-1 justify-end">
                     <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button data-i18n-title="有帮助" onclick="rateMsg(this,'up')" class="msg-act fb-btn text-ink-3 hover:text-success" title="有帮助"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>
+                        <button data-i18n-title="需改进" onclick="rateMsg(this,'down')" class="msg-act fb-btn text-ink-3 hover:text-danger" title="需改进"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg></button>
                         <button data-i18n-title="复制" onclick="copyAgentMessage(this)" class="msg-act text-ink-3 hover:text-accent-text"  title="复制"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg></button>
                         <button data-i18n-title="重新生成" onclick="regenerateResponse(this)" class="msg-act text-ink-3 hover:text-accent-text"  title="重新生成"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg></button>
                     </div>
@@ -1799,9 +1844,28 @@ class AgentBubble {
 
     setStep(step, total) {
         this._ensure();
-        this.stepBadge.textContent = __tpl(`步骤 ${step}/${total}`);
-        this.stepBadge.classList.remove('hidden');
+        this._stepInfo = { step, total };
+        this._renderStepBadge();
         scrollToBottom(true);
+    }
+
+    // 实时用量（token/调用数）→ 与步骤合并显示在同一 badge（2026-09-24，#2）
+    setLiveUsage(usage) {
+        if (!usage) return;
+        this._ensure();
+        this._liveTokens = usage.tokens || 0;
+        this._liveCalls = usage.calls || 0;
+        this._renderStepBadge();
+    }
+
+    _renderStepBadge() {
+        if (!this.stepBadge) return;
+        const parts = [];
+        if (this._stepInfo) parts.push(__tpl(`步骤 ${this._stepInfo.step}/${this._stepInfo.total}`));
+        if (this._liveTokens) parts.push(__tpl(`~${this._liveTokens} tokens`));
+        if (!parts.length) return;
+        this.stepBadge.textContent = parts.join(' · ');
+        this.stepBadge.classList.remove('hidden');
     }
 
     setStatus(status) {
@@ -1975,6 +2039,9 @@ class AgentBubble {
         }
         this.toolCount++;
         const icon = getToolIcon(name);
+        // 元工具（内部管道）用友好名展示，避免把实现细节暴露成步骤噪声。
+        // load_tools 是两阶段工具懒加载的内部机制 → 显示为「准备工具」。
+        const displayName = (name === 'load_tools') ? __t('准备工具') : name;
         // 检查上一个工具是否同名 — 合并显示（同属于当前 agent 才合并，防止跨子代理串卡）
         const lastTool = this.currentToolEl;
         const lastToolInSameSub = isSub
@@ -2033,7 +2100,7 @@ class AgentBubble {
                 : `<span class="px-1.5 py-0.5 rounded bg-accent/15 text-accent-text text-tiny font-medium">🧭 ${escapeHtml(agentName)}</span>`);
         tool.innerHTML = `<summary class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-surface-3 select-none">
             <span class="text-sm">${icon}</span>
-            <span class="text-accent-text font-semibold">${name}</span>
+            <span class="text-accent-text font-semibold">${escapeHtml(displayName)}</span>
             ${agentBadge}
             <svg class="tool-icon w-3.5 h-3.5 text-accent-text animate-spin flex-shrink-0 ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
             <span class="tool-status text-ink-3 ml-1">执行中...</span>
@@ -2446,7 +2513,7 @@ class AgentBubble {
         scrollToBottom(true);
     }
 
-    finalize(steps, usage) {
+    finalize(steps, usage, cancelled = false) {
         this.hideThinking();
         this.collapseReasoning();
         // ── Codex/WorkBuddy 式收尾：过程区折叠为一行结构化摘要（2026-09-19 v2）──
@@ -2463,13 +2530,13 @@ class AgentBubble {
             if (this.toolCount > 0) meta.push(__tpl(`${this.toolCount} 次工具调用`));
             if (dur) meta.push(dur);
             if (failed > 0) meta.push('<span class="am-fin-err">' + __tpl(`${failed} 次失败`) + '</span>');
-            const ico = failed > 0 ? '#i-warning' : '#i-check-circle';
+            const ico = (failed > 0 || cancelled) ? '#i-warning' : '#i-check-circle';
             const wrap = document.createElement('details');
             wrap.className = 'activity-wrap';
             wrap.innerHTML =
                 '<summary class="am-fin-summary' + (failed > 0 ? ' has-err' : '') + '">' +
                   '<span class="am-fin-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="' + ico + '"/></svg></span>' +
-                  '<span class="am-fin-text">' + (n > 0 ? __tpl(`已完成 ${n} 步`) : __t('已完成')) + '</span>' +
+                  '<span class="am-fin-text">' + (cancelled ? (n > 0 ? __tpl(`已中断 · ${n} 步`) : __t('已中断')) : (n > 0 ? __tpl(`已完成 ${n} 步`) : __t('已完成'))) + '</span>' +
                   (meta.length ? '<span class="am-fin-meta">' + meta.join(' · ') + '</span>' : '') +
                   '<span class="am-fin-act">' +
                     '<span class="am-fin-open">' + __t('查看过程') + '</span>' +
@@ -2492,8 +2559,13 @@ class AgentBubble {
         }
         // 显示完成状态
         if (this.statusBadge) {
-            this.statusBadge.textContent = steps > 0 ? __tpl(`完成 · ${steps} 步`) : __t('完成');
-            this.statusBadge.className = 'agent-status-badge text-xs text-success';
+            if (cancelled) {
+                this.statusBadge.textContent = steps > 0 ? __tpl(`已中断 · ${steps} 步`) : __t('已中断');
+                this.statusBadge.className = 'agent-status-badge text-xs text-warn';
+            } else {
+                this.statusBadge.textContent = steps > 0 ? __tpl(`完成 · ${steps} 步`) : __t('完成');
+                this.statusBadge.className = 'agent-status-badge text-xs text-success';
+            }
         }
         // ── 回合用量统计：token / 缓存命中率 / 耗时 ──
         if (usage) this.renderUsageStats(usage);
@@ -2508,6 +2580,9 @@ class AgentBubble {
         this.currentToolEl = null;
         this.stepBadge = null;
         this.statusBadge = null;
+        this._stepInfo = null;
+        this._liveTokens = 0;
+        this._liveCalls = 0;
     }
 
     showReflection(hint) {
@@ -2687,6 +2762,8 @@ function addMessage(role, content, msgAttachments, realIndex) {
             </div>
             <div class="msg-content msg-text max-w-[90%] px-4 py-3 rounded-xl rounded-tl-sm bg-surface-2 border border-line-soft text-sm leading-relaxed text-ink-1">${safeMarked(content)}</div>
             <div class="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity justify-end">
+                <button onclick="rateMsg(this,'up')" class="msg-act fb-btn text-ink-3 hover:text-success" title="${__t('有帮助')}"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>
+                <button onclick="rateMsg(this,'down')" class="msg-act fb-btn text-ink-3 hover:text-danger" title="${__t('需改进')}"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg></button>
                 <button onclick="copyMessage(${mid})" class="msg-act text-ink-3 hover:text-accent-text" title="${__t('复制')}"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg></button>
                 <button data-i18n-title="重新生成" onclick="regenerateResponse(this)" class="msg-act text-ink-3 hover:text-accent-text" title="重新生成"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg></button>
                 <button onclick="deleteMessage(${mid})" class="msg-act text-ink-3 hover:text-danger" title="${__t('删除')}"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trash"/></svg></button>
@@ -3115,6 +3192,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 if (typeof onProviderChange === 'function') onProviderChange();
                 if (typeof populateFallbackModelSelect === 'function') populateFallbackModelSelect();
+                if (typeof populateVisionFallbackSelect === 'function') populateVisionFallbackSelect();
             } catch(e) {}
         });
     }
@@ -3794,6 +3872,97 @@ function copyAgentMessage(btn) {
     });
 }
 
+// ── 消息级反馈（👍/👎）：POST /api/feedback；点踩信号后端会写入记忆/自进化链路 ──
+function _fbContext(btn) {
+    // 定位 agent 气泡行（agent 行无 flex-row-reverse，user 行有），提取问答上下文
+    const agentRow = btn.closest('.flex.gap-5:not(.flex-row-reverse)') || btn.closest('[data-msg-id]');
+    let answer = '', mid = '', question = '';
+    if (agentRow) {
+        mid = agentRow.dataset.msgId || '';
+        const cEl = agentRow.querySelector('.msg-content');
+        if (cEl) answer = (cEl.textContent || '').trim().slice(0, 4000);
+        let userRow = agentRow.previousElementSibling;
+        while (userRow && !userRow.classList.contains('flex-row-reverse')) userRow = userRow.previousElementSibling;
+        if (userRow) {
+            const tEl = userRow.querySelector('.msg-text');
+            if (tEl) question = (tEl.textContent || '').trim().slice(0, 2000);
+        }
+    }
+    return { session_id: (typeof currentSessionId !== 'undefined' && currentSessionId) || '', message_id: mid, question, answer };
+}
+
+async function _fbSend(rating, reason, btn) {
+    const ctx = _fbContext(btn);
+    try {
+        const r = await fetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({ rating, reason: reason || '' }, ctx)),
+        });
+        return r.ok;
+    } catch (e) { console.error('feedback submit failed:', e); return false; }
+}
+
+function _fbMarkDone(btn, rating) {
+    // 两个反馈按钮置灰禁用，被点的高亮；收起已展开的原因行
+    const parent = btn.parentElement;
+    if (parent) parent.querySelectorAll('.fb-btn').forEach(b => { b.disabled = true; b.classList.add('opacity-40'); });
+    btn.classList.remove('opacity-40');
+    btn.classList.add(rating === 'up' ? 'text-success' : 'text-danger');
+    const bar = btn.closest('.justify-end');
+    const container = bar ? bar.parentElement : parent;
+    if (container) { const cr = container.querySelector('.fb-reasons'); if (cr) cr.remove(); }
+}
+
+async function rateMsg(btn, rating) {
+    if (!btn || btn.disabled) return;
+    if (rating === 'up') {
+        btn.disabled = true;  // 防重复点击
+        const ok = await _fbSend('up', '', btn);
+        btn.disabled = false;
+        if (ok) _fbMarkDone(btn, 'up');
+        return;
+    }
+    // 👎：先内联展开原因 chips，选定后再提交（比 window.prompt 更轻、不打断）
+    const bar = btn.closest('.justify-end');
+    const container = bar ? bar.parentElement : btn.parentElement;
+    if (!container) { const ok = await _fbSend('down', '', btn); if (ok) _fbMarkDone(btn, 'down'); return; }
+    const existing = container.querySelector('.fb-reasons');
+    if (existing) { existing.remove(); return; }  // 再点一次 = 收起
+    const row = document.createElement('div');
+    row.className = 'fb-reasons flex flex-wrap items-center gap-1 mt-1 justify-end';
+    const label = document.createElement('span');
+    label.className = 'text-tiny text-ink-4 mr-1';
+    label.textContent = __t('哪里需要改进？');
+    row.appendChild(label);
+    ['答非所问', '未完成', '太慢', '工具用错', '其他'].forEach(rs => {
+        const c = document.createElement('button');
+        c.className = 'text-tiny px-2 py-0.5 rounded bg-surface-3 border border-line text-ink-3 hover:text-danger hover:border-danger/50';
+        c.textContent = __t(rs);
+        c.onclick = async () => {
+            let reason = rs;
+            if (rs === '其他') {
+                const t = window.prompt(__t('请简述问题（可留空）'));
+                if (t === null) return;  // 取消
+                reason = (t && t.trim()) ? t.trim().slice(0, 200) : '其他';
+            }
+            c.disabled = true;
+            const ok = await _fbSend('down', reason, btn);
+            c.disabled = false;
+            if (ok) _fbMarkDone(btn, 'down');
+        };
+        row.appendChild(c);
+    });
+    const close = document.createElement('button');
+    close.className = 'text-tiny px-1.5 py-0.5 rounded text-ink-4 hover:text-ink-2';
+    close.textContent = '✕';
+    close.title = __t('取消');
+    close.onclick = () => row.remove();
+    row.appendChild(close);
+    if (bar && bar.parentNode) bar.parentNode.insertBefore(row, bar.nextSibling);
+    else container.appendChild(row);
+}
+
 // ── 重新生成：用原文重发上一条用户消息，替换掉当前 Agent 回复 ──
 // 复用 edit 的截断重发机制（edit_from 截断后端 session.messages，再重新发送）
 function regenerateResponse(btn) {
@@ -4397,10 +4566,7 @@ const PANEL_TEMPLATES = {
                 <div class="flex gap-2 mb-2"><input data-i18n-placeholder="名称" id="mcp-name" type="text"  placeholder="名称" class="flex-1 px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60"><input data-i18n-placeholder="命令" id="mcp-command" type="text" placeholder="命令" class="flex-1 px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60"><button onclick="addMcpServer()" class="px-3 py-2 rounded-lg bg-accent/10 hover:bg-accent/25 text-accent-text text-sm font-medium transition-colors">添加</button></div>
                 <div id="mcp-list" class="text-xs text-ink-3">暂无 MCP 服务器</div>
             </div>
-            <div class="border-t border-line-soft pt-4"><label class="block text-sm font-medium text-ink-2 mb-2">Webhook 触发器 <span class="text-ink-3 font-normal">(外部系统 POST 调用即可让 Scout 执行预设任务)</span></label>
-                <div class="flex gap-2 mb-2"><input data-i18n-placeholder="名称" id="webhook-name" type="text"  placeholder="名称" class="w-28 px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60"><input data-i18n-placeholder="任务描述，如：总结最新消息" id="webhook-task" type="text" placeholder="任务描述，如：总结最新消息" class="flex-1 px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60"><button onclick="addWebhook()" class="px-3 py-2 rounded-lg bg-accent/10 hover:bg-accent/25 text-accent-text text-sm font-medium transition-colors">创建</button></div>
-                <div id="webhook-list" class="text-xs text-ink-3 space-y-1">暂无 Webhook</div>
-            </div>
+            <!-- ★ 2026-09-25：「Webhook 触发器」块已随 Webhook 管理功能移除（addWebhook 本就无定义，点击即报错） -->
             <div class="border-t border-line-soft pt-4"><label class="block text-sm font-medium text-ink-2 mb-2">系统状态</label><div id="system-status" class="space-y-2"></div></div>
             <div class="border-t border-line-soft pt-4"><label class="block text-sm font-medium text-ink-2 mb-2">插件</label><div id="plugin-list" class="text-xs text-ink-3">加载中...</div></div>
         </div>`
@@ -5204,6 +5370,206 @@ function sendConfirmResponse(requestId, approved, remember) {
     }
 }
 
+// ── ask_user 用户澄清（2026-09-23，WorkBuddy AskUserQuestion 同款）──
+// Agent 在任务中途有疑惑时弹出此卡片：问题 + 候选项按钮 + 自由输入。
+// 回答经 WS clarify_response 回传，agent 拿到后继续执行。
+function showClarifyDialog(data) {
+    const { request_id, question, options, timeout } = data;
+    const opts = Array.isArray(options) ? options.filter(o => o && String(o).trim()) : [];
+
+    // 已有弹窗先移除（连续多次澄清只保留最新一张）
+    document.querySelectorAll('.clarify-modal').forEach(m => m.remove());
+
+    const modal = document.createElement('div');
+    modal.id = `clarify-modal-${request_id}`;
+    modal.className = 'clarify-modal fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+    modal.innerHTML = `
+        <div class="bg-surface-3 border border-line rounded-lg p-6 max-w-md w-full mx-4">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-full bg-accent/15 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+                <h3 class="text-lg font-semibold text-ink-1">Agent 需要澄清<span id="clarify-countdown-${request_id}" class="ml-2 text-sm font-normal text-ink-3"></span></h3>
+            </div>
+            <p class="text-ink-2 mb-4 whitespace-pre-wrap">${escapeHtml(question)}</p>
+            ${opts.length ? `
+            <div class="flex flex-col gap-2 mb-4">
+                ${opts.map(o => `
+                <button data-answer="${escapeHtml(o)}" class="clarify-opt text-left px-4 py-2.5 rounded-lg bg-surface-4 hover:bg-surface-5 border border-line-soft hover:border-accent/40 text-ink-1 text-sm transition-colors">
+                    ${escapeHtml(o)}
+                </button>`).join('')}
+            </div>` : ''}
+            <div class="mb-3">
+                <input type="text" id="clarify-input-${request_id}" placeholder="其他：自由输入回答…"
+                       class="w-full px-3 py-2 rounded-lg bg-surface-4 border border-line text-ink-1 text-sm placeholder:text-ink-3 focus:outline-none focus:border-accent/50">
+            </div>
+            <div class="flex gap-3">
+                <button id="clarify-skip-${request_id}" class="flex-1 px-4 py-2 rounded bg-surface-4 hover:bg-surface-5 text-ink-2 transition-colors text-sm">
+                    跳过（让 Agent 自行判断）
+                </button>
+                <button id="clarify-send-${request_id}" class="flex-1 px-4 py-2 rounded bg-accent hover:opacity-90 text-on-solid transition-all text-sm">
+                    发送回答
+                </button>
+            </div>
+        </div>`;
+
+    document.body.appendChild(modal);
+
+    // ── 等待倒计时（2026-09-24，#4）：让用户知道 Agent 正在等回答、多久后自动跳过。
+    //    后端超时(SCOUT_CLARIFY_TIMEOUT)会推 clarify_cancelled 关弹窗；此处仅做可见提示。
+    //    定时器自清理：弹窗一旦被移除（发送/跳过/超时关闭）即停，避免泄漏。
+    const cdEl = document.getElementById(`clarify-countdown-${request_id}`);
+    let remain = Number(timeout) > 0 ? Math.floor(Number(timeout)) : 0;
+    if (cdEl && remain > 0) {
+        const fmt = (s) => s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : `${s}s`;
+        cdEl.textContent = __tpl(`（${fmt(remain)} 后自动跳过）`);
+        const timer = setInterval(() => {
+            if (!modal.isConnected) { clearInterval(timer); return; }
+            remain -= 1;
+            if (remain <= 0) { cdEl.textContent = __t('（即将自动跳过）'); clearInterval(timer); return; }
+            cdEl.textContent = __tpl(`（${fmt(remain)} 后自动跳过）`);
+        }, 1000);
+    }
+
+    const inputEl = document.getElementById(`clarify-input-${request_id}`);
+    const send = () => {
+        const answer = (inputEl.value || '').trim();
+        if (!answer) return;
+        sendClarifyResponse(request_id, answer);
+        modal.remove();
+    };
+
+    // 点选项 → 立即回传
+    modal.querySelectorAll('.clarify-opt').forEach(btn => {
+        btn.onclick = () => {
+            sendClarifyResponse(request_id, btn.dataset.answer || btn.textContent.trim());
+            modal.remove();
+        };
+    });
+
+    document.getElementById(`clarify-send-${request_id}`).onclick = send;
+    inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); send(); }
+    });
+
+    // 跳过 → 回传空串，agent 会收到"用户未回应"并说明假设后继续
+    document.getElementById(`clarify-skip-${request_id}`).onclick = () => {
+        sendClarifyResponse(request_id, '');
+        modal.remove();
+    };
+
+    // 提示音（复用确认弹窗的轻提示）
+    try {
+        const audio = new Audio('data:audio/wav;base64,UklGAzQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRAAAAB/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/');
+        audio.volume = 0.3;
+        audio.play().catch(() => {});
+    } catch (e) {}
+
+    // 自由输入框自动聚焦
+    setTimeout(() => inputEl && inputEl.focus(), 50);
+}
+
+function sendClarifyResponse(requestId, answer) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'clarify_response',
+            request_id: requestId,
+            answer: String(answer || '')
+        }));
+    }
+}
+
+// 关闭澄清弹窗：带 request_id 关指定一张；不带参数关全部
+// （超时回包 clarify_cancelled → 关指定；done/cancelled/error → 关全部，
+//   否则弹窗残留，用户作答后回包无人消费被静默丢弃）
+function closeClarifyDialogs(requestId) {
+    if (requestId) {
+        const m = document.getElementById(`clarify-modal-${requestId}`);
+        if (m) m.remove();
+    } else {
+        document.querySelectorAll('.clarify-modal').forEach(m => m.remove());
+    }
+}
+
+// ── 空转看门狗弹窗（2026-09-24，#2）：疑似空转时让用户选「继续/停止」──
+function showWatchdogDialog(data) {
+    const { request_id, warning, meta, timeout } = data || {};
+    if (!request_id) return;
+    // 只保留最新一张
+    document.querySelectorAll('.watchdog-modal').forEach(m => m.remove());
+
+    const m0 = (meta && meta.steps) || 0;
+    const tc = (meta && meta.tool_calls) || 0;
+    const ok = (meta && meta.ok) || 0;
+    const statLine = __tpl(`已执行 ${m0} 步 · ${tc} 次工具调用 · ${ok} 次成功`);
+
+    const modal = document.createElement('div');
+    modal.id = `watchdog-modal-${request_id}`;
+    modal.className = 'watchdog-modal fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+    modal.innerHTML = `
+        <div class="bg-surface-3 border border-line rounded-lg p-6 max-w-md w-full mx-4">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-full bg-warn/15 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-warn" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-warning"/></svg>
+                </div>
+                <h3 class="text-lg font-semibold text-ink-1">${__t('任务可能在空转')}<span id="watchdog-countdown-${request_id}" class="ml-2 text-sm font-normal text-ink-3"></span></h3>
+            </div>
+            <p class="text-ink-2 mb-2 whitespace-pre-wrap">${escapeHtml(warning || '')}</p>
+            <p class="text-xs text-ink-3 mb-4">${escapeHtml(statLine)}</p>
+            <div class="flex gap-3">
+                <button id="watchdog-stop-${request_id}" class="flex-1 px-4 py-2 rounded bg-surface-4 hover:bg-surface-5 text-ink-2 transition-colors text-sm">
+                    ${__t('停止任务')}
+                </button>
+                <button id="watchdog-cont-${request_id}" class="flex-1 px-4 py-2 rounded bg-accent hover:opacity-90 text-on-solid transition-all text-sm">
+                    ${__t('继续尝试')}
+                </button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+
+    const respond = (keepGoing) => {
+        if (!keepGoing) window._wdUserStopped = true;  // done 时标记「已中断」
+        sendWatchdogResponse(request_id, keepGoing);
+        modal.remove();
+    };
+    document.getElementById(`watchdog-cont-${request_id}`).onclick = () => respond(true);
+    document.getElementById(`watchdog-stop-${request_id}`).onclick = () => respond(false);
+
+    // 倒计时（后端超时默认「继续」）；弹窗移除即自清理
+    const cdEl = document.getElementById(`watchdog-countdown-${request_id}`);
+    let remain = Number(timeout) > 0 ? Math.floor(Number(timeout)) : 0;
+    if (cdEl && remain > 0) {
+        cdEl.textContent = __tpl(`（${remain}s 后自动继续）`);
+        const timer = setInterval(() => {
+            if (!modal.isConnected) { clearInterval(timer); return; }
+            remain -= 1;
+            if (remain <= 0) { clearInterval(timer); cdEl.textContent = ''; return; }
+            cdEl.textContent = __tpl(`（${remain}s 后自动继续）`);
+        }, 1000);
+    }
+}
+
+function closeWatchdogDialogs(requestId) {
+    if (requestId) {
+        const m = document.getElementById(`watchdog-modal-${requestId}`);
+        if (m) m.remove();
+    } else {
+        document.querySelectorAll('.watchdog-modal').forEach(m => m.remove());
+    }
+}
+
+function sendWatchdogResponse(requestId, keepGoing) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'watchdog_response',
+            request_id: requestId,
+            continue: !!keepGoing,
+        }));
+    }
+}
+
 // ── 可观测性面板 ──
 async function loadObservabilityPanel() {
     try {
@@ -5439,11 +5805,21 @@ async function loadProviders() { try { const r = await fetch('/api/config/provid
 // 每个模型下拉框尾部追加"✏️ 自定义模型名…"选项，选中后其下方出现输入框，回车确认、Esc 取消
 const customOption = () => `<option value="__custom__">${__t('✏️ 自定义模型名…')}</option>`;
 const CUSTOM_SELECTS = {
-    'cfg-model':           { input: 'cfg-model-custom',           after: () => updateModelDesc() },
+    'cfg-model':           { input: 'cfg-model-custom',           after: () => { updateModelDesc(); refreshModelCapabilities(); } },
     'cfg-vision-model':    { input: 'cfg-vision-model-custom' },
     'cfg-embedding-model': { input: 'cfg-embedding-model-custom' },
     'cfg-image-model':     { input: 'cfg-image-model-custom',     after: () => saveImageModel() },
     'cfg-fallback-model':  { input: 'cfg-fallback-model-custom',  after: () => saveFallbackModel() },
+    // 兜底视觉模型（模型能力卡，与隐藏视觉组同源 vision_model）：选中即保存，并同步隐藏组下拉
+    'cfg-vision-fallback-model': {
+        input: 'cfg-vision-fallback-custom',
+        after: () => {
+            saveVisionFallbackModel();
+            const v = effectiveModelValue('cfg-vision-fallback-model');
+            const vSel = document.getElementById('cfg-vision-model');
+            if (vSel && v !== null) { if (v) addCustomModelOption(vSel, v); else vSel.value = ''; }
+        },
+    },
 };
 
 function onSelectChange(selId) {
@@ -5523,7 +5899,7 @@ const PROVIDER_SCOPES = {
         modelDesc: 'cfg-model-desc', modelCaps: 'cfg-model-caps',
         keyHint: 'cfg-key-hint',
         modelKey: 'models', defaultModel: (p) => p.default_model,
-        after: () => { updateModelDesc(); populateFallbackModelSelect(); fillEmbeddingModelSelect(); },
+        after: () => { updateModelDesc(); populateFallbackModelSelect(); populateVisionFallbackSelect(); fillEmbeddingModelSelect(); },
     },
     vision: {
         provider: 'cfg-vision-provider', model: 'cfg-vision-model', modelCustom: 'cfg-vision-model-custom',
@@ -5608,6 +5984,8 @@ function onProviderChange(scope) {
     }
     // 4. 类型特有收尾（文本组更新模型描述/备用模型）
     if (s.after) s.after();
+    // 5. 文本组：厂商/模型变了 → 重拉该模型的三项能力（2026-09-24）
+    if (scope === 'text') refreshModelCapabilities();
 }
 
 // 渲染集中"服务商 API 配置"区：下拉选择服务商 → 竖向显示该厂商的 API Key / Base URL 填写框
@@ -5795,6 +6173,38 @@ function populateFallbackModelSelect() {
     const options = preset.models.map(m => `<option value="${m.id}">${m.id}</option>`).join('');
     const sel = document.getElementById('cfg-fallback-model');
     sel.innerHTML = `<option value="">${__t('不启用')}</option>` + options + customOption();
+}
+
+// 兜底视觉模型下拉（2026-09-24 方案 A）：自动推荐 + 当前主厂商视觉模型预设 + 自定义。
+// 随主厂商切换重建（text scope 的 after 钩子），跨厂商模型不会出现在列表里，天然防错。
+function populateVisionFallbackSelect() {
+    const sel = document.getElementById('cfg-vision-fallback-model');
+    if (!sel) return;
+    const p = document.getElementById('cfg-provider').value;
+    // 厂商切换 → 重置为"自动推荐"；同厂商重建（i18n 重渲染等）→ 保留当前选择
+    const providerChanged = sel.dataset.prevProvider !== undefined && sel.dataset.prevProvider !== p;
+    sel.dataset.prevProvider = p;
+    let cur = providerChanged ? '' : sel.value;
+    if (cur === '__custom__') cur = sel.dataset.prevVisionFallback || '';
+    const preset = PROVIDER_DATA[p];
+    const vms = (preset && preset.vision_models) || [];
+    let opts = `<option value="" data-i18n="自动推荐该厂商视觉模型">自动推荐该厂商视觉模型</option>`;
+    if (vms.length) {
+        opts += vms.map(m => `<option value="${m.id}">${m.name ? __t(m.name) + ' · ' + m.id : m.id}</option>`).join('');
+    }
+    opts += customOption();
+    sel.innerHTML = opts;
+    if (cur && sel.querySelector('option[value="' + cur + '"]')) sel.value = cur;
+    else if (cur) addCustomModelOption(sel, cur);
+    else sel.value = '';
+    sel.dataset.prevVisionFallback = (sel.value && sel.value !== '__custom__') ? sel.value : '';
+}
+
+// 兜底视觉模型选中即保存（与备用模型 saveFallbackModel 同款交互），无需点"保存"
+function saveVisionFallbackModel() {
+    const model = effectiveModelValue('cfg-vision-fallback-model');
+    if (model === null) return; // 停在自定义且未填写，等回车确认后由 after 再触发
+    fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vision_model: model || ''}) });
 }
 
 // 填充 Embedding 下拉：本地离线 / 关闭 / 所选服务商 embedding 模型（optgroup 分组）/ 自定义
@@ -5990,6 +6400,8 @@ function selectChatModel(provider, id, name) {
     const pvLabel = document.getElementById('chat-model-provider');
     if (label) label.textContent = String(name || id || '模型').replace(/（当前配置）/g, '').trim();
     if (pvLabel) pvLabel.textContent = provider || '默认';
+    // 通知上下文圆环：分母（模型窗口）可能变了，立即重取统计（2026-09-23）
+    try { window.dispatchEvent(new Event('scout-model-changed')); } catch (e) {}
 }
 
 document.addEventListener('click', function (e) {
@@ -6184,6 +6596,88 @@ function initSearchEngineUI() {
     }
 }
 
+// ── 模型能力：上下文长度 / 思考强度 / 视觉（2026-09-24 用户可配）──
+// 三项都按 "<provider>:<model>" 分别记忆，切换模型时自动带出该模型的设置。
+const CAP_SOURCE_TEXT = {
+    user: '手动设置',
+    preset: '预设目录',
+    name: '模型名推断',
+    '': '未识别（回退默认值）',
+};
+const CAP_VISION_TEXT = {
+    user: '手动设置',
+    preset: '预设目录',
+    name: '模型名推断',
+    '': '判断不了（按不支持）',
+};
+// 视觉路由三态补充说明（2026-09-24 三级兜底）：说明图片实际会怎么被处理
+function visionRouteText(cap) {
+    if (!cap) return '';
+    const rt = cap.vision_route || '';
+    if (rt === 'main') {
+        const s = CAP_VISION_TEXT[cap.vision_source || ''] || '';
+        return '主模型直收图片' + (s ? '（' + s + '）' : '');
+    }
+    if (rt === 'fallback') {
+        const m = cap.vision_route_model || '视觉模型';
+        // 手动选的兜底与自动推荐的文案分开，避免与兜底下拉框显示不一致
+        if (cap.vision_route_source === 'user') {
+            return '主模型不看图，由 ' + m + ' 识图成文字（手动指定兜底）';
+        }
+        return '主模型不看图，自动由 ' + m + ' 识图成文字（兜底）';
+    }
+    return '主模型不看图且该厂商无兜底视觉模型，图片不会识别';
+}
+
+function capProviderModel() {
+    const pEl = document.getElementById('cfg-provider');
+    const mEl = document.getElementById('cfg-model');
+    const provider = (pEl && pEl.value) || '';
+    let model = effectiveModelValue('cfg-model');
+    if (model === null) model = (mEl && mEl.value) || '';
+    if (model === '__custom__') model = '';
+    return { provider: provider, model: model };
+}
+
+async function refreshModelCapabilities() {
+    const { provider, model } = capProviderModel();
+    const keyEl = document.getElementById('cfg-cap-model');
+    if (keyEl) keyEl.textContent = model ? ((provider ? provider + ' / ' : '') + model) : '';
+    if (!model) return;
+    try {
+        const r = await fetch('/api/models/capabilities?provider=' + encodeURIComponent(provider) + '&model=' + encodeURIComponent(model));
+        if (!r.ok) return;
+        const cap = await r.json();
+        const ctxEl = document.getElementById('cfg-context-length');
+        if (ctxEl) ctxEl.value = cap.context_length || '';
+        const srcEl = document.getElementById('cfg-context-source');
+        if (srcEl) srcEl.textContent = CAP_SOURCE_TEXT[cap.context_source || ''] || '';
+        const effEl = document.getElementById('cfg-reasoning-effort');
+        if (effEl) effEl.value = cap.thinking_effort || 'auto';
+        const apEl = document.getElementById('cfg-thinking-applied');
+        if (apEl) apEl.textContent = cap.thinking_applied || '';
+        const vsEl = document.getElementById('cfg-vision-capability');
+        if (vsEl) vsEl.value = cap.vision_source === 'user' ? (cap.vision ? 'on' : 'off') : 'auto';
+        const vSrcEl = document.getElementById('cfg-vision-source');
+        if (vSrcEl) vSrcEl.textContent = visionRouteText(cap);
+    } catch (e) { console.warn('模型能力拉取失败:', e); }
+}
+
+function collectModelCapabilities() {
+    const { provider, model } = capProviderModel();
+    if (!model) return {};
+    const key = (provider || '*') + ':' + model;
+    const ctxRaw = (document.getElementById('cfg-context-length') || {}).value;
+    const ctx = parseInt(ctxRaw, 10) || 0;  // 0 = 清除覆盖，回到自动识别
+    const vis = (document.getElementById('cfg-vision-capability') || {}).value || 'auto';
+    const eff = (document.getElementById('cfg-reasoning-effort') || {}).value || 'auto';
+    return {
+        model_context_overrides: { [key]: ctx },
+        model_vision_overrides: { [key]: vis === 'auto' ? null : (vis === 'on') },
+        reasoning_effort: eff,
+    };
+}
+
 async function loadConfig() {
     try {
         // 确保 providers 已加载
@@ -6203,6 +6697,8 @@ async function loadConfig() {
         onProviderChange('text');
         const ms = document.getElementById('cfg-model');
         if (c.model) addCustomModelOption(ms, c.model);
+        // 模型能力（上下文长度/思考强度/视觉）跟随所选模型刷新
+        refreshModelCapabilities();
         document.getElementById('cfg-max-turns').value = c.max_turns || 30;
         document.getElementById('cfg-temperature').value = c.temperature || 0.7;
         // 同步回复语言
@@ -6246,6 +6742,9 @@ async function loadConfig() {
         // 同步视觉/Embedding/图像模型（含自定义）
         const vSel = document.getElementById('cfg-vision-model');
         if (vSel) { if (c.vision_model) addCustomModelOption(vSel, c.vision_model); else vSel.value = ''; }
+        // 兜底视觉模型（模型能力卡内下拉，与隐藏组同源 vision_model；非预设值注入自定义项）
+        const fbEl = document.getElementById('cfg-vision-fallback-model');
+        if (fbEl) { if (c.vision_model) addCustomModelOption(fbEl, c.vision_model); else fbEl.value = ''; }
         const eSel = document.getElementById('cfg-embedding-model');
         if (eSel) {
             if (c.embedding_model && !['local', 'local_onnx', 'onnx', 'bge-small-zh-v1.5'].includes(c.embedding_model)) {
@@ -6397,7 +6896,7 @@ async function saveConfig() {
         embedding_provider: embeddingProvider,
         max_turns: parseInt(document.getElementById('cfg-max-turns').value) || 30,
         temperature: parseFloat(document.getElementById('cfg-temperature').value) || 0.7,
-        vision_model: effectiveModelValue('cfg-vision-model') || '',
+        vision_model: effectiveModelValue('cfg-vision-fallback-model') || '',
         embedding_model: effectiveModelValue('cfg-embedding-model') || '',
         image_model: effectiveModelValue('cfg-image-model') || '',
         web_host: document.getElementById('cfg-web-host').value || '127.0.0.1',
@@ -6411,6 +6910,8 @@ async function saveConfig() {
         // 多搜索引擎源：search_engines 全量列表；search_engine 保留兼容（第一个 searxng 源的 URL）
         search_engines: searchEngines,
         search_engine: (searchEngines.find((e) => e.type === 'searxng') || {}).url || '',
+        // 模型能力（2026-09-24）：上下文长度/思考强度/视觉，按模型记忆
+        ...collectModelCapabilities(),
     };
     try {
         const r = await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) });
@@ -6421,6 +6922,8 @@ async function saveConfig() {
             await loadProviderCredState();
             renderProviderCreds();
             ['text', 'vision', 'image'].forEach(s => onProviderChange(s));
+            // 分母可能变了（上下文长度手填生效）→ 立即重算上下文圆环
+            try { window.dispatchEvent(new Event('scout-ctx-refresh')); } catch (e) {}
             if (result.warning) toast.warning(result.warning);
             closeSettings();
             const s = document.getElementById('conn-status');
