@@ -314,9 +314,14 @@ ReAct 推理过程实时可见，危险命令在执行前被安全层拦截并�
 
 ### 🪟 Windows 用户：开箱即用，无需装 Python
 
+> ⚠️ **v1.0.0.5 的绿色 exe 还没上传到 GitHub Releases** —— tag 和代码都已发布，Release 待建。
+> 在建好之前，下面的链接给的是**源码包**（需要自己装 Python，见上方安装步骤）；想立刻拿到
+> 免安装的绿色版，先用最近一个带 exe 资产的
+> [v1.0.0.4 Release](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.4)。
+
 不想折腾环境？直接用**绿色便携版**，双击即用：
 
-1. 到 **GitHub Releases** 下载 **Windows 绿色版**：[v1.0.0.5 发布页](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.5)（直接下载 [scout-agent-1.0.0.5-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.5/scout-agent-1.0.0.5-win-x64.zip)，或到 [全部 Releases](https://github.com/core-power/Scout-Agent/releases) 找更新版本）。
+1. 取发布 tag [v1.0.0.5](https://github.com/core-power/Scout-Agent/tree/v1.0.0.5) —— 源码包：[v1.0.0.5.zip](https://github.com/core-power/Scout-Agent/archive/refs/tags/v1.0.0.5.zip)。绿色便携包（`scout-agent-<版本号>-win-x64.zip`）统一发布在 [Releases](https://github.com/core-power/Scout-Agent/releases) 页。
 2. 解压后把**整个文件夹**拷到任意 Windows 10/11 电脑即可运行——免安装、免注册表、免管理员权限。
 3. 打开解压目录，双击 **`ScoutDesktop\ScoutAgent.exe`**，对话窗口立即弹出。
 4. 首次使用打开**设置**页，填入你的 LLM API Key 即可（支持通义/DeepSeek/OpenAI 等任意 OpenAI 兼容端点）。

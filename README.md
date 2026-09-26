@@ -312,9 +312,14 @@ Net effect: after days, machine switches or restarts, it still remembers where y
 
 ### 🪟 Windows Users: Just Run It — No Python Needed
 
+> ⚠️ **The portable exe for v1.0.0.5 is not on GitHub Releases yet** — the tag and the code are
+> published, the Release entry isn't. Until it is, the links below serve the **source archive**
+> (needs Python; see *Install* above). For a ready-to-run build right now, use the latest release
+> that has an exe asset: [v1.0.0.4](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.4).
+
 Don't want to set up Python? Use the **portable green build** — double-click and go:
 
-1. Download the **Windows portable build** from **GitHub Releases**: [v1.0.0.5](https://github.com/core-power/Scout-Agent/releases/tag/v1.0.0.5) — direct link: [scout-agent-1.0.0.5-win-x64.zip](https://github.com/core-power/Scout-Agent/releases/download/v1.0.0.5/scout-agent-1.0.0.5-win-x64.zip) (check [all releases](https://github.com/core-power/Scout-Agent/releases) for newer versions).
+1. Get the release tag [v1.0.0.5](https://github.com/core-power/Scout-Agent/tree/v1.0.0.5) — source archive: [v1.0.0.5.zip](https://github.com/core-power/Scout-Agent/archive/refs/tags/v1.0.0.5.zip). Portable builds (`scout-agent-<version>-win-x64.zip`) are published under [Releases](https://github.com/core-power/Scout-Agent/releases).
 2. Unzip it, then copy the **whole folder** to any Windows 10/11 machine — no installation, no registry, no admin rights.
 3. Open the unzipped folder and double-click **`ScoutDesktop\ScoutAgent.exe`** — the chat window opens instantly.
 4. On first use, open **Settings** and paste your LLM API key (dashscope / DeepSeek / OpenAI / any OpenAI-compatible endpoint).
