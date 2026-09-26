@@ -22,18 +22,25 @@ def js_unescape(s):
         if c == '\\' and i + 1 < n:
             nx = s[i + 1]
             if nx in mapping:
-                out.append(mapping[nx]); i += 2; continue
+                out.append(mapping[nx])
+                i += 2
+                continue
             if nx == 'u' and i + 6 <= n:
                 try:
-                    out.append(chr(int(s[i + 2:i + 6], 16))); i += 6; continue
+                    out.append(chr(int(s[i + 2:i + 6], 16)))
+                    i += 6
+                    continue
                 except ValueError:
                     pass
             if nx == 'x' and i + 4 <= n:
                 try:
-                    out.append(chr(int(s[i + 2:i + 4], 16))); i += 4; continue
+                    out.append(chr(int(s[i + 2:i + 4], 16)))
+                    i += 4
+                    continue
                 except ValueError:
                     pass
-        out.append(c); i += 1
+        out.append(c)
+        i += 1
     return ''.join(out)
 
 def load_dict():
@@ -41,7 +48,6 @@ def load_dict():
     # 逐个提取 "key": { zh: (key 可含转义与真实换行), 线性扫描
     keys = set()
     i = 0
-    n = len(js)
     while True:
         i = js.find('": { zh:', i)
         if i == -1:
@@ -56,7 +62,8 @@ def load_dict():
             bs = 0
             t = k - 1
             while t >= 0 and js[t] == '\\':
-                bs += 1; t -= 1
+                bs += 1
+                t -= 1
             if bs % 2 == 0:
                 keys.add(js_unescape(js[k + 1:i]))
                 j = k
@@ -90,7 +97,8 @@ def find_tpl_args(html):
             k = j + 1
             while k < n:
                 if html[k] == '\\':
-                    k += 2; continue
+                    k += 2
+                    continue
                 if html[k] == q:
                     break
                 k += 1

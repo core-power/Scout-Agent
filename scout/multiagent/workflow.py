@@ -80,7 +80,7 @@ class Workflow:
         }
         
         ready = []
-        for node_id, node in self.nodes.items():
+        for _node_id, node in self.nodes.items():
             if node.status != WorkflowStatus.PENDING:
                 continue
             

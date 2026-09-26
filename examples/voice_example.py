@@ -118,7 +118,7 @@ async def example_voice_conversation():
     
     # 查看能力
     capabilities = handler.get_capabilities()
-    print(f"✅ 语音能力:")
+    print("✅ 语音能力:")
     print(f"   ASR: {capabilities['asr']} (模型: {capabilities['asr_model']})")
     print(f"   TTS: {capabilities['tts']} (模型: {capabilities['tts_model']})")
     print(f"   支持的语言: {', '.join(capabilities['asr_languages'][:5])}...")
@@ -147,7 +147,7 @@ async def example_voice_conversation():
             voice="nova"
         )
         
-        print(f"\n✅ 对话完成:")
+        print("\n✅ 对话完成:")
         print(f"   输入文本: {input_text}")
         print(f"   输出音频: {output_audio}")
         
@@ -232,7 +232,7 @@ async def example_streaming_tts():
             print(f"   接收到 {len(chunk)} bytes 音频数据")
         
         total_size = sum(len(chunk) for chunk in audio_chunks)
-        print(f"\n✅ 流式合成完成:")
+        print("\n✅ 流式合成完成:")
         print(f"   总大小: {total_size} bytes")
         print(f"   数据块数: {len(audio_chunks)}")
         

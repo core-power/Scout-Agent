@@ -73,7 +73,6 @@ class EventBus:
     
     def emit_sync(self, event: Event) -> Event:
         """同步发布事件（在非异步上下文中使用）"""
-        import asyncio
 
         try:
             loop = asyncio.get_running_loop()

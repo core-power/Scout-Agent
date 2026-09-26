@@ -38,7 +38,7 @@ class BanwordsPlugin(Plugin):
                 # 保存默认配置
                 with open(config_path, 'w', encoding='utf-8') as f:
                     json.dump({"words": self.banwords}, f, ensure_ascii=False, indent=2)
-                logger.info(f"已创建默认敏感词配置")
+                logger.info("已创建默认敏感词配置")
         except Exception as e:
             logger.error(f"加载敏感词配置失败: {e}")
             self.banwords = default_banwords
@@ -65,7 +65,7 @@ class BanwordsPlugin(Plugin):
         """过滤用户消息中的敏感词"""
         filtered = self._filter_message(message)
         if filtered != message:
-            logger.debug(f"已过滤敏感词")
+            logger.debug("已过滤敏感词")
             return filtered
         return None
     
@@ -73,7 +73,7 @@ class BanwordsPlugin(Plugin):
         """过滤助手回复中的敏感词"""
         filtered = self._filter_message(response)
         if filtered != response:
-            logger.debug(f"已过滤回复中的敏感词")
+            logger.debug("已过滤回复中的敏感词")
             return filtered
         return None
     

@@ -26,6 +26,9 @@ class Message(BaseModel):
     sender: str = ""
     session_id: str = ""
     source: str = ""  # "console" / "web" / "wechat"
+    # 入站附件元数据（{name, type, size, path}，path 为已落盘的本地路径），
+    # 由渠道适配器填充；此前 channel_manager 传递该字段但因缺定义被 pydantic 静默丢弃。
+    attachments: list[dict] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.now)
     reasoning: str | None = None  # 扩展思考内容

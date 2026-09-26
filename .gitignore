@@ -1,6 +1,10 @@
 # ===== 用户配置与运行时数据（绝不提交，随项目迁移）=====
 .scout/
 data/
+# 冒烟测试留下的数据目录：里面有 secret_key（Fernet 加密主密钥）与 sessions.db-wal
+# （WAL 可能含真实会话正文片段）。`*.db` 虽已被忽略，但 secret_key / -wal / -shm
+# 三个后缀不匹配任何规则，`git add .` 会把它们带上公开仓库。
+_smoke_data/
 *.db
 *.sqlite
 *.sqlite3
@@ -36,6 +40,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
 .venv/

@@ -204,10 +204,8 @@ def create_app(args: argparse.Namespace) -> Any:
         raw = body["input"]
         if isinstance(raw, str):
             texts = [raw]
-            single = True
         elif isinstance(raw, list) and all(isinstance(x, str) for x in raw):
             texts = raw
-            single = False
         else:
             raise HTTPException(status_code=400, detail="input 必须为字符串或字符串数组")
 
@@ -216,7 +214,7 @@ def create_app(args: argparse.Namespace) -> Any:
 
         # 后端维度预热（本地模式会在此触发模型加载）
         try:
-            backend.dimension
+            _ = backend.dimension
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"嵌入后端不可用: {e}") from e
 
@@ -299,7 +297,7 @@ def main() -> None:
     import uvicorn
 
     mode = f"代理 → {args.upstream} ({args.upstream_model})" if args.upstream else f"本地模型 {args.model} (device={args.device})"
-    print(f"\n  Scout Embedding Server 启动中")
+    print("\n  Scout Embedding Server 启动中")
     print(f"  后端:   {mode}")
     print(f"  地址:   http://{args.host}:{args.port}/v1/embeddings")
     print(f"  鉴权:   {'启用 (Bearer token)' if args.auth_token else '未启用（仅限可信网络使用）'}")

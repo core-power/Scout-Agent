@@ -26,8 +26,11 @@ from scout.core.types import Observation, Session
 from scout.tools.base import ToolDefinition
 from scout.tools.registry import ToolRegistry
 
-# 子代理不应拥有的工具（防止无限递归委派 / 循环协作）
-DELEGATE_TOOLS = {"delegate_task", "parallel_delegate", "collaborate_task"}
+# 子代理不应拥有的工具：
+# - 委派类：防止无限递归委派 / 循环协作
+# - ask_user（2026-09-23）：子代理不直接向用户弹澄清卡片（弹窗无 sub 上下文，
+#   用户分不清是哪个代理在问）——歧义写进结论交回主代理，由主代理统一澄清
+DELEGATE_TOOLS = {"delegate_task", "parallel_delegate", "collaborate_task", "ask_user"}
 
 # 子代理注册到全局 router 的 ID 前缀
 _ROUTER_PREFIX = "delegate:"

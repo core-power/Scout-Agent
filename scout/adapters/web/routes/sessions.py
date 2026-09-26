@@ -134,6 +134,11 @@ class SessionRoutes:
                             # 附件信息
                             if m.metadata.get("attachments"):
                                 msg["attachments"] = m.metadata["attachments"]
+                            # ★ 2026-09-26（V3）：附件送达状态透传给前端渲染"图片未识读"
+                            # 徽标。不透传的话，历史会话重开后用户完全看不出哪几轮的图
+                            # 其实根本没被读过。
+                            if m.metadata.get("attachments_status"):
+                                msg["attachments_status"] = m.metadata["attachments_status"]
                             # 标记带工具调用的中间消息
                             if m.metadata.get("tool_calls"):
                                 msg["metadata"] = {"tool_calls": m.metadata["tool_calls"]}

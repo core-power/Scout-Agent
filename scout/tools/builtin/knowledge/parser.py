@@ -114,7 +114,7 @@ class DocumentParser:
         try:
             from PyPDF2 import PdfReader
         except ImportError:
-            return f"*需要安装 PyPDF2: `pip install PyPDF2`*", {}
+            return "*需要安装 PyPDF2: `pip install PyPDF2`*", {}
 
         reader = PdfReader(str(path))
         meta = {
@@ -124,7 +124,7 @@ class DocumentParser:
         }
 
         sections = []
-        for i, page in enumerate(reader.pages):
+        for _i, page in enumerate(reader.pages):
             text = page.extract_text() or ""
             if text.strip():
                 sections.append(text.strip())
@@ -154,7 +154,7 @@ class DocumentParser:
         try:
             from docx import Document
         except ImportError:
-            return f"*需要安装 python-docx: `pip install python-docx`*", {}
+            return "*需要安装 python-docx: `pip install python-docx`*", {}
 
         doc = Document(str(path))
         meta = {

@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+# IM 渠道澄清哨兵（2026-09-24）：ChannelCallbacks.on_clarify 把问题发到聊天渠道后
+# 返回本常量，ask_user 据此判定「问题已送达用户，应结束本轮、等待其下一条消息」，
+# 而不是像 Web 弹窗那样阻塞等待。放在 core 层，供 tools 与 adapters 共用、避免循环导入。
+IM_CLARIFY_SENT = "\x00__scout_im_clarify_sent__\x00"
+
 
 class Callbacks(Protocol):
     """平台无关的回调接口 — 不同平台实现不同 UI 反馈."""
@@ -14,7 +19,9 @@ class Callbacks(Protocol):
 
     async def on_reasoning(self, content: str) -> None: ...
 
-    async def on_clarify(self, question: str) -> str: ...
+    # options 参数（2026-09-23，ask_user 工具）：候选选项列表，可 None。
+    # 旧实现只收 question 一个参数 — 调用方需 try/except TypeError 兼容。
+    async def on_clarify(self, question: str, options: list[str] | None = None) -> str: ...
 
     async def on_step(self, step: int, total_budget: int) -> None: ...
 
@@ -32,6 +39,10 @@ class Callbacks(Protocol):
 
     async def on_file(self, file_path: str, file_name: str = "", file_size: int = 0) -> None: ...
 
+    # 空转看门狗（2026-09-24）：检测到疑似空转时征询用户「继续/停止」。
+    # 返回 True=继续，False=停止。无 UI 通道时默认 True（保持旧的自动行为）。
+    async def on_watchdog(self, warning: str, meta: dict | None = None) -> bool: ...
+
 
 class NullCallbacks:
     """空实现 — 无 UI 反馈时使用."""
@@ -45,7 +56,8 @@ class NullCallbacks:
     async def on_reasoning(self, content: str) -> None:
         pass
 
-    async def on_clarify(self, question: str) -> str:
+    async def on_clarify(self, question: str, options: list[str] | None = None) -> str:
+        # 无 UI 通道 → 返回空串，ask_user 工具据此降级为"不支持交互"
         return ""
 
     async def on_step(self, step: int, total_budget: int) -> None:
@@ -71,6 +83,10 @@ class NullCallbacks:
 
     async def on_file(self, file_path: str, file_name: str = "", file_size: int = 0) -> None:
         pass
+
+    async def on_watchdog(self, warning: str, meta: dict | None = None) -> bool:
+        # 无 UI 通道 → 默认继续（模型已收到看门狗提示，2 次无进展仍会强制收尾）
+        return True
 
 
 class TaggedCallbacks:
@@ -159,10 +175,21 @@ class TaggedCallbacks:
         if fn:
             return await fn(text)
 
-    async def on_clarify(self, question: str) -> str:
+    async def on_clarify(self, question: str, options: list[str] | None = None) -> str:
         fn = getattr(self._inner, "on_clarify", None)
         if fn:
-            return await fn(question)
+            # 新签名 (question, options)；旧实现只有 (question)。
+            # 用签名判断而不是 try/except TypeError 重试——TypeError 重试会把
+            # 回调内部真实的类型错误吞成"旧签名"，掩盖 bug。
+            import inspect
+            try:
+                params = inspect.signature(fn).parameters
+                accepts = "options" in params or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+                )
+            except (TypeError, ValueError):
+                accepts = True  # 拿不到签名 → 按新签名尝试
+            return await (fn(question, options) if accepts else fn(question))
         return ""
 
     async def on_reflection(self, hint: str) -> None:
@@ -185,3 +212,10 @@ class TaggedCallbacks:
         fn = getattr(self._inner, "on_file", None)
         if fn:
             return await fn(file_path, file_name, file_size)
+
+    async def on_watchdog(self, warning: str, meta: dict | None = None) -> bool:
+        fn = getattr(self._inner, "on_watchdog", None)
+        if fn:
+            md = self._tag_metadata(meta)
+            return bool(await fn(warning, md))
+        return True

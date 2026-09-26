@@ -43,8 +43,17 @@ class ConsoleCallbacks(Callbacks):
     async def on_reasoning(self, content: str) -> None:
         console.print(f"  [dim italic]{content}[/]", end="")
 
-    async def on_clarify(self, question: str) -> str:
+    async def on_clarify(self, question: str, options: list[str] | None = None) -> str:
         console.print(f"\n  ❓ [yellow]{question}[/]")
+        opts = [str(o).strip() for o in (options or []) if str(o).strip()]
+        if opts:
+            for i, o in enumerate(opts, 1):
+                console.print(f"     [cyan]{i}.[/] {o}")
+            console.print("     [dim]输入编号选择，或直接输入其他内容[/]", style="dim")
+            raw = (await asyncio.to_thread(input, "  > ")).strip()
+            if raw.isdigit() and 1 <= int(raw) <= len(opts):
+                return opts[int(raw) - 1]
+            return raw
         return await asyncio.to_thread(input, "  > ")
 
     async def on_step(self, step: int, total_budget: int) -> None:

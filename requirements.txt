@@ -1,4 +1,10 @@
-# Scout Agent 依赖清单（保持纯 ASCII，Windows pip 默认 cp1252 编码读取）
+# Scout Agent dependencies (keep pure ASCII; Windows pip reads requirements with cp1252)
+#
+# NOTE: pyproject.toml is the single source of truth for dependency metadata,
+# and uv.lock is the pinned cross-platform lock used by CI (`uv sync --frozen`).
+# This file is kept for the legacy `pip install -r requirements.txt` path.
+# When changing dependencies, edit pyproject.toml and run `uv lock`; only touch
+# this file if you must keep the legacy install path in sync.
 openai>=1.30.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
@@ -41,5 +47,10 @@ discord.py>=2.3.0
 # - 个人微信适配器（wechaty / itchat，可选；未安装时该渠道不可用，不影响服务）
 
 # 桌面自动化工具 desktop（可选，Windows GUI 操控；缺包时该工具自动跳过）
-pywinauto>=0.6.8
+# pywinauto 仅 Windows 可装 → 加平台标记，避免 Linux/macOS 上 pip install -r 失败
+pywinauto>=0.6.8; sys_platform == "win32"
 Pillow>=10.0.0
+
+# PTY 交互式终端 Windows 支持（可选，ConPTY 绑定；仅 Windows 需要，
+# 缺失时 Windows 上 PTY 降级到 persistent cmd 会话，Unix 不受影响）
+pywinpty>=2.0.0; sys_platform == "win32"

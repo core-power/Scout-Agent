@@ -425,7 +425,8 @@ class AutomationRoutes:
                 # Gitee/GitLab：主站可达，直接用 git clone（浅克隆）。
                 repo_fetched = False
                 if "github.com" in url:
-                    repo_fetched = self._fetch_github_tarball(url, tmp_dir)
+                    # ★ 2026-09-25 Windows 性能：长阻塞（下载/克隆/导入可长达 40~45s）移出事件循环，codeload 下载 + tarfile 解压 + shutil 移动全是同步 IO
+                    repo_fetched = await asyncio.to_thread(self._fetch_github_tarball, url, tmp_dir)
                 else:
                     cmd = ["git", "clone", "--depth", "1"]
                     if branch:
@@ -454,11 +455,12 @@ class AutomationRoutes:
                         **_popen_kwargs,
                     )
                     try:
-                        _out, _err = proc.communicate(timeout=45)
+                        # 同上：communicate 会一直占着事件循环直到 git 结束
+                        _out, _err = await asyncio.to_thread(proc.communicate, 45)
                     except subprocess.TimeoutExpired:
                         terminate_process_tree(proc)
                         try:
-                            proc.communicate(timeout=5)  # 回收管道，防僵尸
+                            await asyncio.to_thread(proc.communicate, 5)  # 回收管道，防僵尸
                         except Exception:
                             pass
                         return JSONResponse({"error": "克隆超时（45s）。请检查网络后重试"}, status_code=400)
@@ -487,7 +489,8 @@ class AutomationRoutes:
                 # 用 SkillManager 导入
                 if not self._agent or not getattr(self._agent, "skill_mgr", None):
                     return JSONResponse({"error": "技能系统未启用"}, status_code=503)
-                imported = self._agent.skill_mgr.import_agentskills_dir(tmp_dir_repo, scope="user")
+                # 导入要把整个仓库目录树拷进 $SCOUT_DATA_DIR/skills/，同样不进线程池就是冻循环
+                imported = await asyncio.to_thread(self._agent.skill_mgr.import_agentskills_dir, tmp_dir_repo, scope="user")
 
                 if imported <= 0:
                     return JSONResponse({"error": "导入失败：未识别到有效 SKILL.md 技能"}, status_code=400)
@@ -534,7 +537,8 @@ class AutomationRoutes:
             if not src_dir:
                 return JSONResponse({"error": "dir 不能为空"}, status_code=400)
             scope = body.get("scope", "user")
-            count = self._agent.skill_mgr.import_agentskills_dir(src_dir, scope=scope)
+            # 同上（本地导入路径）：文件复制属阻塞 IO，移出事件循环
+            count = await asyncio.to_thread(self._agent.skill_mgr.import_agentskills_dir, src_dir, scope=scope)
             return {"status": "ok", "imported": count}
 
         @self.app.post("/api/skills/record")

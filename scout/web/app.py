@@ -137,7 +137,7 @@ if "agent" not in st.session_state:
             async def on_stream_delta(self, text: str) -> None:
                 pass
 
-            async def on_clarify(self, question: str) -> str:
+            async def on_clarify(self, question: str, options: list[str] | None = None) -> str:
                 return ""
 
             async def on_tool_gen(self, tool_name: str, args: dict) -> None:

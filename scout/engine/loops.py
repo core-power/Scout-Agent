@@ -221,7 +221,6 @@ class DAGLoop(AgentLoop):
         session: Session | None,
         attachments: list[dict] | None = None,
     ) -> dict[str, Any]:
-        agent = self.agent
         if session is None:
             session = Session(id=str(uuid.uuid4()))
         session.status = "planning"

@@ -37,7 +37,7 @@ class KeywordPlugin(Plugin):
                 # 保存默认配置
                 with open(config_path, 'w', encoding='utf-8') as f:
                     json.dump(self.keywords, f, ensure_ascii=False, indent=2)
-                logger.info(f"已创建默认关键词配置")
+                logger.info("已创建默认关键词配置")
         except Exception as e:
             logger.error(f"加载关键词配置失败: {e}")
             self.keywords = default_keywords

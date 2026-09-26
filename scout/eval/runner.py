@@ -196,6 +196,8 @@ class EvalRunner:
                 cwd=str(workdir),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",  # 显式 UTF-8：中文 Windows 下不按 GBK 误解码校验输出
+                errors="replace",
                 timeout=self.verify_timeout,
             )
             ok = r.returncode == v.expect_rc

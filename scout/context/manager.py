@@ -233,17 +233,32 @@ class ContextManager:
         # ★ 2026-09-19：API 回传的真实 prompt token（session_id -> 最近一次实测值）。
         # 本地 estimate_tokens 再准也是估算；usage 表里有**逐次真实值**，优先用它
         # 做预算判定，估算只作为"尚无实测"时的兜底。
+        # ★ 2026-09-23：附带观测点元数据（观测时的消息数）——/api/context/stats
+        # 据此把"观测之后新增的消息"用估算补进显示值，消除实时性缺口。
         self._real_prompt_tokens: dict[str, int] = {}
+        self._real_prompt_meta: dict[str, dict] = {}
 
-    def observe_real_tokens(self, session_id: str, real_prompt_tokens: int) -> None:
+    def observe_real_tokens(self, session_id: str, real_prompt_tokens: int, msg_count: int | None = None) -> None:
         """记录 API 回传的真实 prompt token 数（供 :meth:`_over_budget` 优先采用）.
 
         调用方在每次主循环 LLM 返回后把 ``usage.prompt_tokens`` 喂进来。
         这是治理唯一可信的标尺：估算器对代码/路径/base64 类内容误差可达 2 倍。
+
+        msg_count（2026-09-23）：观测时的 ``len(session.messages)``。上下文圆环
+        用它识别"实测值之后新增的消息"，把这些增量按估算补进显示值——否则
+        从实测点到下次治理 tick 之间的增长（最后一轮回复/工具输出）全部漏计。
         """
         try:
             if session_id and real_prompt_tokens and real_prompt_tokens > 0:
-                self._real_prompt_tokens[str(session_id)] = int(real_prompt_tokens)
+                sid = str(session_id)
+                self._real_prompt_tokens[sid] = int(real_prompt_tokens)
+                meta = self._real_prompt_meta.setdefault(sid, {})
+                meta["tokens"] = int(real_prompt_tokens)
+                if msg_count is not None:
+                    try:
+                        meta["msg_count"] = max(0, int(msg_count))
+                    except (TypeError, ValueError):
+                        pass
         except (TypeError, ValueError):
             pass
 
@@ -254,6 +269,10 @@ class ContextManager:
         不应被压缩冷却等节流策略挡住。
         """
         return int(self._real_prompt_tokens.get(str(session_id or "")) or 0)
+
+    def real_prompt_meta(self, session_id: str) -> dict:
+        """返回观测点元数据 {tokens, msg_count?}（无实测返回空 dict）— 圆环补差用."""
+        return dict(self._real_prompt_meta.get(str(session_id or "")) or {})
 
     def count_tokens(self, session: Session) -> int:
         """估算会话当前 token 占用（含消息内容与元数据，不含 system prompt）."""

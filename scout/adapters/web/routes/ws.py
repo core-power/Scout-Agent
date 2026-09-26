@@ -156,6 +156,26 @@ class WsRoutes:
                                 )
                         continue
 
+                    # 处理 ask_user 澄清响应（2026-09-23）
+                    if data.get("type") == "clarify_response":
+                        request_id = data.get("request_id")
+                        answer = str(data.get("answer", ""))
+                        if request_id and request_id in self._pending_clarifications:
+                            future = self._pending_clarifications.pop(request_id)
+                            if not future.done():
+                                future.set_result(answer)
+                        continue
+
+                    # 处理空转看门狗「继续/停止」响应（2026-09-24）
+                    if data.get("type") == "watchdog_response":
+                        request_id = data.get("request_id")
+                        keep_going = bool(data.get("continue", True))
+                        if request_id and request_id in self._pending_watchdogs:
+                            future = self._pending_watchdogs.pop(request_id)
+                            if not future.done():
+                                future.set_result(keep_going)
+                        continue
+
                     user_msg = data.get("content", "")
                     ws_attachments = data.get("attachments", [])
 
@@ -316,11 +336,23 @@ class WsRoutes:
                             if _override_llm:
                                 agent_copy.llm = _override_llm
                                 # 用户显式选择的模型优先于双模型（thinker/executor）
+                                # ★ 2026-09-24：能力解析要跟随所选模型 —— 思考参数
+                                # 风格（qwen/openai/claude…）按新模型走，否则换模型后
+                                # 仍按旧模型的参数风格发请求（会 400）
+                                agent_copy.model_provider = (
+                                    _req_provider or getattr(self._agent, "model_provider", "") or ""
+                                )
+                                # ★ 2026-09-26：视觉能力**不再**在此手工解析成
+                                # `vision_input`。Agent 侧的路由每轮按 `agent.llm.model`
+                                # + `model_provider` 现算（见 scout/llm/vision_route），
+                                # 切模型自动跟随；以前这里覆盖过一次，反而会把基类
+                                # Agent 上的旧值带到新模型上。
                         except Exception as _model_err:
                             logger.warning(f"聊天模型切换失败({_req_model}): {_model_err}")
 
                     # 用流式对话 + 事件队列并发推送
                     _turn_ws_start = time.time()
+                    _last_usage_emit = [0.0]  # 闭包可变：实时用量事件的节流时间戳
                     async def run_stream():
                         async for delta in agent_copy.stream_conversation(user_msg, session, attachments=attachment_info or None):
                             try:
@@ -330,6 +362,18 @@ class WsRoutes:
                                 # 推送猜测问题
                                 if delta.suggestions:
                                     await ws.send_json({"type": "suggestions", "data": {"items": delta.suggestions}})
+                                # ── 实时用量（节流 ≥3s，2026-09-24）：长任务过程中让
+                                #    token 消耗可见，缓解"跑很久不知道烧了多少"的焦虑。
+                                #    复用回合级统计 _collect_ws_usage；查询失败静默跳过。
+                                _now_u = time.time()
+                                if _now_u - _last_usage_emit[0] >= 3.0:
+                                    _last_usage_emit[0] = _now_u
+                                    try:
+                                        _live = self._collect_ws_usage(session.id, _turn_ws_start)
+                                        if _live.get("calls", 0) > 0:
+                                            await ws.send_json({"type": "usage_live", "data": _live})
+                                    except Exception:
+                                        pass
                                 # 推送队列中剩余事件（fallback）
                                 while not callbacks.events.empty():
                                     event = callbacks.events.get_nowait()
@@ -347,7 +391,20 @@ class WsRoutes:
                                         turn_stats = _s
                                         break
                                     await asyncio.sleep(0.4)
-                                await ws.send_json({"type": "done", "data": {"steps": steps, "usage": turn_stats or self._collect_ws_usage(session.id, _turn_ws_start)}})
+                                # ★ 2026-09-26（V3）：把本轮附件的**实际**送达状态回给
+                                # 前端，用于在用户气泡上打"图片未识读/已转文字"徽标。
+                                # 取自引擎写入的消息 metadata（含逐张失败原因），不在
+                                # 这里另算一份，避免两处判定漂移。
+                                _att_status = None
+                                for _m in reversed(session.messages or []):
+                                    if _m.role == Role.USER and (_m.metadata or {}).get("attachments_status"):
+                                        _att_status = _m.metadata["attachments_status"]
+                                        break
+                                _done_data = {"steps": steps,
+                                              "usage": turn_stats or self._collect_ws_usage(session.id, _turn_ws_start)}
+                                if _att_status:
+                                    _done_data["attachments"] = _att_status
+                                await ws.send_json({"type": "done", "data": _done_data})
 
                     # 并发：agent 流式输出 + 监听 cancel 消息
                     stream_task = asyncio.create_task(run_stream())
@@ -376,6 +433,25 @@ class WsRoutes:
                                                 future.set_result(
                                                     {"approved": bool(approved), "remember": remember}
                                                 )
+                                    elif msg.get("type") == "clarify_response":
+                                        # ask_user 澄清响应（2026-09-23）：生成期间用户
+                                        # 在弹窗里的回答走这里——不拦截会被当聊天消息
+                                        # 缓存进 _pending_msgs，语义完全错位
+                                        request_id = msg.get("request_id")
+                                        answer = str(msg.get("answer", ""))
+                                        if request_id and request_id in self._pending_clarifications:
+                                            future = self._pending_clarifications.pop(request_id)
+                                            if not future.done():
+                                                future.set_result(answer)
+                                    elif msg.get("type") == "watchdog_response":
+                                        # 空转看门狗「继续/停止」（2026-09-24）：生成期间
+                                        # 用户在弹窗里的选择走这里，解 on_watchdog 的 future
+                                        request_id = msg.get("request_id")
+                                        keep_going = bool(msg.get("continue", True))
+                                        if request_id and request_id in self._pending_watchdogs:
+                                            future = self._pending_watchdogs.pop(request_id)
+                                            if not future.done():
+                                                future.set_result(keep_going)
                                     else:
                                         # 2026-08-11: 非控制消息（chat 等）缓存到队列，避免被丢弃
                                         await _pending_msgs.put(msg)

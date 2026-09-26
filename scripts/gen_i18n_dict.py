@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """生成管理页 i18n 字典追加块并插入 scout/web/static/i18n.js"""
+import json
 import re, io, sys
 
 # (zh, en) 翻译映射 —— 覆盖 11 个管理页静态文本 + JS 纯字符串
@@ -34,6 +35,7 @@ M = {
     "⏳ 安装中...": "⏳ Installing...",
     "⏳ 搜索中...": "⏳ Searching...",
     "⏳ 生成中...": "⏳ Generating...",
+    "⚠ 图片不会被识读": "⚠ Images will not be read",
     "⚡ 触发方式": "⚡ Trigger type",
     "✅ 已安装": "✅ Installed",
     "✓ 已保存": "✓ Saved",
@@ -43,6 +45,7 @@ M = {
     "➕ 创建插件": "➕ Create Plugin",
     "下午好！希望您今天过得愉快！": "Good afternoon! Hope you have a nice day!",
     "个可复用方案": "reusable solutions",
+    "主模型不收图（交视觉模型识图）": "Main model won't take images (use a vision model)",
     "事件处理失败的记录": "Records of failed event processing",
     "事件总线 · Scout Agent": "Event Bus · Scout Agent",
     "事件流": "Event stream",
@@ -70,6 +73,7 @@ M = {
     "关键词插件": "Keyword plugin",
     "关闭": "Close",
     "关闭后所有跨渠道推送暂停": "Cross-channel push pauses when off",
+    "关闭视觉处理": "Disable vision",
     "其他": "Other",
     "内存使用率": "Memory Usage",
     "内存使用率 (%)": "Memory Usage (%)",
@@ -84,21 +88,28 @@ M = {
     "危险操作时推送通知": "Push notification on dangerous operations",
     "卸载失败": "Uninstall failed",
     "卸载失败:": "Uninstall failed:",
+    "去设置": "Open settings",
     "去重窗口 (秒)": "Deduplication window (sec)",
     "反思": "Reflection",
     "发送测试通知": "Send test notification",
     "可选，用于重要通知的邮件备份": "Optional, email backup for important notifications",
     "启动监听": "Start listening",
     "启用通知推送": "Enable notification push",
+    "图片将直接发给当前模型": "Images go straight to the current model",
+    "图片已转成文字描述": "Images were converted to text descriptions",
     "在任务模板中使用占位符引用文件信息，例如：": "Use placeholders in task templates to reference file info, e.g.:",
     "在左侧添加要监听的目录（支持递归）。": "Add directories to watch on the left (recursive supported).",
     "基础模板": "Basic template",
+    "填成与主模型一样的名字 = 声明「主模型自己能看图」，图片将直接发给它（自定义模型最常用）。": "Enter the same name as the main model to declare native vision — images go straight to it (most common choice for custom models).",
     "安装失败 (HTTP": "Install failed (HTTP",
     "安装失败:": "Install failed:",
     "安装成功！": "Install succeeded!",
     "安装超时（仓库可能过大或网络慢）": "Install timeout (repo may be too large or network slow)",
     "定时触发": "Scheduled trigger",
     "实时监控 Scout Agent 运行状态": "Real-time monitoring of Scout Agent status",
+    "实测不收图片": "Tested: rejects images",
+    "实测能否看图": "Test vision",
+    "实测能看图": "Tested: can see images",
     "审批策略 approval_policy": "Approval policy (approval_policy)",
     "工具": "Tools",
     "工具白名单（逗号分隔，空=不限）": "Tool whitelist (comma-separated, empty=unlimited)",
@@ -109,12 +120,16 @@ M = {
     "已卸载": "Unloaded",
     "已取消：插件创建需要密码确认": "Cancelled: plugin creation requires password confirmation",
     "已复制:": "Copied:",
+    "已实测：不收图片": "Tested: rejects images",
+    "已实测：能看图": "Tested: can see images",
     "已禁用": "Disabled",
     "已选中，请手动复制 (Ctrl+C)": "Selected, please copy manually (Ctrl+C)",
     "帮助": "Help",
     "常用字段": "Common fields",
     "平均延迟": "Avg latency",
     "建议使用验证功能检查配置": "Use the validate feature to check config",
+    "当前模型不直接看图，将由": "This model can't see images directly —",
+    "当前配置无可用视觉模型": "no vision model is available in the current config",
     "总 Token": "Total Tokens",
     "总 Token 消耗": "Total token usage",
     "总会话数: 0": "Total sessions: 0",
@@ -127,6 +142,9 @@ M = {
     "按模型统计": "By model",
     "按类型开关": "Toggle by type",
     "捕获的文件变化（可配合触发器实现自动处理）": "Captured file changes (can auto-process with triggers)",
+    "探测中…": "Testing…",
+    "探测失败": "Vision test failed",
+    "探测请求失败": "Vision test request failed",
     "控制哪些类型的通知值得推送": "Control which notification types are worth pushing",
     "推送历史": "Push history",
     "推送规则": "Push rules",
@@ -152,6 +170,7 @@ M = {
     "新建触发器": "New trigger",
     "无人值守策略": "Unattended policy",
     "无描述": "No description",
+    "无法判定": "Cannot determine",
     "早上好！新的一天开始了！": "Good morning! A new day begins!",
     "时间段问候配置": "Time-of-day greeting config",
     "晚上好！注意休息哦！": "Good evening! Rest well!",
@@ -168,6 +187,8 @@ M = {
     "未加载": "Not loaded",
     "未指定插件名称": "Plugin name not specified",
     "未知": "Unknown",
+    "未能证实（疑似网关丢弃图片）": "Unverified (the gateway may drop images silently)",
+    "未送达": "Not delivered",
     "本周": "This week",
     "格式化": "Format",
     "格式化成功": "Formatted",
@@ -188,14 +209,21 @@ M = {
     "确定要重置配置吗？这将恢复到上次保存的状态。": "Reset config? This restores the last saved state.",
     "磁盘使用率": "Disk Usage",
     "空配置，适合自定义": "Empty config, good for customization",
+    "端点/网络异常，无法判定": "Endpoint/network error — cannot determine",
     "管理插件 →": "Manage plugins →",
     "系统": "System",
     "系统监控 - Scout Agent": "System Monitor - Scout Agent",
     "级联触发（上游完成后执行）": "Cascade trigger (runs after upstream completes)",
     "缓存命中": "Cache hit",
+    "缺少 Pillow，无法生成测试图": "Pillow missing — cannot build the test image",
     "网络速率": "Network speed",
+    "能力靠猜，建议实测一次": "Capability is guessed here — run the test once",
+    "能看图（主模型直收）": "Can see images (sent to the main model)",
     "自动化中心": "Automation Center",
     "自动化中心 · Scout Agent": "Automation Center · Scout Agent",
+    "视觉模型": "Vision model",
+    "识图成文字": "will describe them as text instead",
+    "请先选择或填写模型": "Select or enter a model first",
     "请输入插件功能描述": "Enter plugin feature description",
     "请输入插件名称": "Enter plugin name",
     "请输入登录密码以确认插件创建（写码操作需二次验证）": "Enter login password to confirm plugin creation (write operation needs second verification)",
@@ -212,6 +240,7 @@ M = {
     "通知中心 · Scout Agent": "Notification Center · Scout Agent",
     "通知将主动推送到这些渠道": "Notifications are actively pushed to these channels",
     "邮件推送 (SMTP)": "Email push (SMTP)",
+    "部分图片未识读": "Some images were not read",
     "配置保存成功": "Config saved",
     "配置已重置": "Config reset",
     "配置文件 (config.json)": "Config file (config.json)",
@@ -226,10 +255,12 @@ M = {
     "重新加载所有插件失败:": "Failed to reload all plugins:",
     "重新加载插件失败:": "Failed to reload plugin:",
     "重置": "Reset",
+    "鉴权失败，无法判定": "Auth failed — cannot determine",
     "问候插件": "Greeting plugin",
     "验证配置": "Validate config",
     "（无内容）": "(empty)",
     "（无描述）": "(no description)",
+    "（未记录，可修正配置后重试）": "(not recorded — fix the config and retry)",
     "，事件名填": ", fill in the event name",
     "🌐 网页": "🌐 Web",
     "👁️ 文件监听": "👁️ File Watch",
@@ -293,13 +324,10 @@ M = {
     "优先级: ": "Priority: ",
     # 更多模板片段
     "次": " runs",
-    "次运行": " runs",
     " 次": " runs",
     "次 · 最近": " runs · recent",
     "步 ·": " steps ·",
-    "近7天共": "Last 7 days: ",
     "运行时间:": "Uptime:",
-    "运行时间: ": "Uptime: ",
     "分钟": " min",
     "核心": " cores",
     "总会话数:": "Total sessions:",
@@ -308,14 +336,12 @@ M = {
     "24h 对话": "24h conversations",
     "成本": "Cost",
     "⚡缓存": "⚡ cached",
-    "近7天共": "Last 7 days: ",
     "确定要卸载技能「": "Uninstall skill 「",
     "」吗？": "」?",
     "将删除 $SCOUT_DATA_DIR/skills/": "will delete $SCOUT_DATA_DIR/skills/",
     " 目录": " directory",
     "✗ 配置格式错误:": "✗ Invalid config format:",
     "重新输入后可自动记忆": "re-enter to auto-remember",
-    "已配置": "configured",
     "本地无记忆": "no local memory",
     "已复制": "copied",
     "目录": "directory",
@@ -365,12 +391,8 @@ M = {
     "技能": "Skill",
     "👁️ 详情": "👁️ Details",
     "已启用": "Enabled",
-    "已禁用": "Disabled",
-    "（无描述）": "(no description)",
     "暂无描述": "No description",
     "作者: ": "Author: ",
-    "优先级: ": "Priority: ",
-    "未知": "unknown",
     "关键词: ": "Keywords: ",
     "正则: ": "Regex: ",
     "已加载 ": "Loaded ",
@@ -544,7 +566,7 @@ M = {
     "启用": "Enable",
     "重要性": "Importance",
     "访问次数": "Access count",
-    "创建时间": "Created time",
+    "创建时间": "Created",
     "查看详情": "View details",
     "删除": "Delete",
     "删除任务": "Delete task",
@@ -560,11 +582,8 @@ M = {
     "摘要": "summary",
     "详情": "details",
     "查看": "view",
-    "编辑": "edit",
-    "删除": "delete",
     "安装": "install",
     "卸载": "uninstall",
-    "启用": "enable",
     "禁用": "disable",
     "保存": "save",
     "取消": "cancel",
@@ -588,7 +607,6 @@ M = {
     "上次执行": "last run",
     "下次执行": "next run",
     "启用状态": "enabled",
-    "创建时间": "created",
     "更新时间": "updated",
     "事件名称": "event name",
     "事件数据": "event data",
@@ -599,17 +617,14 @@ M = {
     "测试": "test",
     "提交": "submit",
     "预览": "preview",
-    "复制": "copy",
     "已复制到剪贴板": "copied to clipboard",
     "确定": "OK",
     "正在加载": "Loading",
     "搜索": "search",
     "清空": "clear",
     "全部": "all",
-    "名称": "name",
     "描述": "description",
     "类型": "type",
-    "状态": "status",
     "操作": "actions",
     "数量": "count",
     "时间": "time",
@@ -711,11 +726,91 @@ def build_block(entries):
         lines.append(f'    "{esc(zh)}": {{ zh: "{esc(zh)}", en: "{esc(en)}" }},')
     return "\n".join(lines)
 
+def assert_no_duplicate_keys():
+    """校验 M 无重复键，有则打印冲突明细并以非零码退出。
+
+    为什么必须显式检测：Python 的 dict 字面量遇到重复键**静默取最后一个**、
+    不报错也不告警（ruff F601 能查，但只有把 scripts/ 纳入阻断才真正拦得住）。
+    本表一旦静默覆盖，产物 i18n.js 的英文文案会随「哪条写在后面」而变，
+    属于典型的看不见的回归。这里用 AST 解析本文件自身的 M 字面量，
+    不维护并行清单、因此不会与数据脱节。
+    """
+    import ast
+    from collections import Counter, defaultdict
+
+    tree = ast.parse(open(__file__, encoding="utf-8").read(), filename=__file__)
+    literal = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == "M" and isinstance(node.value, ast.Dict):
+                    literal = node.value
+    if literal is None:
+        print("⚠️ 未在本文件中找到 M 字面量，跳过重复键校验")
+        return
+
+    seen = defaultdict(list)  # zh -> [(lineno, en), ...]
+    for k, v in zip(literal.keys, literal.values):
+        if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
+            seen[k.value].append((k.lineno, v.value))
+    dups = {zh: occ for zh, occ in seen.items() if len(occ) > 1}
+    if not dups:
+        return
+
+    print(f"❌ M 中存在 {len(dups)} 个重复键（dict 字面量会静默取最后一个值）：")
+    for zh in sorted(dups):
+        occs = ", ".join(f'L{n}="{v}"' for n, v in dups[zh])
+        kept = dups[zh][-1][1]
+        print(f'  "{zh}" 出现 {len(dups[zh])} 次 -> 实际生效 "{kept}" | {occs}')
+    print("请删除重复条目或统一取值后再运行本脚本。")
+    sys.exit(1)
+
+def existing_keys(src):
+    """解析 i18n.js 已有的 zh 键集合，还原 JS 转义后返回（与 M 的键同形）。
+
+    两处都得做对，否则已有键会被误判为"新键"、每跑一次就多插一份（实测曾把
+    10 份 `\" 吗？` 累积成 11 份）：
+      1) 捕获要能吃下转义引号 —— 旧写法 `"([^"]+)"` 遇到 `"…\\" 吗？"` 这类
+         含 `\\"` 的键会整条漏掉；
+      2) 比较前要反转义 —— 文件里是 esc() 产出的 JS 形态（`\\"` `\\n` `\\\\`），
+         而 M 的键是 Python 原始字符串，不还原则永不相等。
+    文件形态本身即合法 JSON 字符串字面量，故用 json.loads 还原最稳。
+    """
+    out = set()
+    for m in re.finditer(r'^    "((?:[^"\\]|\\.)*)":\s*\{\s*zh:', src, re.M):
+        raw = m.group(1)
+        try:
+            out.add(json.loads('"' + raw + '"'))
+        except Exception:
+            out.add(raw)  # 兜底：极端手写条目按原样比较（宁可不插，也不重复插）
+    return out
+
+
+def report_existing_dups(src):
+    """报告 i18n.js 内已存在的重复键（JS 对象重复键同样是后者静默覆盖）。"""
+    from collections import Counter
+
+    keys = []
+    for m in re.finditer(r'^    "((?:[^"\\]|\\.)*)":\s*\{\s*zh:', src, re.M):
+        raw = m.group(1)
+        try:
+            keys.append(json.loads('"' + raw + '"'))
+        except Exception:
+            keys.append(raw)
+    dups = {k: n for k, n in Counter(keys).items() if n > 1}
+    if dups:
+        print(f"⚠️ i18n.js 已存在 {len(dups)} 个重复键（JS 会静默取最后一个值），"
+              f"最多者：{sorted(dups.items(), key=lambda x: -x[1])[:3]}")
+    return dups
+
+
 def main():
+    assert_no_duplicate_keys()
     path = "scout/web/static/i18n.js"
     src = open(path, encoding="utf-8").read()
-    # 已有键
-    have = set(re.findall(r'"([^"]+)":\s*\{\s*zh:', src))
+    report_existing_dups(src)
+    # 已有键（还原转义后比较，避免把已存在的转义引号键当成新键重复插入）
+    have = existing_keys(src)
     new = {zh: en for zh, en in M.items() if zh not in have}
     if not new:
         print("无新增条目")
@@ -724,7 +819,8 @@ def main():
     # 插入到字典结束 }; 前（最后一条 "⚠️ 未配置 API Key" 之后）
     marker = '"⚠️ 未配置 API Key": { zh: "⚠️ 未配置 API Key", en: "⚠️ API Key not configured" },'
     if marker not in src:
-        print("未找到插入锚点"); sys.exit(1)
+        print("未找到插入锚点")
+        sys.exit(1)
     src = src.replace(marker, marker + block, 1)
     open(path, "w", encoding="utf-8").write(src)
     print(f"已插入 {len(new)} 条新字典条目")

@@ -23,7 +23,7 @@ import uuid
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from scout.core.callbacks import Callbacks, NullCallbacks
 from scout.core.types import (
     Message,
@@ -38,7 +38,37 @@ from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 
 from scout.engine.interrupt import InterruptibleExecutor
 
-from scout.llm.base import LLMClient
+
+# ── 图片直收（2026-09-24；2026-09-26 V2 调整）─────────────────────────────
+# 视觉能力开启时，聊天里发的图片会作为 image_url 内容直接进 LLM 消息。
+# 这里只限"张数"；单张的边长与字节预算改由 scout/llm/image_prep.py 统一负责
+# （降采样 + PNG/JPEG 择优 + 结果缓存）。原来的 `_IMAGE_MAX_BYTES = 5MB` 粗筛
+# 已删除 —— 它的实际效果是"大图静默丢弃"，实测一张 14MB 截图降采样后只有
+# 1.2MB，本可以正常送达；静默丢弃还会让模型以为自己看见了图。
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+_IMAGE_MAX_COUNT = 4
+
+
+
+def _is_image_attachment(att: Any) -> bool:
+    """附件是否图片（按 mime 或扩展名判断）."""
+    if not isinstance(att, dict):
+        return False
+    mime = str(att.get("type") or "").lower()
+    if mime.startswith("image/"):
+        return True
+    name = str(att.get("name") or "").lower()
+    return any(name.endswith(ext) for ext in _IMAGE_EXTS)
+
+# ★ 2026-09-25 启动减负（Windows 实测）：LLMClient 在本文件里**只用作类型注解**
+# （__init__ 的 `llm: LLMClient`），而文件头已有 `from __future__ import annotations`
+# ——注解是字符串，运行时根本不需要这个类。此前写成顶层导入，会先初始化包
+# `scout.llm`，其 `__init__.py` 再 eager 导入 providers.openai → 拉起整个 openai SDK
+# （连带 aiohttp / httpx2），单这一条链在 Windows 上实测 1.13 s（`import
+# scout.engine.agent` 1593ms → 桩掉 openai 后 458ms），打包版 PYZ 里 openai 占
+# 1524/4669 个模块。放进 TYPE_CHECKING 后 CLI/桌面服务冷启动直接省掉这 1 秒。
+if TYPE_CHECKING:
+    from scout.llm.base import LLMClient
 
 from scout.tools.registry import ToolRegistry
 
@@ -125,11 +155,18 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         memory_extractor: Any = None,  # SessionMemoryExtractor 实例（会话结束时抽取关键记忆）
         context_assembler: Any = None,  # ContextAssembler 实例（跨会话记忆/摘要组装）
         memory_flush: Any = None,  # MemoryFlush 实例（压缩前抽取关键记忆）
+        # ── 模型能力（2026-09-24，用户可在设置里配）──
+        reasoning_effort: str = "auto",  # auto / off / low / medium / high
+        vision_input: bool | None = None,  # None=按模型能力自动判断；True/False=用户强制
+        model_provider: str = "",  # 用于能力解析（思考参数风格/视觉）的厂商标识
     ):
 
         self.llm = llm
 
         self.deep_thinking = deep_thinking
+        self.reasoning_effort = str(reasoning_effort or "auto").lower()
+        self.vision_input = vision_input
+        self.model_provider = str(model_provider or "")
 
         self.agent_mode = agent_mode
 
@@ -205,7 +242,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 "- vision: 分析图片内容\n"
                 "- memory_save / memory_search / memory_list: 长期记忆\n"
                 "- knowledge: 管理知识库\n"
-                "- scheduler: 定时任务和提醒\n\n"
+                "- scheduler: 定时任务和提醒\n"
+                "- ask_user: 有疑惑时向用户提问澄清，等回答后再继续（可附 2-4 个选项）\n\n"
                 "## Subagent Delegation (子代理委派)\n"
                 "你有隔离的子代理可以委派子任务（delegate_task 串行 / parallel_delegate 并行 / collaborate_task 自动分解协作）。\n"
                 "主流实践（Claude Code / Codex 同款）：主 agent 保持 ReAct 循环，把**独立且繁重**的子任务派给子代理，"
@@ -220,8 +258,16 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 "为减少决策轮数、更快完成任务：\n"
                 "- **一次决策可返回多个独立工具调用**：当多个操作互不依赖、可同时推进时（如搜索多个不同主题、读取多个文件、并行查询多个来源），在同一次回复里一次性返回多个 tool_call，不要逐个串行。\n"
                 "- 保持连续的工具调用链条：前一个工具的结果刚产生、下一步动作明确时，直接继续调用下一个工具，不要中途停顿或重复陈述。\n"
-                "- 避免不必要的中间回复：除非需要用户澄清，否则持续调用工具直到任务完成，再输出最终结果。\n"
+                "- 避免不必要的中间回复：需要用户澄清时调用 ask_user 工具（会暂停等你回答），否则持续调用工具直到任务完成，再输出最终结果。\n"
                 "- 只调用完成任务真正需要的工具，不做多余的探索。\n\n"
+                "## When to Ask the User（用户澄清）\n"
+                "有疑惑时交给用户澄清，而不是猜：\n"
+                "- **该问**：需求存在歧义（\"处理一下那个文件\"——哪个？）、有多种做法且选择影响结果（覆盖还是新建？）、"
+                "缺少关键信息（目标路径/范围/格式/验收标准）、或下一步操作有破坏性风险。\n"
+                "- **不问**：能从上下文/记忆/文件中查到的事实、对结果影响很小的实现细节、或连续追问已回答过的问题——"
+                "这类自己查证后决定，不要把思考转嫁给用户。\n"
+                "- 调用 ask_user 时把问题写具体（一句话点明疑惑），候选项给 2-4 个互斥且描述清楚的做法；"
+                "用户回答后立即据此继续，不要重复确认。\n\n"
                 "## Role Boundary (角色边界)\n"
                 "区分「项目内问题」和「通用技术问题」：\n"
                 "- 项目内：用户明确提到 Scout、本项目的路由/记忆/工具等 → 可结合项目上下文回答\n"
@@ -271,7 +317,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 "- image_generation: 生成图片\n"
                 "- vision: 分析图片内容\n"
                 "- memory_save / memory_search: 长期记忆\n"
-                "- scheduler: 定时任务和提醒\n\n"
+                "- scheduler: 定时任务和提醒\n"
+                "- ask_user: 有疑惑时向用户提问澄清，等回答后再继续（可附 2-4 个选项）\n\n"
                 "## Subagent Delegation (子代理委派)\n"
                 "你有隔离的子代理可以委派子任务（delegate_task 串行 / parallel_delegate 并行 / collaborate_task 自动分解协作）。\n"
                 "主流实践（Claude Code / Codex 同款）：主 agent 保持 ReAct 循环，把**独立且繁重**的子任务派给子代理，"
@@ -286,8 +333,16 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 "为减少决策轮数、更快完成任务：\n"
                 "- **一次决策可返回多个独立工具调用**：当多个操作互不依赖、可同时推进时（如搜索多个不同主题、读取多个文件、并行查询多个来源），在同一次回复里一次性返回多个 tool_call，不要逐个串行。\n"
                 "- 保持连续的工具调用链条：前一个工具的结果刚产生、下一步动作明确时，直接继续调用下一个工具，不要中途停顿或重复陈述。\n"
-                "- 避免不必要的中间回复：除非需要用户澄清，否则持续调用工具直到任务完成，再输出最终结果。\n"
+                "- 避免不必要的中间回复：需要用户澄清时调用 ask_user 工具（会暂停等你回答），否则持续调用工具直到任务完成，再输出最终结果。\n"
                 "- 只调用完成任务真正需要的工具，不做多余的探索。\n\n"
+                "## When to Ask the User（用户澄清）\n"
+                "有疑惑时交给用户澄清，而不是猜：\n"
+                "- **该问**：需求存在歧义（\"处理一下那个文件\"——哪个？）、有多种做法且选择影响结果（覆盖还是新建？）、"
+                "缺少关键信息（目标路径/范围/格式/验收标准）、或下一步操作有破坏性风险。\n"
+                "- **不问**：能从上下文/记忆/文件中查到的事实、对结果影响很小的实现细节、或连续追问已回答过的问题——"
+                "这类自己查证后决定，不要把思考转嫁给用户。\n"
+                "- 调用 ask_user 时把问题写具体（一句话点明疑惑），候选项给 2-4 个互斥且描述清楚的做法；"
+                "用户回答后立即据此继续，不要重复确认。\n\n"
                 "## Role Boundary (角色边界)\n"
                 "区分「项目内问题」和「通用技术问题」：\n"
                 "- 项目内：用户明确提到 Scout、本项目的路由/记忆/工具等 → 可结合项目上下文回答\n"
@@ -449,6 +504,16 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         # 兜底：未走 _inject_context 的调用仍用全量工具，避免工具缺失。
         self._active_tool_schemas: list[dict] = list(self._tool_schemas)
 
+        # ── 两阶段按需加载（2026-09-24）──────────────────────────────
+        # 开启后：常驻前缀只带「极小核心集完整 schema + 全量工具目录(name+一句话)」，
+        # 其余工具由 LLM 调 load_tools 按需展开。相比旧的关键词渐进式加载，
+        # 常驻 token 从 compact 全量(~3.7k) 降到核心集+目录(~1.5k)，且不随会话单调膨胀。
+        # SCOUT_TOOL_LAZY_LOAD=0 可回退到旧行为（全量 compact 常驻）。
+        self._tool_lazy_load = os.getenv("SCOUT_TOOL_LAZY_LOAD", "1") not in ("0", "false", "no")
+        # 当前轮次所属会话（供 load_tools 把已加载工具名写入 session.extra 跨轮持久）。
+        # 与既有 _active_tool_schemas 同属「单活跃轮次」并发模型，每轮 _inject_context 刷新。
+        self._current_session: Session | None = None
+
         # 注册主 Agent 引用（供 delegate_task 工具使用）— 子代理不覆盖主引用
 
         if register_as_main:
@@ -501,6 +566,15 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         # 会话持久化
 
         self.enable_persistence = enable_persistence
+
+        # ★ 2026-09-23 活跃会话注册表（上下文圆环实时性）：
+        # /api/context/stats 优先读这里的内存 session——生成期间消息只 append
+        # 进内存对象、回合结束才落盘，此前 stats 读磁盘版导致整轮生成中数值不动。
+        # 注意：各端点用 copy.copy(agent) 换 callbacks，浅拷贝共享本 dict 的引用
+        # （不会各自复制一份），agent_copy 的注册对原始 agent 的 stats 可见。
+        # 只保留最近 8 个，回合结束后残留条目与磁盘内容一致（stale 无害），
+        # 下次同 sid 生成自然覆盖。
+        self._active_sessions: dict[str, Session] = {}
 
         if enable_persistence:
             from scout.session.store import get_session_store
@@ -942,6 +1016,21 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 )
         return response
 
+    def _register_active_session(self, session: Session) -> None:
+        """注册活跃会话（上下文圆环实时读取用，2026-09-23）.
+
+        stats 接口优先读内存版 session；超限淘汰最旧的。
+        只做原地写（不重绑 dict），保证 copy.copy 的 agent 副本共享同一注册表。
+        """
+        try:
+            sid = str(session.id)
+            self._active_sessions[sid] = session
+            while len(self._active_sessions) > 8:
+                oldest = next(iter(self._active_sessions))
+                self._active_sessions.pop(oldest, None)
+        except Exception:  # noqa: BLE001 — 注册失败不影响主流程
+            pass
+
     def _prepare_turn_state(self, session: Session) -> IterationBudget:
         """公共前置：本轮 budget 初始化 + 工具统计计数器重置（run/stream 共用）."""
 
@@ -1134,6 +1223,9 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         if session is None:
             session = Session(id=str(uuid.uuid4()))
 
+        # ★ 注册活跃会话 → /api/context/stats 生成期间可读到实时消息
+        self._register_active_session(session)
+
         # ── 复位取消状态：防止上一轮取消标记泄漏到本轮（非流式对话） ──
         self._reset_cancel()
 
@@ -1168,6 +1260,10 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         # 可能持续数十秒（GUI/长命令），期间强杀/重启会丢掉**整个回合**（实测：
         # 中途 kill 后新会话甚至不出现在会话列表里）。
         await self._persist_progress(session, force=True)
+
+        # ★ 注册活跃会话 → /api/context/stats 生成期间可读到实时消息
+        # （工具输出 append 只进内存，落盘要到回合收尾；见 __init__ 注释）
+        self._register_active_session(session)
 
         # 模型选择由 deep_thinking 开关直接控制（见下方 ReAct 循环）。
 
@@ -1424,6 +1520,30 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                     session.messages.append(
                         Message(role=Role.USER, content=_wd_hint, metadata={"watchdog": True})
                     )
+                    # ★ 2026-09-24：首次空转征询用户「继续/停止」（每回合限一次），
+                    #   与 stream_conversation 路径一致。停止 → break 走正常收尾。
+                    if _wd_trips == 1:
+                        _keep = True
+                        try:
+                            _st = self._tool_stats.get(session.id) or {}
+                            _keep = await self.callbacks.on_watchdog(
+                                "检测到任务可能在原地打转（重复失败或长时间无进展）。"
+                                "要继续尝试，还是停止本次任务？",
+                                {
+                                    "steps": budget.current,
+                                    "tool_calls": _st.get("total", 0),
+                                    "ok": _st.get("ok", 0),
+                                },
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:  # noqa: BLE001
+                            _keep = True
+                        if not _keep or self._cancelled:
+                            logging.getLogger(__name__).info(
+                                "看门狗：用户选择停止（session=%s step=%s）", session.id, budget.current
+                            )
+                            break
                     if _wd_trips >= 2:
                         logging.getLogger(__name__).warning(
                             "看门狗已提示 2 次仍无进展（session=%s step=%s），强制收尾",
@@ -1761,6 +1881,10 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         # 中途 kill 后新会话甚至不出现在会话列表里）。
         await self._persist_progress(session, force=True)
 
+        # ★ 注册活跃会话 → /api/context/stats 生成期间可读到实时消息
+        # （工具输出 append 只进内存，落盘要到回合收尾；见 __init__ 注释）
+        self._register_active_session(session)
+
         # ── 目标管理：注入相关目标上下文 ──
 
         if self.enable_goal_manager and self.goal_manager:
@@ -1882,16 +2006,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
                 # （快速模式关闭思维链，思考模式开启思维链）。超时由 stream_timeout(300s) 保护，不会卡死。
 
-                # 按 deep_thinking 开关控制思维链（思考模式开启，快速模式关闭）
-
-                if self.deep_thinking and self.agent_mode != "multi_agent":
-                    # Multi-Agent 编排是模式化任务（分解→委派→汇总），深度思考收益低、
-                    # 却让每次 LLM 调用多花 5-15s 生成思维链 → 编排阶段关闭，提速
-                    # （仅限有子代理承接推理的场景；单 Agent 深度问答仍保留思考）
-                    active_extra = {"extra_body": {"enable_thinking": True}}
-
-                else:
-                    active_extra = {"extra_body": {"enable_thinking": False}}
+                # 按「思考强度档位」+ 模型能力生成思考参数（2026-09-24）
+                active_extra = {"extra_body": self._thinking_extra()}
 
                 _stream_kwargs = dict(
                     messages=api_messages,
@@ -1941,7 +2057,14 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                             yield d
 
                     except Exception as _se:
-                        if active_extra and "enable_thinking" in str(_se):
+                        # 思考参数不被上游接受时（400：enable_thinking /
+                        # reasoning_effort / thinking_budget / reasoning …），
+                        # 去掉整包 extra_body 重试一次，避免"配了档位就聊不了天"
+                        _think_keys = (
+                            "enable_thinking", "thinking_budget", "reasoning_effort",
+                            "reasoning", "thinking",
+                        )
+                        if active_extra and any(k in str(_se) for k in _think_keys):
                             _retry_kwargs = dict(_stream_kwargs)
 
                             _retry_kwargs.pop("extra_body", None)
@@ -2329,6 +2452,31 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                             metadata={"watchdog": True},
                         )
                     )
+                    # ★ 2026-09-24：首次空转即把决策权交给用户（每回合限一次，避免刷屏）。
+                    #   停止 → break 走正常收尾（前端据 _wdUserStopped 标「已中断」，保留已产出）；
+                    #   继续/超时 → 沿用旧逻辑（模型已收到提示，2 次无进展仍强制收尾）。
+                    if _wd_trips == 1:
+                        _keep = True
+                        try:
+                            _st = self._tool_stats.get(session.id) or {}
+                            _keep = await self.callbacks.on_watchdog(
+                                "检测到任务可能在原地打转（重复失败或长时间无进展）。"
+                                "要继续尝试，还是停止本次任务？",
+                                {
+                                    "steps": budget.current,
+                                    "tool_calls": _st.get("total", 0),
+                                    "ok": _st.get("ok", 0),
+                                },
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:  # noqa: BLE001  # 回调异常不得阻断主循环
+                            _keep = True
+                        if not _keep or self._cancelled:
+                            logging.getLogger(__name__).info(
+                                "看门狗：用户选择停止（session=%s step=%s）", session.id, budget.current
+                            )
+                            break
                     if _wd_trips >= 2:
                         logging.getLogger(__name__).warning(
                             "看门狗已提示 2 次仍无进展（session=%s step=%s），强制收尾",
@@ -2724,6 +2872,16 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         "send_file",
     }
 
+    # 两阶段懒加载模式下的「极小核心集」（2026-09-24）：这些工具几乎每轮都可能用到，
+    # 常驻完整 schema 免去 load_tools 往返；其余工具只进目录，按需 load。
+    # 相比 _CORE_TOOLS(13 个) 精简到 9 个 —— env_config_*/memory_save/list 等低频
+    # 写操作移入目录（memory_search 保留，召回是高频读）。load_tools/ask_user 必留，
+    # 否则模型无法加载更多工具 / 无法澄清。
+    _LAZY_MIN_CORE = {
+        "file", "shell", "execute_code", "web_search", "web_fetch",
+        "memory_search", "send_file", "ask_user", "load_tools",
+    }
+
     # 渐进式工具 → 触发关键词（任一命中即注入该工具 schema）
     # 关键词设计避免宽泛误触发：图片/图 这类词既可能指生成、也可能指识别，
     # 故用"动词+对象"组合（生成/画/做…图  vs  识别/分析/看…图）区分。
@@ -2774,7 +2932,9 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                              "collaborate", "collaboration", "multi-agent", "team"),
         "mcp": ("mcp", "外部服务", "model context protocol", "mcp服务器", "外部工具",
                 "external service", "external tool"),
-        "mcp_tool": ("mcp", "外部服务", "model context protocol", "external service"),
+        # ★ 2026-09-25 删除漂移项 "mcp_tool"：注册表里的真实工具名是 "mcp"，该键永不
+        # 命中（只会在一次性自检里刷告警）。它原有的 4 个关键词全部是上面 "mcp" 的子集，
+        # 所以删除是无损的——MCP 一直靠 "mcp" 这个键被关键词预载，此前并无功能缺失。
         "scout_report": ("运行报告", "状况报告", "自检", "scout报告", "系统报告", "健康报告",
                          "scout report", "status report", "self check", "health report"),
         "send_file": ("发文件", "发送文件", "下载文件", "发给我", "附件", "文件给我",
@@ -2796,7 +2956,10 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
         text = (user_input or "").lower()
 
-        selected_names: set[str] = set(self._CORE_TOOLS)
+        # 核心集选择：懒加载模式用极小核心集（其余进目录按需 load），
+        # 否则沿用旧的完整核心集（全量 compact schema 常驻）。
+        _core = self._LAZY_MIN_CORE if self._tool_lazy_load else self._CORE_TOOLS
+        selected_names: set[str] = set(_core)
         for tool_name, keywords in self._PROGRESSIVE_TOOL_KEYWORDS.items():
             if any(kw.lower() in text for kw in keywords):
                 selected_names.add(tool_name)
@@ -2805,10 +2968,20 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         # 工具 schema 位于提示前缀区，若每轮按关键词重选，集合抖动会让前缀缓存
         # 反复失效（GUI 长任务每轮多付 ~2.2k token 全价）。累积后只在"首次激活"
         # 时改变前缀，之后稳定命中。工具上限受注册表约束（最多全部 27 个）。
+        #
+        # ★ 2026-09-24（懒加载模式）：不再做关键词单调累积 —— 那正是"激活集一路
+        # 涨到接近全量"的膨胀根因。改为只并回模型经 load_tools **显式**加载过的
+        # 工具（session.extra["lazy_loaded"]，按会话作用域、模型驱动、数量受控）。
+        # 关键词匹配仍每轮生效（免往返预载常见工具），但不再跨轮累积。
         if session is not None:
             try:
-                _acc = (getattr(session, "extra", None) or {}).get("active_tools") or []
-                selected_names.update(x for x in _acc if isinstance(x, str))
+                _extra = getattr(session, "extra", None) or {}
+                if self._tool_lazy_load:
+                    _lazy = _extra.get("lazy_loaded") or []
+                    selected_names.update(x for x in _lazy if isinstance(x, str))
+                else:
+                    _acc = _extra.get("active_tools") or []
+                    selected_names.update(x for x in _acc if isinstance(x, str))
             except Exception:  # noqa: BLE001
                 pass
 
@@ -2841,8 +3014,9 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         if not result:
             return self._tool_schemas
 
-        # 记录本会话已激活的工具（只存渐进式部分，核心工具无需记）
-        if session is not None:
+        # 记录本会话已激活的工具（只存渐进式部分，核心工具无需记）。
+        # 懒加载模式下不写 active_tools（不被读取；跨轮持久由 load_tools 写 lazy_loaded）。
+        if session is not None and not self._tool_lazy_load:
             try:
                 _extra = getattr(session, "extra", None)
                 if isinstance(_extra, dict):
@@ -3019,7 +3193,9 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 )
                 _real = int((_rows[0] or {}).get("p") or 0) if _rows else 0
                 if _real > 0:
-                    cm.observe_real_tokens(session.id, _real)
+                    # 记录观测点消息数：圆环统计据此把"实测之后新增的消息"
+                    # 估算补进显示值，消除实测值到下次治理 tick 之间的低估窗口
+                    cm.observe_real_tokens(session.id, _real, msg_count=len(session.messages))
             except Exception:
                 pass
 
@@ -3338,6 +3514,117 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 )
         return session.messages
 
+    # ── 模型能力：思考强度 / 视觉（2026-09-24，用户可在设置里配）──────────────
+    def _thinking_extra(self) -> dict:
+        """把统一档位（auto/off/low/medium/high）翻译成当前模型认识的思考参数.
+
+        各家参数名不同（Qwen 用 thinking_budget、OpenAI o/GPT-5 用 reasoning_effort、
+        Claude 用 thinking.budget_tokens、OpenRouter 用 reasoning.effort），发错
+        会 400，所以这里按 (provider, model) 判定风格再翻译。
+        auto 时保持旧行为：由 deep_thinking 布尔控制（兼容老配置）。
+        """
+        # Multi-Agent 编排是模式化任务（分解→委派→汇总），深度思考收益低、
+        # 却让每次 LLM 调用多花 5-15s → 编排阶段关闭，提速
+        if self.agent_mode == "multi_agent":
+            return {"enable_thinking": False}
+        eff = str(getattr(self, "reasoning_effort", "auto") or "auto").lower()
+        if eff == "auto":
+            return {"enable_thinking": bool(self.deep_thinking)}
+        try:
+            from scout.adapters.web.routes.config import (
+                build_thinking_extra,
+                resolve_thinking_style,
+            )
+            _model = getattr(self.llm, "model", "") or ""
+            style = resolve_thinking_style(self.model_provider, _model)
+            extra, _ = build_thinking_extra(style, eff)
+            return extra or {}
+        except Exception:  # noqa: BLE001
+            return {"enable_thinking": eff != "off"}
+
+    def _vision_route(self) -> dict:
+        """本轮的视觉路由判定 —— 唯一决策点见 `scout/llm/vision_route` 模块头.
+
+        ★ 2026-09-26：此前本方法所在链路只问"模型能不能看图"(`resolve_model_vision`)，
+        从不问路由，导致设置里的「视觉模型」对用户发的图片不起作用，而 vision 工具
+        却按路由走另一个模型 —— 同一轮两个答案。现在附件与工具共用同一份决策；
+        运行时模型（聊天中可切换）与 `vision_input` 显式覆盖都在核心函数里处理，
+        本方法只负责取配置并转发，避免强制值语义在两处分叉。
+        """
+        try:
+            from scout.config import ConfigManager
+            from scout.llm.vision_route import route_for_agent
+
+            return route_for_agent(self, ConfigManager().load())
+        except Exception:  # noqa: BLE001 — 判定不可用时不拖累对话，退回按能力自动判断
+            try:
+                from scout.llm.vision_route import native_vision
+
+                ok, src = native_vision(
+                    getattr(self, "model_provider", ""),
+                    getattr(self.llm, "model", "") or "",
+                )
+            except Exception:  # noqa: BLE001
+                ok, src = False, ""
+            forced = getattr(self, "vision_input", None)
+            if isinstance(forced, bool):
+                ok, src = forced, "forced"
+            return {
+                "path": "main" if ok else "none",
+                "model": getattr(self.llm, "model", "") or "",
+                "base_url": "",
+                "source": src,
+                "reason": "路由判定不可用，已退回模型能力自动判断",
+                "native": bool(ok),
+                "needs_choice": False,
+            }
+
+    def _vision_enabled(self) -> bool:
+        """主模型是否**直接接收**图片（路由判 main 才是 True）."""
+        return self._vision_route().get("path") == "main"
+
+    def _image_content_parts(self, attachments: list, text: str) -> list[dict]:
+        """把图片附件拼成 OpenAI 兼容的多模态 content 列表.
+
+        ★ 2026-09-26（V2）：送模型前先过 `scout.llm.image_prep`（降采样 + 字节预算）。
+        此前只有 vision 工具做降采样，附件这条路是原图直 base64 —— 实测 4 张常见附件
+        （手机照片/2.5K 与 4K 截图/微信长图）请求体合计 10.5 MB，预处理后 4.0 MB；
+        图像 token 按分辨率计费，降幅更大。更糟的是磁盘上 >5MB 的图此前被**静默跳过**，
+        模型完全不知道用户发了图 —— 而降采样后它往往只有 1 MB，本可以正常送达。
+
+        因此这里新增"未送达"明示：任何没送出的图（超张数、文件缺失、无法解码、超硬
+        上限）都会以一行文本告诉模型，绝不让它以为自己看见了。
+        """
+        from scout.llm.image_prep import build_image_part
+
+        parts: list[dict] = []
+        if text.strip():
+            parts.append({"type": "text", "text": text})
+
+        imgs = [a for a in (attachments or []) if _is_image_attachment(a)]
+        used = 0
+        notes: list[str] = []
+        for idx, att in enumerate(imgs):
+            path = str(att.get("path") or "")
+            name = str(att.get("name") or os.path.basename(path) or f"图片{idx + 1}")
+            if used >= _IMAGE_MAX_COUNT:
+                notes.append(f"另有 {len(imgs) - idx} 张图片超出单次 {_IMAGE_MAX_COUNT} 张上限，未送达")
+                break
+            part, prep = build_image_part(path)
+            if part is None:
+                notes.append(f"{name} 未送达（{prep.skipped or '无法处理'}）")
+                continue
+            parts.append(part)
+            used += 1
+
+        if notes:
+            parts.append({
+                "type": "text",
+                "text": "[附件提示] " + "；".join(notes) + "。不要描述或推测未送达图片的内容。",
+            })
+        return parts if (used or notes) else []
+
+
     def _build_api_messages(self, session: Session) -> list[dict]:
         """构建发送给 LLM 的消息列表.
 
@@ -3370,6 +3657,16 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
             if _m.role == Role.USER and _m.metadata.get("runtime_context"):
                 _last_rt_idx = _i
 
+        # 图片直收（2026-09-24）：只对**最近一条带图片附件的 user 消息**注入图像
+        # 内容。历史轮次的图片不再逐轮重发（一张图上千 token，长会话会撑爆窗口），
+        # 模型仍可通过落盘路径用文件工具按需回看。
+        _last_img_idx = -1
+        if self._vision_enabled():
+            for _i, _m in enumerate(_llm_msgs):
+                _atts = (_m.metadata or {}).get("attachments") if _m.role == Role.USER else None
+                if _atts and any(_is_image_attachment(a) for a in _atts):
+                    _last_img_idx = _i
+
         for _idx, msg in enumerate(_llm_msgs):
             # ── SYSTEM 消息：仅保留压缩器生成的 [对话摘要]，其余动态内容已移入 runtime_context ──
 
@@ -3390,6 +3687,13 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                     _rt_now = msg.metadata.get("runtime_context") or ""
                     if _rt_now:
                         _uc = _uc + "\n\n" + _rt_now
+                if _idx == _last_img_idx:
+                    _parts = self._image_content_parts(
+                        msg.metadata.get("attachments") or [], _uc
+                    )
+                    if _parts:
+                        messages.append({"role": "user", "content": _parts})
+                        continue
                 messages.append({"role": "user", "content": _uc})
 
             elif msg.role == Role.ASSISTANT:

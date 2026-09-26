@@ -242,7 +242,7 @@ class WorkflowDistiller:
             return {"saved": False, "reason": f"技能 {name} 已存在或命名无效"}
 
         instructions = self._build_skill_body(data)
-        skill = self.skill_mgr.create_skill(
+        self.skill_mgr.create_skill(
             name=name,
             description=str(data.get("description", ""))[:300],
             instructions=instructions,

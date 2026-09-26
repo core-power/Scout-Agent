@@ -182,7 +182,6 @@ async def enable_plugin(name: str):
     
     success = manager.enable_plugin(name)
     if success:
-        plugin = manager.get_plugin(name)
         plugins = manager.list_plugins()
         plugin_info = None
         for p in plugins:
@@ -212,7 +211,6 @@ async def disable_plugin(name: str):
     
     success = manager.disable_plugin(name)
     if success:
-        plugin = manager.get_plugin(name)
         plugins = manager.list_plugins()
         plugin_info = None
         for p in plugins:

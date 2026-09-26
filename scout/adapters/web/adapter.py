@@ -405,16 +405,12 @@ class WebAdapter(
                 f"记忆工程化注入失败（跨会话记忆退化为手动 memory_save）: {_mem_err}"
             )
 
-        # ── 模型能力：思考强度 + 视觉（2026-09-24，用户在设置里配）──
-        # 视觉：用户覆盖表命中即强制，否则交给 Agent 按模型能力自动判断（None）
-        _vis_over = getattr(config, "model_vision_overrides", None) or {}
-        try:
-            from scout.adapters.web.routes.config import capability_key
-            _vis_forced = _vis_over.get(capability_key(config.provider, config.model))
-        except Exception:  # noqa: BLE001
-            _vis_forced = None
-        _vision_input = bool(_vis_forced) if isinstance(_vis_forced, bool) else None
-
+        # ── 模型能力：思考强度（视觉不在此解析，见下）────────────────
+        # ★ 2026-09-26：删掉这里对 model_vision_overrides 的解析与 vision_input 注入。
+        # 能力声明/探测结果统一由 Agent 侧的 scout.llm.vision_route 从配置读取——
+        # 之前只有这个入口解析，命令行与 IM 渠道拿不到，同一条设置在三个入口行为
+        # 不一致（D3）；而且它按 config.model 取值，聊天中途切模型就会过期。
+        # Agent 构造参数 `vision_input` 仍保留，作为调用方的**显式**运行时覆盖。
         new_agent = Agent(
             llm=llm,
             max_turns=config.max_turns or 60,  # 2026-08-31：0 值兜底，防止旧配置缺省导致预算 0 步立即耗尽
@@ -423,7 +419,6 @@ class WebAdapter(
             deep_thinking=config.deep_thinking,
             agent_mode=config.agent_mode,
             reasoning_effort=str(getattr(config, "reasoning_effort", "auto") or "auto").lower(),
-            vision_input=_vision_input,
             model_provider=config.provider or "",
             embedding_provider=embedding_provider,
             auto_approve=config.auto_approve,

@@ -200,7 +200,7 @@ class VectorSkillStore:
 
         # 清理过期的已弃用技能（30天后归档）
         now = time.time()
-        for skill_id, skill in list(self._cache.items()):
+        for _skill_id, skill in list(self._cache.items()):
             if skill.status == SkillStatus.DEPRECATED:
                 age_days = (now - skill.updated_at) / 86400
                 if age_days > 30:

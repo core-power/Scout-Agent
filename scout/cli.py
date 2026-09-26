@@ -196,7 +196,7 @@ async def run_web(args: argparse.Namespace) -> None:
     port = args.port or config.web_port or 8848
 
     if not api_key:
-        console.print(f"\n[bold green]🧭 Scout Agent Web 服务启动（无 API Key）[/]")
+        console.print("\n[bold green]🧭 Scout Agent Web 服务启动（无 API Key）[/]")
         console.print(f"[dim]请在浏览器中打开 http://localhost:{port}，点击「设置」配置 API Key[/]\n")
     else:
         # 保存到 config.json 以便 Web 端读取
@@ -230,7 +230,7 @@ async def run_web(args: argparse.Namespace) -> None:
 
     app = create_web_app(agent)
 
-    console.print(f"\n[bold green]🧭 Scout Agent Web 服务启动[/]")
+    console.print("\n[bold green]🧭 Scout Agent Web 服务启动[/]")
     console.print(f"[dim]地址: http://localhost:{port}[/]")
     console.print(f"[dim]API:  http://localhost:{port}/v1/chat/completions[/]")
     console.print(f"[dim]WebSocket: ws://localhost:{port}/ws[/]")

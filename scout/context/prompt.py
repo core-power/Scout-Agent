@@ -64,7 +64,15 @@ class PromptBuilder:
                 parts.append(ws_prompt)
 
         # 文件处理指导 — 告诉 Agent 如何正确使用文件工具
-        file_guidance = """## 文件处理规范
+        # 示例路径用跨平台临时目录（Windows→%TEMP%\scout，Unix→/tmp/scout），
+        # 避免硬编码 /tmp 与 platform.py 注入的「Windows 别用 Unix 路径」指令打架。
+        try:
+            from scout.core.platform import get_temp_dir
+
+            _tmp_example = str(get_temp_dir() / "xxx.docx")
+        except Exception:
+            _tmp_example = "/tmp/scout/xxx.docx"
+        file_guidance = f"""## 文件处理规范
 
 **默认以文本回复，除非用户明确要求文件。**
 
@@ -72,8 +80,8 @@ class PromptBuilder:
    - 触发词例："发给我"、"给我文件"、"导出成文件"、"下载"、"生成一个xxx文件"等明确诉求。
    - 其余情况（回答、总结、整理、写代码、解释等）一律直接用文本回复，不要生成文件。
 
-2. **如需发文件**：先用 write_file 或 execute_code 生成文件到磁盘（如 `/tmp/xxx.docx`），
-   然后调用 send_file(path="/tmp/xxx.docx")。前端会自动显示下载按钮。
+2. **如需发文件**：先用 write_file 或 execute_code 生成文件到磁盘（如临时目录 `{_tmp_example}`），
+   然后调用 send_file(path="{_tmp_example}")。前端会自动显示下载按钮。
 
 3. **不要直接输出文件内容**：尤其二进制文件（docx、xlsx、pdf 等）或大文件，
    不要把文件内容转成 base64 或 markdown 输出到聊天中。

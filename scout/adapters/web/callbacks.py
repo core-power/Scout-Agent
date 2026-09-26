@@ -42,9 +42,56 @@ class WebCallbacks(Callbacks):
     async def on_reasoning(self, content: str):
         await self._push("reasoning", {"content": content})
 
-    async def on_clarify(self, question: str) -> str:
-        await self._push("clarify", {"question": question})
-        return ""
+    async def on_clarify(self, question: str, options: list[str] | None = None) -> str:
+        """推送澄清请求并等待用户回答（2026-09-23，ask_user 工具链路）.
+
+        此前只推事件立即返回空串 → agent 循环里没人能拿到用户回答。
+        现在与 on_confirm 同款的 future 注册表模式：
+          ① 注册 future 到自持表 pending_clarifications（+ adapter 兼容表）
+          ② 推 clarify_request（带 request_id/question/options）到前端
+          ③ 用户在弹窗点选项或自由输入 → WS 回 clarify_response → future 唤醒
+          ④ 超时（SCOUT_CLARIFY_TIMEOUT，默认 300s）推 clarify_cancelled
+             让前端关掉弹窗，返回空串（ask_user 工具据此降级继续）
+        """
+        import uuid
+        from scout.tools.builtin.ask_user import clarify_timeout_s
+
+        request_id = str(uuid.uuid4())
+        future = asyncio.Future()
+        # 自持注册表（WS 处理器消费时直接读本表，同 on_confirm 2026-09-09 修复）
+        if not hasattr(self, "pending_clarifications"):
+            self.pending_clarifications: dict = {}
+        self.pending_clarifications[request_id] = future
+        # 兼容旧路径：adapter 表（SSE 等场景）
+        if getattr(self, "_adapter", None):
+            self._adapter._pending_clarifications[request_id] = future
+        await self._push("clarify_request", {
+            "request_id": request_id,
+            "question": question,
+            "options": options or [],
+            "timeout": clarify_timeout_s(),  # 前端据此显示倒计时（2026-09-24）
+        })
+
+        def _cleanup() -> None:
+            self.pending_clarifications.pop(request_id, None)
+            if getattr(self, "_adapter", None):
+                self._adapter._pending_clarifications.pop(request_id, None)
+
+        try:
+            return str(await asyncio.wait_for(future, timeout=clarify_timeout_s()) or "")
+        except asyncio.TimeoutError:
+            _cleanup()
+            # 通知前端关弹窗：否则卡片残留，用户作答后回包无人消费（静默丢弃）
+            try:
+                await self._push("clarify_cancelled", {"request_id": request_id})
+            except Exception:  # noqa: BLE001
+                pass
+            return ""  # 超时 → ask_user 工具降级为"用户未回应"
+        except asyncio.CancelledError:
+            # 用户点了「停止」/断连 → agent.cancel() → executor.cancel_all()
+            # 取消工具任务。future 表项必须清理，否则长会话下缓慢泄漏。
+            _cleanup()
+            raise
 
     async def on_step(self, step: int, total_budget: int):
         await self._push("step", {"step": step, "total": total_budget})
@@ -115,3 +162,62 @@ class WebCallbacks(Callbacks):
             "file_name": file_name or (file_path.split("/")[-1] if file_path else ""),
             "file_size": file_size,
         })
+
+    async def on_watchdog(self, warning: str, meta: dict | None = None) -> bool:
+        """空转看门狗：推 watchdog_request 并等待用户「继续/停止」（2026-09-24）.
+
+        与 on_clarify/on_confirm 同款 future 注册表模式：
+          ① 注册 future 到自持表 pending_watchdogs（+ adapter 兼容表）
+          ② 推 watchdog_request（带 request_id/warning/meta）到前端
+          ③ 用户点「继续」→ WS 回 watchdog_response{continue:true} → future=True
+             用户点「停止」→ 回 watchdog_response{continue:false} → future=False
+          ④ 超时（SCOUT_WATCHDOG_TIMEOUT，默认 90s）→ 返回 True（继续），
+             保留原有「2 次空转强制收尾」安全网，不因用户离开而卡死回合。
+
+        Returns:
+            True=继续，False=停止。
+        """
+        import os
+        import uuid
+
+        try:
+            timeout = max(10, int(os.getenv("SCOUT_WATCHDOG_TIMEOUT", "90") or 90))
+        except ValueError:
+            timeout = 90
+
+        request_id = str(uuid.uuid4())
+        future = asyncio.Future()
+        if not hasattr(self, "pending_watchdogs"):
+            self.pending_watchdogs: dict = {}
+        self.pending_watchdogs[request_id] = future
+        if getattr(self, "_adapter", None):
+            self._adapter._pending_watchdogs[request_id] = future
+
+        await self._push("watchdog_request", {
+            "request_id": request_id,
+            "warning": warning,
+            "meta": meta or {},
+            "timeout": timeout,
+        })
+
+        def _cleanup() -> None:
+            self.pending_watchdogs.pop(request_id, None)
+            if getattr(self, "_adapter", None):
+                self._adapter._pending_watchdogs.pop(request_id, None)
+
+        try:
+            result = await asyncio.wait_for(future, timeout=timeout)
+            _cleanup()
+            return bool(result)
+        except asyncio.TimeoutError:
+            _cleanup()
+            # 超时默认继续；通知前端关弹窗（否则残留）
+            try:
+                await self._push("watchdog_cancelled", {"request_id": request_id})
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+        except asyncio.CancelledError:
+            # 用户点了主「停止」/断连 → 取消传播；清理注册表防泄漏
+            _cleanup()
+            raise

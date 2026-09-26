@@ -14,10 +14,51 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
+
+# ── 入站附件（Inbound Attachments）────────────────────────────────────
+# 渠道入站媒体（Telegram 图片/文档、Discord 附件等）统一下载到系统临时目录，
+# 以 {name, type, size, path} 元数据随消息下发 —— 与 Web 端 ws.py 的附件
+# 结构一致，供 Agent 的视觉链路（run_conversation(attachments=...)）消费。
+# 约束：单文件 ≤ 20MB；单条消息最多 5 个附件，超限跳过并在文本中提示。
+
+ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024  # 单文件上限 20MB
+ATTACHMENT_MAX_COUNT = 5  # 单条消息附件数上限
+
+
+def attachment_upload_dir() -> str:
+    """入站附件落盘目录 — 系统临时目录下的 scout_uploads（与 Web 端共用）."""
+    tmp_dir = os.path.join(tempfile.gettempdir(), "scout_uploads")
+    os.makedirs(tmp_dir, exist_ok=True)
+    return tmp_dir
+
+
+def save_inbound_attachment(name: str, data: bytes) -> str:
+    """把入站附件写入临时目录，返回绝对路径（随机前缀防文件名冲突）."""
+    safe_name = os.path.basename((name or "").strip()) or "attachment"
+    path = os.path.join(attachment_upload_dir(), f"{uuid.uuid4().hex[:8]}_{safe_name}")
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
+
+
+def format_attachment_hints(attachments: list[dict], notices: list[str]) -> str:
+    """拼出附加到消息文本的附件提示片段（无附件且无提示时返回空串）.
+
+    附件路径写进文本，模型可直接用文件工具按需查看；附件元数据同时随
+    PlatformMessage/Message.attachments 下发，供 Agent 视觉链路使用。
+    """
+    if not attachments and not notices:
+        return ""
+    lines = [f"[附件: {a.get('name')} → {a.get('path')}]" for a in attachments]
+    lines.extend(notices)
+    return "\n".join(lines)
 
 
 @dataclass

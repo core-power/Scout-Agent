@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -91,3 +92,54 @@ def get_platform_prompt() -> str:
         "## 运行环境\n"
         f"你正在 **Linux** 上运行，shell 为 bash，Python 用 `{py}`，标准 Unix 命令可用。\n\n"
     )
+
+
+def terminate_process_tree(proc, timeout: float = 10.0) -> None:
+    """跨平台终止子进程**及其整个子树**（超时/取消时防孤儿进程）.
+
+    背景：``subprocess.run(timeout=...)`` 或 ``proc.kill()`` 在 Windows 上只
+    ``TerminateProcess`` 直接子进程，不会杀孙进程 —— 如 ``git clone`` 会派生
+    ``git-remote-https.exe``，主 git.exe 被杀后它可能继续挂着成为孤儿。
+
+    平台策略：
+    - Windows：``taskkill /T /F /PID``（/T 连带子树，/F 强制）。
+    - POSIX：``os.killpg(SIGKILL)`` 杀整个进程组（需 spawn 时 ``start_new_session=True``）；
+      取不到进程组则退回 ``proc.kill()``。
+
+    对已退出/未启动的进程安全无操作；任何异常都兜底到 ``proc.kill()``，绝不抛出。
+
+    Args:
+        proc: ``subprocess.Popen`` 实例（需有 ``.pid`` / ``.poll`` / ``.kill``）。
+        timeout: Windows 下 taskkill 自身的超时上限（秒）。
+    """
+    if proc is None:
+        return
+    pid = getattr(proc, "pid", None)
+    if pid is None:
+        return
+    try:
+        if IS_WINDOWS:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=flags,
+                timeout=timeout,
+            )
+            return
+        # POSIX：优先杀进程组
+        import signal
+
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            return
+        except Exception:
+            pass
+    except Exception:
+        pass
+    # 兜底：直接杀主进程
+    try:
+        proc.kill()
+    except Exception:
+        pass

@@ -30,7 +30,6 @@ from datetime import datetime
 from pathlib import Path
 
 import json
-from pathlib import Path
 
 from scout.core.annotations import ToolAnnotations
 from scout.core.types import Observation

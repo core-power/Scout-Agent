@@ -4,9 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 from typing import Any
 
-from scout.adapters.platforms.base import ChannelAdapter, PlatformMessage, PlatformResponse
+import httpx
+
+from scout.adapters.platforms.base import (
+    ATTACHMENT_MAX_BYTES,
+    ATTACHMENT_MAX_COUNT,
+    ChannelAdapter,
+    PlatformMessage,
+    PlatformResponse,
+    format_attachment_hints,
+    save_inbound_attachment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,18 +66,8 @@ class DiscordAdapter(ChannelAdapter):
             async def on_message(message):
                 if message.author == self._client.user:
                     return
-                
-                # 转换为 PlatformMessage
-                platform_msg = PlatformMessage(
-                    platform="discord",
-                    channel_id=str(message.channel.id),
-                    user_id=str(message.author.id),
-                    user_name=str(message.author),
-                    content=message.content,
-                    message_id=str(message.id),
-                    timestamp=message.created_at.timestamp(),
-                )
-                
+
+                platform_msg = await self._to_platform_message(message)
                 await self._handle_incoming(platform_msg)
             
             # 后台启动
@@ -91,6 +92,75 @@ class DiscordAdapter(ChannelAdapter):
         if self._client:
             await self._client.close()
         self._connected = False
+
+    async def _collect_attachments(self, message) -> tuple[list[dict], list[str]]:
+        """把 discord.Message.attachments 下载到临时目录.
+
+        直接用 httpx 拉取 Attachment.url（不依赖 discord.py 的读接口），
+        返回 (附件元数据列表 {name,type,size,path}, 文本提示列表)。
+        超限（>20MB / >5 个）的附件跳过并生成提示，单个失败不影响其余附件。
+        """
+        attachments: list[dict] = []
+        notices: list[str] = []
+        items = list(getattr(message, "attachments", None) or [])
+        if not items:
+            return attachments, notices
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            for att in items:
+                name = getattr(att, "filename", None) or "attachment"
+                if len(attachments) >= ATTACHMENT_MAX_COUNT:
+                    notices.append(
+                        f"[附件: {name} 已跳过 — 单条消息最多 {ATTACHMENT_MAX_COUNT} 个附件]"
+                    )
+                    continue
+                size = getattr(att, "size", 0) or 0
+                if size > ATTACHMENT_MAX_BYTES:
+                    notices.append(f"[附件: {name} 超过 20MB，已跳过]")
+                    continue
+                url = getattr(att, "url", None) or ""
+                if not url:
+                    notices.append(f"[附件: {name} 缺少下载地址，已跳过]")
+                    continue
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code != 200:
+                        notices.append(f"[附件: {name} 下载失败，已跳过]")
+                        continue
+                    data = resp.content
+                    mime = getattr(att, "content_type", None) or ""
+                    if not mime:
+                        mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+                    path = save_inbound_attachment(name, data)
+                    attachments.append(
+                        {
+                            "name": name,
+                            "type": mime,
+                            "size": size or len(data),
+                            "path": path,
+                        }
+                    )
+                except Exception:
+                    notices.append(f"[附件: {name} 下载失败，已跳过]")
+        return attachments, notices
+
+    async def _to_platform_message(self, message) -> PlatformMessage:
+        """把 discord.Message 转换为 PlatformMessage — 附件落盘并附到消息文本."""
+        attachments, notices = await self._collect_attachments(message)
+        content = message.content or ""
+        hint = format_attachment_hints(attachments, notices)
+        if hint:
+            content = f"{content}\n\n{hint}" if content.strip() else hint
+        return PlatformMessage(
+            platform="discord",
+            channel_id=str(message.channel.id),
+            user_id=str(message.author.id),
+            user_name=str(message.author),
+            content=content,
+            message_id=str(message.id),
+            timestamp=message.created_at.timestamp(),
+            attachments=attachments or None,
+        )
 
     async def send_message(
         self,

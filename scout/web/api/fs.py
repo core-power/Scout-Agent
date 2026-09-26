@@ -16,7 +16,7 @@ import string
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from scout.security.policy import SYSTEM_DIRS
 
@@ -65,6 +65,81 @@ def _resolve(path: str, must_exist: bool = True) -> Path:
     if _is_system_dir(check) or not _allowed_root(check):
         raise HTTPException(403, f"禁止访问: {path}")
     return p
+
+
+def _allowed_io_roots() -> List[Path]:
+    """文件**内容**读写（/read、/save）允许的根目录.
+
+    比浏览（/tree 可导航盘符根）更严：只允许用户自己的空间 ——
+    主目录、进程工作目录（scout 运行/项目目录）、系统临时目录（send_file 产物），
+    以及显式白名单 SCOUT_FS_ALLOW_ROOTS（os.pathsep 分隔）。
+    防止 auth 关闭时经 /api/fs 读取/覆盖写任意盘符下他人或系统文件。
+    """
+    roots: List[Path] = [_home()]
+    try:
+        roots.append(Path(os.getcwd()).resolve())
+    except Exception:
+        pass
+    try:
+        from scout.core.platform import get_temp_dir
+
+        roots.append(Path(get_temp_dir()).resolve())
+    except Exception:
+        pass
+    for r in filter(None, os.getenv("SCOUT_FS_ALLOW_ROOTS", "").split(os.pathsep)):
+        try:
+            roots.append(Path(r).resolve())
+        except Exception:
+            pass
+    return roots
+
+
+def _under_allowed_io(p: Path) -> bool:
+    """p 是否落在允许的读写根之内（home / cwd / temp / 白名单）."""
+    try:
+        rp = p.resolve()
+    except Exception:
+        return False
+    for root in _allowed_io_roots():
+        try:
+            rp.relative_to(root)
+            return True
+        except (ValueError, OSError):
+            continue
+    return False
+
+
+def _resolve_io(path: str, must_exist: bool = True) -> Path:
+    """/read、/save 专用解析：在 _resolve 基础上再收紧到「用户自己的空间」."""
+    p = _resolve(path, must_exist=must_exist)
+    check = p if p.exists() else p.parent
+    if not _under_allowed_io(check):
+        raise HTTPException(
+            403,
+            f"禁止访问文件内容（仅允许主目录/工作目录/临时目录/白名单）: {path}",
+        )
+    return p
+
+
+def _guard_write_client(request: Request) -> None:
+    """写操作客户端守卫：非本地回环访问必须带有效 token（即使全局 auth 关闭）.
+
+    中间件在 auth_enabled=False（默认）时放行一切；这里对最敏感的 /api/fs/save
+    补一道防线——远程客户端即便在「免登录」模式下也不能覆盖写文件。
+    """
+    client_host = (request.client.host if request.client else "") or ""
+    if client_host in ("127.0.0.1", "::1", "localhost"):
+        return
+    from scout.security.auth import verify_token
+
+    auth = request.headers.get("authorization", "")
+    if auth[:7].lower() == "bearer ":
+        token = auth[7:]
+    else:
+        token = request.query_params.get("token", request.query_params.get("access_token", ""))
+    if not (token and verify_token(token)):
+        raise HTTPException(401, "写操作需要认证（非本地访问必须登录）")
+
 
 
 def _build_tree(d: Path, depth: int) -> List[Dict[str, Any]]:
@@ -130,7 +205,7 @@ async def fs_tree(
 @router.get("/read")
 async def fs_read(path: str) -> Dict[str, Any]:
     """读取文本文件内容（限 512KB；UTF-8→GBK→latin-1 自动探测，二进制返回 base64）."""
-    p = _resolve(path)
+    p = _resolve_io(path)
     if not p.is_file():
         raise HTTPException(400, f"不是文件: {path}")
     size = p.stat().st_size
@@ -154,11 +229,14 @@ async def fs_read(path: str) -> Dict[str, Any]:
 @router.post("/save")
 async def fs_save(
     path: str,
+    request: Request,
     payload: Dict[str, Any] = Body(default=...),
 ) -> Dict[str, Any]:
     """保存文本文件（限 512KB；覆盖写，用于用户手动修正小改动）."""
+    # 非本地访问必须带有效 token（即使全局 auth 关闭）——防远程任意覆盖写
+    _guard_write_client(request)
     content = str(payload.get("content") or "")
-    p = _resolve(path, must_exist=False)
+    p = _resolve_io(path, must_exist=False)
     if p.exists() and p.is_dir():
         raise HTTPException(400, f"是目录: {path}")
     if len(content.encode("utf-8")) > MAX_READ_SIZE:

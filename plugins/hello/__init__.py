@@ -35,7 +35,7 @@ class HelloPlugin(Plugin):
                 # 设置直接响应，绕过 AI
                 event.data["direct_response"] = self._get_greeting()
                 event.stop_propagation = True
-                logger.debug(f"检测到问候语，直接回复")
+                logger.debug("检测到问候语，直接回复")
                 return True
         
         return False

@@ -16,9 +16,17 @@ import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
+if TYPE_CHECKING:  # 类型检查器看到真模块；运行时用惰性代理（见 scout/core/lazy.py）
+    import numpy as np
+else:  # ★ 2026-09-25 启动减负（Windows 实测）：numpy 顶层导入 ≈120 ms，而默认
+    # 纯文本检索（FTS5）路径一次都不碰它，只有启用向量检索才需要 → 延后到首次
+    # np.xxx 才真正 import。注解侧靠文件头的 `from __future__ import annotations`
+    # 保持字符串形态，不会在 def 时求值。
+    from scout.core.lazy import lazy_module
+
+    np = lazy_module("numpy")
 
 from scout.config.paths import DATA_DIR as _SCOUT_DATA_DIR
 from scout.storage.schema import ensure_schema

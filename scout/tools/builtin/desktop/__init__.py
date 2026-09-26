@@ -1756,8 +1756,9 @@ class DesktopTool(ToolDefinition):
         if mode != "vl" or not api_key:
             return -1, -1, self._err(
                 ERROR_INVALID_ARGS,
-                "find/locate 定位需要已配置视觉模型（vision_model）。"
-                "未配置前请改用 read_controls（T1/T2 应用）或 rel_x/rel_y 固定布局坐标。",
+                "find/locate 定位需要可用的视觉能力。请在「设置 → 模型配置 → 模型能力」"
+                "开启当前模型的视觉能力（或单独配置视觉模型）；"
+                "未开启前请改用 read_controls（T1/T2 应用）或 rel_x/rel_y 固定布局坐标。",
             )
         shot = await self._do_screenshot(**kwargs)
         if not shot.success:
@@ -2123,7 +2124,8 @@ class DesktopTool(ToolDefinition):
             w_px, h_px = img.size
             colors = len(img.convert("RGB").getcolors(maxcolors=256) or []) if (w_px * h_px) else 0
             if png_size < 8000 and colors <= 8 and w_px * h_px > 50000:
-                time.sleep(1.2)
+                # ★ 2026-09-25 Windows 性能修复：本工具所有动作都跑在事件循环协程里，time.sleep 会冻结整个服务（WS 推流、IM 渠道、其他会话全部排队），实测单处最长 1.2s（截图空屏守卫）、每步 0.05~0.5s → 一律改 await asyncio.sleep。
+                await asyncio.sleep(1.2)
                 retry = _printwindow_capture(w.handle) if (window_only or title or (kw.get("process") or "").strip()) else None
                 if retry is not None:
                     img = retry
@@ -2246,7 +2248,7 @@ class DesktopTool(ToolDefinition):
                         )
                 if time.time() >= deadline:
                     break
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
             hint = (
                 f"窗口内控件文本样例: {sample[:8]}"
                 if sample
@@ -2272,7 +2274,7 @@ class DesktopTool(ToolDefinition):
                     pass
                 if time.time() >= deadline:
                     break
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
             return self._err(
                 ERROR_TIMEOUT, f"等待超时（{timeout}s），无窗口标题包含 {until_title_contains!r}"
             )
@@ -2283,7 +2285,7 @@ class DesktopTool(ToolDefinition):
                 if _find_wrapper(title, title_re, timeout=0.0, process=kw.get("process", "")) is None:
                     label = title or (kw.get("process") or "")
                     return self._ok(f"窗口已消失: {label!r}（耗时 {time.time()-t0:.1f}s）")
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
             return self._err(ERROR_TIMEOUT, f"等待超时（{timeout}s），窗口仍存在: {title!r}")
         w = _find_wrapper(title, title_re, timeout=timeout, process=kw.get("process", ""))
         if w is None:
@@ -2440,7 +2442,7 @@ class DesktopTool(ToolDefinition):
             pass
         try:
             target.click_input()
-            time.sleep(0.08)
+            await asyncio.sleep(0.08)
             fs = _focus_summary()
             return self._ok(f"已点击控件: {_ctrl_line(target)}" + (f"；{fs}" if fs else ""))
         except Exception as e:  # noqa: BLE001
@@ -2587,12 +2589,12 @@ class DesktopTool(ToolDefinition):
             ctrl.set_focus()
         except Exception:  # noqa: BLE001
             pass
-        time.sleep(0.15)
+        await asyncio.sleep(0.15)
         from pywinauto.keyboard import send_keys as _keys
 
         for seg in (y, mo, d):
             _keys(seg, with_spaces=True)
-            time.sleep(0.2)
+            await asyncio.sleep(0.2)
         return self._ok(
             f"已向日期控件分段键入 {y}-{mo}-{d}（年→月→日逐段，段满自动跳段）。"
             "注意：部分控件段序可能不同（美式为 月/日/年），完成后建议截图或 read_controls 确认实际值。"
@@ -2725,7 +2727,7 @@ class DesktopTool(ToolDefinition):
 
         cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
         mouse.click(button="left", coords=(cx, cy))
-        time.sleep(max(0.05, float(click_delay or 0.3)))
+        await asyncio.sleep(max(0.05, float(click_delay or 0.3)))
         parts = [f"({cx},{cy})"]
         if getattr(self, "_img_conv_note", ""):
             parts.append(self._img_conv_note)
@@ -2758,7 +2760,7 @@ class DesktopTool(ToolDefinition):
 
         cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
         mouse.click(button="left", coords=(cx, cy))
-        time.sleep(0.08)
+        await asyncio.sleep(0.08)
         fs = _focus_summary()
         parts = [f"已左键点击 ({cx},{cy})"]
         if getattr(self, "_img_conv_note", ""):
@@ -2787,7 +2789,7 @@ class DesktopTool(ToolDefinition):
 
         cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
         mouse.double_click(button="left", coords=(cx, cy))
-        time.sleep(0.08)
+        await asyncio.sleep(0.08)
         parts = [f"已双击 ({cx},{cy})"]
         if hit is not None:
             parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
@@ -2804,7 +2806,7 @@ class DesktopTool(ToolDefinition):
 
         cx, cy, hit = self._apply_snap(w, str(kw.get("snap", "true")), px, py)
         mouse.right_click(coords=(cx, cy))
-        time.sleep(0.08)
+        await asyncio.sleep(0.08)
         parts = [f"已右键点击 ({cx},{cy})"]
         if hit is not None:
             parts.append("吸附→" + _ctrl_line(hit).lstrip("- "))
@@ -2887,13 +2889,13 @@ class DesktopTool(ToolDefinition):
         n = max(4, int(steps))
         dur = max(0.1, float(duration or 0.6))
         mouse.press(button="left", coords=(sx, sy))
-        time.sleep(0.15)  # 让目标注册按下状态
+        await asyncio.sleep(0.15)  # 让目标注册按下状态
         for i in range(1, n + 1):
             xi = sx + (ex - sx) * i // n
             yi = sy + (ey - sy) * i // n
             mouse.move(coords=(xi, yi))
-            time.sleep(dur / n)
-        time.sleep(0.1)
+            await asyncio.sleep(dur / n)
+        await asyncio.sleep(0.1)
         mouse.release(button="left", coords=(ex, ey))
         parts = [f"已拖拽 ({sx},{sy}) → {end}（{n} 步 / {dur:.1f}s）"]
         if hit is not None:

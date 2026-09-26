@@ -45,8 +45,8 @@ def test_resolve_mode_dedicated_vision_vl():
 
 @pytest.mark.unit
 def test_resolve_mode_missing_attrs_none():
-    """cfg 缺 vision_model 属性（异常配置）→ "none" 而非抛错."""
-    cfg = SimpleNamespace(api_key="sk-x", model="gpt-4o")
+    """cfg 缺 vision_model 等属性（异常配置）→ 不抛错；纯文本模型 → "none"."""
+    cfg = SimpleNamespace(api_key="sk-x", model="deepseek-v4-pro")
     assert vision_mod.resolve_mode(cfg) == "none"
 
 
@@ -54,10 +54,11 @@ def test_resolve_mode_missing_attrs_none():
 
 @pytest.mark.unit
 def test_execute_unconfigured_returns_hint(monkeypatch):
-    """未配置 vision_model → execute 返回"无法读取图片"提示，success=False."""
+    """无任何视觉路径（deepseek 无兜底模型）→ execute 返回"无法读取图片"提示."""
     cfg = SimpleNamespace(
-        api_key="sk-x", model="qwen3.8-27b", vision_model="",
-        vision_provider="", provider="openai", base_url="https://x.example.com/v1",
+        api_key="sk-x", model="deepseek-v4-pro", vision_model="",
+        vision_provider="", provider="deepseek", base_url="https://x.example.com/v1",
+        model_vision_overrides={},
     )
     monkeypatch.setattr("scout.config.ConfigManager.load", lambda self: cfg)
     monkeypatch.setattr(

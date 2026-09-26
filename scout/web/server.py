@@ -172,7 +172,7 @@ def create_web_app(agent=None) -> FastAPI:
             logging.getLogger(__name__).debug("读取 web_docs 配置失败: %s", e)
     app = FastAPI(
         title="Scout Agent",
-        version="1.0.0.4",
+        version="1.0.0.5",
         lifespan=_lifespan,
         docs_url="/docs" if _docs_enabled else None,
         redoc_url="/redoc" if _docs_enabled else None,
@@ -261,6 +261,16 @@ def create_web_app(agent=None) -> FastAPI:
             return JSONResponse({"error": "未授权访问，请先登录"}, status_code=401)
 
     app.add_middleware(AuthMiddleware)
+
+    # ── 响应压缩（2026-09-25 Windows 首屏性能）──
+    # /chat 首屏 13 个资源合计 1258 KB，实测 gzip 后 344 KB（−73%），此前全站裸传。
+    # 注册在 AuthMiddleware 之后 = 位于最外层，连 401 JSON 也一并压缩。
+    # 安全性已核对 starlette 1.7：GZipResponder 对每个分片做 Z_SYNC_FLUSH（不缓冲
+    # 整个响应），且 DEFAULT_EXCLUDED_CONTENT_TYPES 已含 text/event-stream ——
+    # /api/chat/stream 的 EventSourceResponse 与 /ws 均不会被压缩或延迟。
+    from starlette.middleware.gzip import GZipMiddleware
+
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     # 挂载 Web 适配器（API 路由）
     _web_adapter = WebAdapter(app, agent)
@@ -667,6 +677,6 @@ def create_web_app(agent=None) -> FastAPI:
     # 健康检查端点（用于 Docker）
     @app.get("/health")
     async def health_check():
-        return {"status": "healthy", "version": "1.0.0.4"}
+        return {"status": "healthy", "version": "1.0.0.5"}
 
     return app

@@ -13,6 +13,7 @@ import asyncio
 import datetime
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,11 @@ logger = logging.getLogger("scout.adapters")
 
 class ChannelManager:
     """渠道管理器 — 管理多个 IM 平台适配器."""
+
+    # 监督器重连参数（2026-09-24）：稳定运行超过 _STABLE_RUN_S 秒后掉线视为偶发，
+    # 退避重置；否则指数退避至多 _MAX_BACKOFF_S 秒，持续重试直到 stop_channel。
+    _STABLE_RUN_S = 30.0
+    _MAX_BACKOFF_S = 60.0
 
     def __init__(self, config_dir: str | Path | None = None):
         self._adapters: dict[str, ChannelAdapter] = {}
@@ -83,7 +89,8 @@ class ChannelManager:
 
         try:
             await adapter.start()
-            task = asyncio.create_task(self._run_channel(name, adapter))
+            # 用监督器包裹消息循环：掉线自动指数退避重连，而非一崩即死（2026-09-24）
+            task = asyncio.create_task(self._supervise_channel(name, adapter))
             self._running[name] = task
             self._stats[name]["started_at"] = datetime.datetime.now().isoformat()
             logger.info(f"渠道已启动: {name}")
@@ -125,6 +132,49 @@ class ChannelManager:
 
     # ── 消息处理循环 ──
 
+    async def _supervise_channel(self, name: str, adapter: ChannelAdapter) -> None:
+        """渠道监督器：_run_channel 掉线/异常退出时指数退避重连（2026-09-24）.
+
+        此前 start_channel 直接跑 _run_channel，一旦 listen() 抛异常或轮询意外
+        结束，任务即终止 → 渠道「死透」直到手动重启。本监督器在其外层兜底：
+        - 正常退出/异常 → 退避（1→2→4…≤60s）后 stop+start 重连并重跑；
+        - 稳定运行超过 _STABLE_RUN_S 秒后掉线 → 退避重置回 1s（区分偶发与持续故障）；
+        - 被 stop_channel 取消（CancelledError）→ 直接向上抛出，干净结束，不重连。
+        """
+        backoff = 1.0
+        while True:
+            started = time.monotonic()
+            try:
+                await self._run_channel(name, adapter)
+                reason = "listen 结束"
+            except asyncio.CancelledError:
+                # 主动停止：传播取消，结束监督（不重连）
+                raise
+            except Exception as e:  # noqa: BLE001
+                reason = f"异常: {e}"
+                self._stats[name]["errors"] += 1
+            # 掉线：稳定运行过则重置退避
+            if time.monotonic() - started >= self._STABLE_RUN_S:
+                backoff = 1.0
+            logger.warning(
+                f"渠道 {name} 停止（{reason}），{backoff:.0f}s 后重连（Ctrl 停止请调用 stop_channel）"
+            )
+            try:
+                await asyncio.sleep(backoff)
+            except asyncio.CancelledError:
+                raise
+            backoff = min(backoff * 2, self._MAX_BACKOFF_S)
+            # 重连：best-effort 先 stop 再 start，失败也继续下一轮重试
+            try:
+                await adapter.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                await adapter.start()
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"渠道 {name} 重连启动失败: {e}")
+                self._stats[name]["errors"] += 1
+
     async def _run_channel(self, name: str, adapter: ChannelAdapter) -> None:
         """单个渠道的消息处理循环."""
         logger.info(f"渠道消息循环开始: {name}")
@@ -142,12 +192,7 @@ class ChannelManager:
                     response = await self._handle_message(name, message)
 
                     if response:
-                        # 回复用户
-                        reply = PlatformResponse(
-                            success=True,
-                            message_id=message.message_id,
-                            metadata={"content": response, "reply_to": message.message_id},
-                        )
+                        # 回复用户（此前构造的 reply PlatformResponse 从未被使用，已移除）
                         await adapter.send_message(message.channel_id, response, reply_to=message.message_id)
                         self._stats[name]["messages_out"] += 1
 
@@ -167,6 +212,9 @@ class ChannelManager:
 
         except asyncio.CancelledError:
             logger.info(f"渠道消息循环取消: {name}")
+            # 必须重新抛出：吞掉 CancelledError 会让 stop_channel 的 cancel 失效，
+            # 且 supervisor 无法区分「主动停止」与「掉线」（2026-09-24 修复）。
+            raise
         except Exception as e:
             logger.error(f"渠道消息循环异常 {name}: {e}")
             self._stats[name]["errors"] += 1
@@ -313,7 +361,10 @@ class ChannelManager:
             config[name] = {
                 "type": adapter.__class__.__name__,
                 "config": adapter.config,
-                "enabled": name not in self._running or True,
+                # 修复（2026-09-24）：原为 `name not in self._running or True` —— `or True`
+                # 使 enabled 恒为 True（调试残留）。应持久化 adapter 自身的启用标志，
+                # 与其 config 里的 enabled 往返一致；运行态由 get_info 的 running 单独反映。
+                "enabled": bool(getattr(adapter, "enabled", True)),
             }
 
         config_file = self._config_dir / "channels.json"

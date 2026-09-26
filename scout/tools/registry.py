@@ -79,8 +79,8 @@ class ToolRegistry:
     # 显式 import 的工具（如 knowledge）注册。此清单保证打包版工具完整加载；
     # 源码环境下与 iter_modules 结果做并集去重，无副作用。
     _BUILTIN_FALLBACK = [
-        "browser", "code_exec", "delegate", "desktop", "env_config",
-        "files", "image_gen", "knowledge", "mcp", "memory",
+        "ask_user", "browser", "code_exec", "delegate", "desktop", "env_config",
+        "files", "image_gen", "knowledge", "load_tools", "mcp", "memory",
         "parallel", "scheduler", "send_file", "shell", "vision", "web",
         "scout_report",
     ]
@@ -122,6 +122,25 @@ class ToolRegistry:
             allow: 白名单模式 — 仅返回此集合内的工具（None=全部）
                 与 exclude 同时提供时，先按 allow 过滤，再剔除 exclude
         """
+        names = cls._visible_names(exclude=exclude, allow=allow)
+        schemas = [cls._tools[name].to_schema() for name in names]
+        if compact:
+            for s in schemas:
+                _compact_schema(s)
+        return schemas
+
+    @classmethod
+    def _visible_names(
+        cls,
+        exclude: set[str] | None = None,
+        allow: set[str] | None = None,
+    ) -> list[str]:
+        """返回当前「对 LLM 可见」的工具名（已排序，供 schemas/catalog 共用）.
+
+        过滤顺序与 schemas() 完全一致：allow 白名单 → exclude 黑名单 →
+        条件禁用（is_enabled）→ 平台过滤（platforms）。抽出为独立方法，
+        避免 schemas()/catalog() 两处过滤逻辑漂移。
+        """
         names = sorted(cls._tools)
         if allow is not None:
             names = [n for n in names if n in allow]
@@ -133,11 +152,44 @@ class ToolRegistry:
         # 平台过滤（2026-08-30）：工具声明 platforms 且不含当前系统时，
         # 不暴露给 LLM —— 保证「不同的系统只看到适合该系统的工具」。
         names = [n for n in names if cls._tool_supported_on_platform(cls._tools[n])]
-        schemas = [cls._tools[name].to_schema() for name in names]
+        return names
+
+    @classmethod
+    def catalog(
+        cls,
+        exclude: set[str] | None = None,
+        allow: set[str] | None = None,
+        max_desc: int = 90,
+    ) -> list[dict]:
+        """生成工具「目录」— 每个工具仅 name + 一句话描述（两阶段懒加载第一阶段）.
+
+        与 schemas() 的区别：不含 parameters 结构，体积约为 compact schema 的 1/5
+        （实测 26 工具 compact≈3675 token，目录≈743 token）。用于让 LLM 知道
+        「有哪些工具可用」，需要时再调 load_tools 展开完整参数 schema。
+
+        排序与 schemas() 一致（按名），保证前缀稳定、利于 prompt cache。
+        """
+        out: list[dict] = []
+        for name in cls._visible_names(exclude=exclude, allow=allow):
+            desc = " ".join((cls._tools[name].description or "").split())
+            if len(desc) > max_desc:
+                desc = desc[:max_desc].rstrip() + "…"
+            out.append({"name": name, "description": desc})
+        return out
+
+    @classmethod
+    def schema_for(cls, name: str, compact: bool = True) -> dict | None:
+        """按名取单个工具的 schema（两阶段懒加载第二阶段：按需展开）.
+
+        工具不存在 / 当前平台不可见时返回 None。
+        """
+        tool = cls._tools.get(name)
+        if tool is None:
+            return None
+        schema = tool.to_schema()
         if compact:
-            for s in schemas:
-                _compact_schema(s)
-        return schemas
+            _compact_schema(schema)
+        return schema
 
     @staticmethod
     def _tool_is_enabled(tool: ToolDefinition) -> bool:

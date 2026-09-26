@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
 from scout.tools.builtin.shell.pty_session import (
-    PTY_SUPPORTED,
     PtyShellSession,
     PtyShellSessionManager,
 )
 
-# ★ 2026-09-14：PTY 依赖 fcntl/termios/pty（Unix 专属模块）。实现层已用
-# PTY_SUPPORTED 做平台保护（Windows 上调用抛明确 RuntimeError），测试须随之
-# 跳过——否则 8 个用例在 Windows 必然失败，被误读为功能回归。
+# ★ 2026-09-14：本文件用例针对 **Unix bash PTY**（直接实例化 PtyShellSession，
+# 依赖 fcntl/termios/pty 与 bash 命令语义：false/read/sleep/stty）。
+# ★ 2026-09-24：新增 Windows ConPTY 支持后 PTY_SUPPORTED 在 Windows 亦为 True，
+# 但这些 bash 专属用例在 Windows 仍不适用（PtyShellSession 走 pty.openpty，
+# Windows 无该模块）→ 明确限定为「非 Windows」跳过。Windows 的 ConPTY 用例见
+# tests/unit/test_pty_session_win.py。
 pytestmark = pytest.mark.skipif(
-    not PTY_SUPPORTED,
-    reason="PTY 交互式终端依赖 fcntl/termios/pty（Unix 专属），Windows 请用 persistent 会话",
+    os.name == "nt",
+    reason="Unix bash PTY 专属用例；Windows ConPTY 见 test_pty_session_win.py",
 )
 
 
@@ -160,7 +163,7 @@ async def test_shell_tool_interactive():
         command="sleep 30", timeout=1, interactive=True, session_key="ut-tool"
     )
     assert "挂起" in obs4.output
-    obs5 = await tool.execute(
+    await tool.execute(
         command="", session_keys="\\x03", timeout=2, interactive=True, session_key="ut-tool"
     )
     # 中断后会话仍可用

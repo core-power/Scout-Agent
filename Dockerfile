@@ -24,7 +24,7 @@ FROM python:3.11-slim
 
 LABEL maintainer="Scout Agent <scout@example.com>"
 LABEL description="Scout Agent - 智能个人助手"
-LABEL version="1.0.0.4"
+LABEL version="1.0.0.5"
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1 \

@@ -2069,17 +2069,22 @@
        且完全看不到"到底是谁占了"。现在改为后端 /api/context/stats 出数 + 分项占比，
        点击圆环展开明细；后端不可用时才回落到本地粗估并显示 ~ 前缀。 */
   function ctxTokens() {
+    /* ★ 2026-09-23：与后端 estimate_tokens 校准规则对齐（09-19 修正版）——
+       旧公式 cjk/1.4 + words/0.75 对代码/路径/JSON 类内容系统性低估 2 倍。
+       新规则：CJK 0.7 token/字，字母数字空格 4 字符≈1 token，其余符号 2 字符≈1 token。
+       DOM 文本含 UI 装饰，本就是兜底（后端不可用才用），口径一致后误差可控。 */
     var box = q('#messages');
     var txt = box ? (box.innerText || box.textContent || '') : '';
     var cjk = (txt.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) || []).length;
-    var rest = txt.replace(/[\u4e00-\u9fff\u3040-\u30ff]/g, ' ');
-    var words = (rest.match(/[A-Za-z0-9_]+/g) || []).length;
-    return Math.round(cjk / 1.4 + words / 0.75 + 1500);
+    var alnum = (txt.match(/[A-Za-z0-9\s_]/g) || []).length;
+    var rest = txt.length - cjk - alnum;
+    return Math.round(cjk * 0.7 + alnum / 4 + Math.max(0, rest) / 2 + 2000);
   }
   function fmtK(n) { return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }
   // 后端返回的分项配色（对应 --c-* token）
   var CTX_COLORS = {
     system: 'rgb(var(--c-accent))',
+    tools: 'rgb(var(--c-ink-3))',
     summary: 'rgb(var(--c-warn))',
     user: 'rgb(var(--c-info))',
     assistant: 'rgb(var(--c-agent))',
@@ -2106,7 +2111,18 @@
     if (ctxLoading) return;
     var sid = currentSid();
     ctxLoading = true;
+    // 带上当前所选模型（localStorage scout_chat_model_sel，与模型菜单共用）——
+    // 后端按 (provider, model) 查预设的 context_length 做分母，
+    // 32k 模型不再错用 128k 分母（2026-09-23 精准化）
     var url = '/api/context/stats' + (sid ? ('?session_id=' + encodeURIComponent(sid)) : '');
+    try {
+      var sel = JSON.parse(localStorage.getItem('scout_chat_model_sel') || '{}');
+      if (sel && sel.model) {
+        url += (url.indexOf('?') >= 0 ? '&' : '?') +
+          'provider=' + encodeURIComponent(sel.provider || '') +
+          '&model=' + encodeURIComponent(sel.model || '');
+      }
+    } catch (e) {}
     fetch(url).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
       ctxLoading = false;
       if (!d || typeof d !== 'object') return;
@@ -2123,7 +2139,9 @@
     var el = q('#wb-ctx');
     if (!el) return;
     var lmt = ctxLimit();
-    var real = !!(ctxState && ctxState.has_session);
+    // "~" 前缀表示「本地估算」；source==='real'（API 回传实测）时显示精确值。
+    // 此前用 has_session 判断 → 有会话时估算值也显示成精确值，误导。
+    var real = !!(ctxState && ctxState.source === 'real');
     var used = ctxState ? ctxState.used : ctxTokens();
     var pct = Math.max(0, Math.min(1, used / lmt));
     var lab = q('.wb-ctx-label', el), fg = q('.wb-ctx-ring-fg', el);
@@ -2166,7 +2184,17 @@
       rows +
       '<div class="wb-ctx-total"><span>' + T('合计') + '</span><span>' +
         fmtK(d.used) + ' / ' + fmtK(d.limit) + '（' + Math.round((d.ratio || 0) * 100) + '%）</span></div>' +
-      '<div class="wb-ctx-hint">' + T('工具输出占比过高时，可新开会话或清理历史') + '</div>';
+      '<div class="wb-ctx-hint">' + T('工具输出占比过高时，可新开会话或清理历史') + '</div>' +
+      // 分母来源：仅未收录模型时提示默认窗口，避免"33k"这类误导
+      // ★ 2026-09-24：limit_source 有 user/model/env/default 四种，
+      //   此前 user（手动设置）落进 default 分支误显示"未收录按 128k"
+      (d.limit_source === 'model' ? '' :
+        '<div class="wb-ctx-hint">' +
+        (d.limit_source === 'user'
+          ? T('分母来自手动设置的上下文长度')
+          : d.limit_source === 'env'
+            ? T('分母来自环境变量 SCOUT_CONTEXT_MAX_TOKENS')
+            : T('该模型未收录上下文窗口，分母按默认 128k 计')) + '</div>');
   }
   function toggleCtxPop() {
     var el = q('#wb-ctx');
@@ -2229,12 +2257,33 @@
 
     updCtx();
     fetchCtx();
-    // 会话切换时后端口径会变，重新取数（debounce 内同时刷新视图与后端）
-    var mo = new MutationObserver(debounce(function () { updCtx(); fetchCtx(); }, 900));
+    // 会话切换时后端口径会变，重新取数。
+    // ★ 2026-09-23 实时性修复：原 debounce(900) 在流式生成期间 DOM 持续变化，
+    //   900ms 静默期永远等不到 → 整轮生成中一次都不刷新（用户看到"数值不动"）。
+    //   改 throttle：持续变化时每 2.5s 至多拉一次，且停止变化后 2.5s 内补拉一次
+    //   （trailing），兼顾实时感与请求频率。
+    var ctxThrottled = (function () {
+      var last = 0, timer = null;
+      return function () {
+        var now = Date.now();
+        if (now - last >= 2500) {
+          last = now; updCtx(); fetchCtx();
+        } else if (!timer) {
+          timer = setTimeout(function () {
+            timer = null; last = Date.now(); updCtx(); fetchCtx();
+          }, 2500 - (now - last));
+        }
+      };
+    })();
+    var mo = new MutationObserver(ctxThrottled);
     mo.observe(q('#messages') || document.body, { childList: true, subtree: true, characterData: true });
     // 空闲期轮询一次，避免"生成结束后数字停在旧值"
     try {
       setInterval(function () { if (!document.hidden) fetchCtx(); }, 30000);
+      // 切换模型 → 分母（上下文窗口）可能变化，立即重取
+      window.addEventListener('scout-model-changed', fetchCtx);
+      // 回合结束（done/cancelled/error）→ real 观测值已更新，立即重取
+      window.addEventListener('scout-ctx-refresh', fetchCtx);
     } catch (e) {}
   }
 

@@ -343,7 +343,7 @@ class MultiAgentCoordinator:
             current_answers.append(result.get("response", ""))
         
         # 后续轮次：基于他人答案改进
-        for round_num in range(1, rounds):
+        for _round_num in range(1, rounds):
             new_answers = []
             for i, agent_info in enumerate(agents):
                 # 构建包含他人答案的上下文
@@ -402,7 +402,7 @@ class MultiAgentCoordinator:
         pro_arguments = []
         con_arguments = []
         
-        for round_num in range(rounds):
+        for _round_num in range(rounds):
             # 正方论证
             pro_prompt = f"""问题：{problem}
 
@@ -465,7 +465,7 @@ class MultiAgentCoordinator:
         
         # 让每个 Agent 投票
         votes = []
-        for i, voter_info in enumerate(agents):
+        for _i, voter_info in enumerate(agents):
             voting_prompt = f"""问题：{problem}
 
 以下是不同 Agent 的答案：

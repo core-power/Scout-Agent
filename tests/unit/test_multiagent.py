@@ -374,7 +374,7 @@ class TestIntegration:
         workflow = Workflow(id="test", name="测试")
         node1 = workflow.add_node("任务1", task_fn=task1)
         node2 = workflow.add_node("任务2", task_fn=task2, dependencies=[node1.id])
-        node3 = workflow.add_node("任务3", task_fn=task3, dependencies=[node2.id])
+        workflow.add_node("任务3", task_fn=task3, dependencies=[node2.id])
         
         # 执行
         result = await executor.execute(workflow)
@@ -433,8 +433,9 @@ class TestDelegateHITLInheritance:
         assert sub.hitl_tools == {"shell", "execute_code"}
         assert sub.security.auto_approve is False
         assert sub.automation_policy is None
-        # 子代理不应再拥有委派/协作工具（防止无限递归与循环协作）
-        assert sub._exclude_tools == {"delegate_task", "parallel_delegate", "collaborate_task"}
+        # 子代理不应再拥有委派/协作工具（防止无限递归与循环协作）；
+        # ask_user 也不给子代理（2026-09-23）——歧义写进结论交主代理统一澄清
+        assert sub._exclude_tools == {"delegate_task", "parallel_delegate", "collaborate_task", "ask_user"}
         # 执行期间注册进 router，执行完毕注销（防泄漏）
         from scout.multiagent.runtime import get_router
         assert any("delegate:dl_" in rid for rid in router_ids_seen[0])

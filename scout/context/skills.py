@@ -469,7 +469,6 @@ class SkillManager:
         Returns: 是否删除成功（技能不存在返回 False）
         """
         import shutil as _sh
-        skill = self._skills.get(name)
         base = self.skills_dir if scope != "repo" else (self._cwd / ".scout" / "skills")
         target = base / name
 

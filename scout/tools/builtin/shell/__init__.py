@@ -433,7 +433,7 @@ SAFE_COMMANDS = {
     "docker", "docker-compose", "systemctl", "service", "supervisorctl",
     "uvicorn", "gunicorn", "nohup", "kill", "pkill", "killall",
     "ssh", "scp", "rsync", "tmux", "screen", "vim", "nano", "less",
-    "tar", "unzip",
+    "tar",
     # 包管理
     "apt", "apt-get", "yum", "brew", "pnpm", "yarn",
     # 压缩
@@ -505,7 +505,7 @@ SAFE_COMMANDS = {
     "eventvwr.msc", "gpedit.msc", "secpol.msc", "certmgr.msc",
     "lusrmgr.msc", "perfmon.msc", "taskschd.msc", "wf.msc", "fsmgmt.msc",
     # 网络/媒体
-    "tracert", "pathping", "getmac", "netstat", "wmplayer", "mplayer2",
+    "tracert", "pathping", "getmac", "wmplayer", "mplayer2",
     # 其他常用
     "dxdiag", "resmon", "msra", "msdt", "optionalfeatures",
     # 终端
@@ -2289,8 +2289,13 @@ class ShellTool(ToolDefinition):
             },
             "interactive": {
                 "type": "boolean",
-                "description": "PTY 交互式终端（2026-08-27）：以伪终端运行命令，支持 vim/top/less 等交互式程序。"
-                "超时后发送 Ctrl-C 而非杀进程，会话保留，可继续用 session_keys 注入按键。",
+                "description": "PTY 交互式终端：以伪终端运行命令，支持 vim/top/less 等交互式程序。"
+                "会话保留，可继续用 session_keys 注入按键。"
+                + (
+                    "注意：Windows 走 ConPTY，中断会重启会话（丢失 cwd/环境变量）。"
+                    if IS_WINDOWS
+                    else "超时后发送 Ctrl-C 而非杀进程，会话保留。"
+                ),
                 "default": False,
             },
             "session_keys": {
@@ -2626,13 +2631,26 @@ class ShellTool(ToolDefinition):
 
         # 2.2 PTY 交互式终端（2026-08-27）：伪终端会话，支持 vim/top 等交互程序
         if interactive:
-            if IS_WINDOWS:
-                # PTY 依赖 fcntl/termios/pty，均为 Unix 专属模块
+            from scout.tools.builtin.shell.pty_session import PTY_SUPPORTED
+
+            # ★ 2026-09-25 接通 Windows：此前这里按 `IS_WINDOWS` 直接拒绝，理由是
+            # "PTY 依赖 fcntl/termios/pty" —— 那是 Unix 实现的事实，Windows 侧早已
+            # 用 ConPTY(pywinpty) 补齐同接口（WindowsPtySession + create_pty_session
+            # 工厂），只是没人走到。守卫改成按**能力**判断：只有真缺依赖时才拒绝，
+            # 并给出可执行的安装指引，而不是让 Windows 用户误以为功能不存在。
+            if not PTY_SUPPORTED:
+                if IS_WINDOWS:
+                    return Observation(
+                        tool_name=self.name,
+                        success=False,
+                        output="Windows 下的 PTY 交互式终端依赖 pywinpty（ConPTY），当前未安装。"
+                               "请执行: pip install pywinpty —— 或改用普通 shell / persistent 持久会话（cmd.exe）。",
+                    )
                 return Observation(
                     tool_name=self.name,
                     success=False,
-                    output="PTY 交互式终端仅支持 Linux/macOS（依赖 fcntl/termios/pty 模块）。"
-                           "Windows 下请使用普通 shell 或 persistent 持久会话（cmd.exe）。",
+                    output="PTY 交互式终端不可用（缺少 pty/termios 支持）。"
+                           "请改用普通 shell 或 persistent 持久会话。",
                 )
             from scout.tools.builtin.shell.pty_session import PtyShellSessionManager
 
@@ -2655,13 +2673,24 @@ class ShellTool(ToolDefinition):
                 output = output[:25000] + "\n... [输出截断] ...\n" + output[-25000:]
             # interactive 挂起（timeout）不算失败：会话仍在运行，可用 session_keys 继续
             hung = any(s == "timeout" for s in statuses) and command.strip()
-            hint = (
-                "\n\n[PTY] 命令挂起，交互程序仍在前台（会话保留，未中断）。"
-                "可继续调用本工具（interactive=true, command='', session_keys='...'）注入按键，"
-                "或用 session_keys='\\x03' 发送 Ctrl-C 中断。"
-                if hung
-                else ""
-            )
+            # ★ 2026-09-25 分平台提示：ConPTY 下 \x03 送不到前台子进程（CTRL_C_EVENT
+            # 需由挂在同一控制台的进程发），所以 Windows 上"中断"＝重启会话（cwd/env
+            # 会丢）。给错提示会让模型白折腾一次按键注入。
+            if hung:
+                if IS_WINDOWS:
+                    _break_hint = (
+                        "要中断请用 shell 工具的 kill/新会话（Windows ConPTY 下 Ctrl-C 无法送达"
+                        "前台子进程，中断会重启会话并丢失 cwd/环境变量）。"
+                    )
+                else:
+                    _break_hint = "或用 session_keys='\\x03' 发送 Ctrl-C 中断。"
+                hint = (
+                    "\n\n[PTY] 命令挂起，交互程序仍在前台（会话保留，未中断）。"
+                    "可继续调用本工具（interactive=true, command='', session_keys='...'）注入按键，"
+                    + _break_hint
+                )
+            else:
+                hint = ""
             return Observation(
                 tool_name=self.name,
                 success=not hung and code in (None, 0),
@@ -2938,9 +2967,15 @@ class ShellTool(ToolDefinition):
                     i += 1
                     continue
                 if ch == "&" and i + 1 < n and text[i + 1] == "&":
-                    parts.append("".join(buf)); buf = []; i += 2; continue
+                    parts.append("".join(buf))
+                    buf = []
+                    i += 2
+                    continue
                 if ch == ";":
-                    parts.append("".join(buf)); buf = []; i += 1; continue
+                    parts.append("".join(buf))
+                    buf = []
+                    i += 1
+                    continue
                 buf.append(ch)
                 i += 1
             parts.append("".join(buf))

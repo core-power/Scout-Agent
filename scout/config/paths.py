@@ -8,9 +8,13 @@
   现仅作为一次性迁移来源，不再作为新默认位置。
 - 其他平台默认保存在项目根目录下的 .scout/（避免写入 / 根目录）。
 - 环境变量覆盖（桌面版 launcher 启动时强制设置，保持与 data_dir() 一致）：
-    SCOUT_CONFIG_DIR — 配置文件目录
+    SCOUT_CONFIG_DIR — 配置文件目录（config.json/secret_key 等敏感文件跟随此目录）
     SCOUT_DATA_DIR   — 运行时数据目录（默认同配置文件目录）
-  覆盖后配置文件与数据目录可分离（如 Docker volume 挂载）。
+  ★ 2026-09-24 事故注记：CONFIG_DIR/CONFIG_PATH/SECRET_KEY_PATH 只受
+  SCOUT_CONFIG_DIR 影响，**SCOUT_DATA_DIR 不影响 config.json 的位置**（只管
+  outputs/sessions 等运行时数据）。此前注释让人误以为设 SCOUT_DATA_DIR 即可
+  整体隔离数据，导致验证/冒烟服务直连了用户真实配置（当日 key 丢失事故的
+  诱因之一）。需要隔离配置做测试时必须设 SCOUT_CONFIG_DIR。
 """
 
 import os

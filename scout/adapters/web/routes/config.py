@@ -5,6 +5,7 @@ W4 拆分（2026-09-14）：自 adapter.py 原样下沉（WebAdapter mixin），
 
 from fastapi.responses import JSONResponse, Response
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from types import SimpleNamespace
 from scout.security.policy import (
     ALLOWED_PATH_PREFIXES,
     DANGEROUS_PATTERNS,
@@ -17,252 +18,10 @@ import logging
 
 logger = logging.getLogger("scout.adapters.web")
 
-# ── Provider 预设（2026-09-23 自 list_providers 内联提升为模块级）──
+# ── Provider 预设（2026-09-26 移到 scout/llm/model_catalog.py）──
 # /api/context/stats 需要 resolve_model_context_length() 按模型查
 # context_length 标定上下文圆环分母，预设必须可跨路由复用。
-_PROVIDER_PRESETS = [
-    {
-        "id": "dashscope",
-        "name": "阿里云 DashScope (百炼)",
-        "default_model": "qwen3.7-plus",
-        "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "models": [
-    {"id": "qwen3.8-max", "name": "Qwen3.8 Max (旗舰·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1000000, "released": "2026-07"},
-    {"id": "qwen3.7-max", "name": "Qwen3.7 Max (旗舰)", "capabilities": ["text","code","reasoning"], "context_length": 1000000, "released": "2026-06"},
-    {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus (多模态·推荐)", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2026-06"},
-    {"id": "qwen3.7-flash", "name": "Qwen3.7 Flash (快速)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2026-06"},
-    {"id": "qwen3-max", "name": "Qwen3 Max", "capabilities": ["text","code","reasoning"], "context_length": 262144, "released": "2025-10"},
-    {"id": "qwen3.6-plus", "name": "Qwen3.6 Plus (多模态)", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2025-08"},
-    {"id": "qwen3-235b-a22b", "name": "Qwen3 235B (开源旗舰·推理)", "capabilities": ["text","code","reasoning"], "context_length": 128000, "released": "2025-04"},
-    {"id": "qwen3-32b", "name": "Qwen3 32B (开源)", "capabilities": ["text","code","reasoning"], "context_length": 128000, "released": "2025-04"},
-    {"id": "qwq-plus", "name": "QwQ Plus (推理专用)", "capabilities": ["text","code","reasoning"], "context_length": 131072, "released": "2025-01"},
-    {"id": "qwen-plus", "name": "通义千问 Plus (高性价比)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2024-05"},
-    {"id": "qwen-turbo", "name": "通义千问 Turbo (最快)", "capabilities": ["text"], "context_length": 1000000, "released": "2024-05"},
-    {"id": "qwen-max", "name": "通义千问 Max", "capabilities": ["text","code"], "context_length": 131072, "released": "2023-11"},
-    {"id": "qwen-long", "name": "通义千问 Long (超长文本)", "capabilities": ["text"], "context_length": 10000000, "released": "2024-05"},
-    {"id": "qwen3-coder-plus", "name": "Qwen3 Coder Plus (代码专用)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2025-04"},
-    {"id": "qwen-coder-plus", "name": "通义千问 Coder", "capabilities": ["text","code"], "context_length": 131072, "released": "2024-05"},
-    {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro (百炼·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1000000, "released": "2026-05"},
-    {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash (百炼·快速)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2026-05"},
-    {"id": "deepseek-v4-flash-0731", "name": "DeepSeek V4 Flash 0731 (百炼)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2026-07"},
-    {"id": "kimi/kimi-k3", "name": "Kimi K3 (百炼·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1048576, "released": "2026-01"},
-    {"id": "glm-5.2", "name": "GLM-5.2 (百炼·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1048576, "released": "2026-04"},
-    {"id": "MiniMax/MiniMax-M3", "name": "MiniMax M3 (百炼)", "capabilities": ["text","code","reasoning"], "released": "2025-12"},
-    {"id": "xiaomi/mimo-v2.5-pro", "name": "小米 MiMo v2.5 Pro (百炼)", "capabilities": ["text","code"], "released": "2025-09"},
-    ],
-        "vision_models": [
-    {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus (推荐)", "context_length": 1000000, "released": "2026-06"},
-    {"id": "qwen3.6-plus", "name": "Qwen3.6 Plus", "context_length": 1000000, "released": "2025-08"},
-    {"id": "qwen-vl-max", "name": "通义千问 VL Max (最强)", "released": "2024-08"},
-    {"id": "qwen-vl-plus", "name": "通义千问 VL Plus", "released": "2024-08"},
-    ],
-        "embedding_models": [
-    {"id": "qwen3.7-text-embedding", "name": "Qwen3.7 Text Embedding (最新)", "released": "2026-07"},
-    {"id": "qwen3-text-embedding-4b", "name": "Qwen3 Text Embedding 4B (1024维)", "released": "2025-05"},
-    {"id": "qwen3-text-embedding-0.6b", "name": "Qwen3 Text Embedding 0.6B (轻量·1024维)", "released": "2025-05"},
-    {"id": "text-embedding-v5", "name": "Text Embedding V5 (1024维·最新)", "released": "2025-11"},
-    {"id": "text-embedding-v4", "name": "Text Embedding V4 (1024维)", "released": "2025-01"},
-    {"id": "text-embedding-v3", "name": "Text Embedding V3 (1024维)", "released": "2024-01"},
-    {"id": "text-embedding-v2", "name": "Text Embedding V2 (1536维)", "released": "2023-01"},
-    ],
-        "image_models": [
-    {"id": "qwen-image-3.0-pro", "name": "Qwen Image 3.0 Pro (最新·高质量)", "released": "2026-03"},
-    {"id": "qwen-image-3.0", "name": "Qwen Image 3.0", "released": "2026-03"},
-    {"id": "qwen-image-2.0-pro", "name": "Qwen Image 2.0 Pro (推荐)", "released": "2026-04"},
-    {"id": "wan2.7-image-pro", "name": "通义万相 2.7 Pro", "released": "2026-01"},
-    {"id": "wan2.7-image", "name": "通义万相 2.7", "released": "2026-01"},
-    {"id": "qwen-image-max", "name": "Qwen Image Max", "released": "2025-12"},
-    {"id": "qwen-image-plus-2026-01-09", "name": "Qwen Image Plus (2026-01)", "released": "2026-01"},
-    ],
-    },
-    {
-        "id": "deepseek",
-        "name": "DeepSeek",
-        "default_model": "deepseek-chat",
-        "default_base_url": "https://api.deepseek.com/v1",
-        "models": [
-    {"id": "deepseek-chat", "name": "DeepSeek-V4 (通用对话·最新)", "capabilities": ["text","code"], "context_length": 131072, "released": "2026-05"},
-    {"id": "deepseek-reasoner", "name": "DeepSeek-R1 (深度推理·满血)", "capabilities": ["text","code","reasoning"], "context_length": 131072, "released": "2025-01"},
-    {"id": "deepseek-v3.1", "name": "DeepSeek-V3.1 (增强版)", "capabilities": ["text","code"], "context_length": 131072, "released": "2025-10"},
-    {"id": "deepseek-r1-distill-llama-70b", "name": "DeepSeek-R1 蒸馏 70B (经济)", "capabilities": ["text","reasoning"], "context_length": 131072, "released": "2025-01"},
-    {"id": "deepseek-r1-distill-qwen-32b", "name": "DeepSeek-R1 蒸馏 32B (经济)", "capabilities": ["text","reasoning"], "context_length": 131072, "released": "2025-01"},
-    ],
-    },
-    {
-        "id": "zhipu",
-        "name": "智谱 BigModel",
-        "default_model": "glm-5.2",
-        "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "models": [
-    {"id": "glm-5.2", "name": "GLM-5.2 (旗舰·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1048576, "released": "2026-04"},
-    {"id": "glm-5-plus", "name": "GLM-5 Plus (增强)", "capabilities": ["text","code","reasoning"], "context_length": 204800, "released": "2025-12"},
-    {"id": "glm-5-flash", "name": "GLM-5 Flash (快速·免费)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2025-12"},
-    {"id": "glm-5", "name": "GLM-5", "capabilities": ["text","code","reasoning"], "context_length": 204800, "released": "2025-09"},
-    {"id": "glm-4-plus", "name": "GLM-4 Plus", "capabilities": ["text","code"], "context_length": 128000, "released": "2024-08"},
-    {"id": "glm-4", "name": "GLM-4", "capabilities": ["text","code"], "context_length": 128000, "released": "2024-06"},
-    {"id": "glm-4-air", "name": "GLM-4 Air (轻量)", "capabilities": ["text"], "context_length": 128000, "released": "2024-06"},
-    {"id": "glm-4-flash", "name": "GLM-4 Flash (免费)", "capabilities": ["text"], "context_length": 128000, "released": "2024-06"},
-    {"id": "glm-4-long", "name": "GLM-4 Long (超长文本)", "capabilities": ["text"], "context_length": 128000, "released": "2024-08"},
-    {"id": "glm-4v-plus", "name": "GLM-4V Plus (视觉理解·最新)", "capabilities": ["text","vision"], "context_length": 128000, "released": "2024-08"},
-    {"id": "glm-4v", "name": "GLM-4V (视觉)", "capabilities": ["text","vision"], "context_length": 128000, "released": "2024-06"},
-    ],
-        "vision_models": [
-    {"id": "glm-4v-plus", "name": "GLM-4V Plus (推荐)", "context_length": 128000, "released": "2024-08"},
-    {"id": "glm-4v", "name": "GLM-4V", "context_length": 128000, "released": "2024-06"},
-    ],
-        "embedding_models": [
-    {"id": "embedding-3", "name": "智谱 Embedding-3 (2048维)", "released": "2024-08"},
-    {"id": "embedding-2", "name": "智谱 Embedding-2 (1024维)", "released": "2023-01"},
-    ],
-        "image_models": [
-    {"id": "cogview-4", "name": "CogView-4 (最新)", "released": "2025-09"},
-    {"id": "cogview-3-plus", "name": "CogView-3 Plus", "released": "2024-12"},
-    {"id": "cogview-3-flash", "name": "CogView-3 Flash (免费)", "released": "2024-12"},
-    ],
-    },
-    {
-        "id": "moonshot",
-        "name": "Moonshot (Kimi)",
-        "default_model": "kimi-k3",
-        "default_base_url": "https://api.moonshot.cn/v1",
-        "models": [
-    {"id": "kimi-k3", "name": "Kimi K3 (旗舰·最新)", "capabilities": ["text","code","reasoning"], "context_length": 1048576, "released": "2026-01"},
-    {"id": "kimi-k2-thinking", "name": "Kimi K2 Thinking (推理增强)", "capabilities": ["text","code","reasoning"], "context_length": 262144, "released": "2025-08"},
-    {"id": "kimi-k2", "name": "Kimi K2", "capabilities": ["text","code","reasoning"], "context_length": 131072, "released": "2025-07"},
-    {"id": "moonshot-v1-8k", "name": "Kimi 8K", "capabilities": ["text","code"], "context_length": 8000, "released": "2023-10"},
-    {"id": "moonshot-v1-32k", "name": "Kimi 32K", "capabilities": ["text","code"], "context_length": 32000, "released": "2023-10"},
-    {"id": "moonshot-v1-128k", "name": "Kimi 128K (超长上下文)", "capabilities": ["text","code"], "context_length": 128000, "released": "2023-10"},
-    {"id": "moonshot-v1-256k", "name": "Kimi 256K (超长上下文)", "capabilities": ["text","code"], "context_length": 256000, "released": "2024-05"},
-    ],
-        "embedding_models": [
-    {"id": "embedding-1", "name": "Moonshot Embedding (1024维)", "released": "2024-03"},
-    ],
-    },
-    {
-        "id": "volcano",
-        "name": "火山引擎 (豆包)",
-        "default_model": "doubao-1.5-pro-32k",
-        "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "models": [
-    {"id": "doubao-1.5-pro-32k", "name": "豆包 1.5 Pro 32K (最新)", "capabilities": ["text","code"], "context_length": 32000, "released": "2025-01"},
-    {"id": "doubao-1.5-pro-256k", "name": "豆包 1.5 Pro 256K (超长)", "capabilities": ["text","code"], "context_length": 256000, "released": "2025-01"},
-    {"id": "doubao-1.5-lite-32k", "name": "豆包 1.5 Lite 32K (经济)", "capabilities": ["text"], "context_length": 32000, "released": "2025-01"},
-    {"id": "doubao-pro-32k", "name": "豆包 Pro 32K", "capabilities": ["text","code"], "context_length": 32000, "released": "2024-05"},
-    {"id": "doubao-pro-128k", "name": "豆包 Pro 128K", "capabilities": ["text","code"], "context_length": 128000, "released": "2024-05"},
-    {"id": "doubao-vision-pro", "name": "豆包 Vision Pro (视觉理解)", "capabilities": ["text","vision"], "context_length": 32000, "released": "2024-08"},
-    {"id": "doubao-1.5-vision-pro-32k", "name": "豆包 1.5 Vision Pro (最新视觉)", "capabilities": ["text","vision"], "context_length": 32000, "released": "2025-01"},
-    ],
-        "vision_models": [
-    {"id": "doubao-1.5-vision-pro-32k", "name": "豆包 1.5 Vision Pro (推荐)", "context_length": 32000, "released": "2025-01"},
-    {"id": "doubao-vision-pro", "name": "豆包 Vision Pro", "context_length": 32000, "released": "2024-08"},
-    ],
-        "embedding_models": [
-    {"id": "doubao-embedding-large-text-250715", "name": "豆包 Embedding Large (1024维·最新)", "released": "2025-07"},
-    {"id": "doubao-embedding-large-text-241215", "name": "豆包 Embedding Large (1024维)", "released": "2024-12"},
-    {"id": "doubao-embedding", "name": "豆包 Embedding (1024维)", "released": "2024-05"},
-    ],
-    },
-    {
-        "id": "openai",
-        "name": "OpenAI",
-        "default_model": "gpt-4o",
-        "default_base_url": "https://api.openai.com/v1",
-        "models": [
-    {"id": "gpt-4.1", "name": "GPT-4.1 (最新·多模态)", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2025-04"},
-    {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini (高性价比)", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2025-04"},
-    {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano (最轻量)", "capabilities": ["text","code"], "context_length": 1000000, "released": "2025-04"},
-    {"id": "o3", "name": "o3 (深度推理·最强)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2025-04"},
-    {"id": "o4-mini", "name": "o4 Mini (推理·快速)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2025-04"},
-    {"id": "gpt-4o", "name": "GPT-4o (多模态)", "capabilities": ["text","vision","code"], "context_length": 128000, "released": "2024-05"},
-    {"id": "gpt-4o-mini", "name": "GPT-4o Mini (高性价比)", "capabilities": ["text","vision","code"], "context_length": 128000, "released": "2024-07"},
-    {"id": "o1", "name": "o1 (推理)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2024-09"},
-    {"id": "o1-mini", "name": "o1 Mini (推理)", "capabilities": ["text","reasoning"], "context_length": 128000, "released": "2024-09"},
-    {"id": "o3-mini", "name": "o3 Mini (推理)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2025-01"},
-    {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "capabilities": ["text","vision","code"], "context_length": 128000, "released": "2023-11"},
-    ],
-        "vision_models": [
-    {"id": "gpt-4.1", "name": "GPT-4.1 (推荐)", "context_length": 1000000, "released": "2025-04"},
-    {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "context_length": 1000000, "released": "2025-04"},
-    {"id": "gpt-4o", "name": "GPT-4o", "context_length": 128000, "released": "2024-05"},
-    {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "context_length": 128000, "released": "2024-07"},
-    ],
-        "embedding_models": [
-    {"id": "text-embedding-3-large", "name": "Embedding 3 Large (3072维)", "released": "2024-01"},
-    {"id": "text-embedding-3-small", "name": "Embedding 3 Small (1536维)", "released": "2024-01"},
-    {"id": "text-embedding-ada-002", "name": "Embedding Ada 002 (1536维·经典)", "released": "2022-12"},
-    ],
-        "image_models": [
-    {"id": "gpt-image-1", "name": "GPT Image 1 (最新)", "released": "2025-04"},
-    {"id": "dall-e-3", "name": "DALL-E 3 (高质量)", "released": "2023-10"},
-    {"id": "dall-e-2", "name": "DALL-E 2 (经济)", "released": "2022-11"},
-    ],
-    },
-    {
-        "id": "claude",
-        "name": "Anthropic Claude",
-        "default_model": "claude-sonnet-4-20250514",
-        "default_base_url": "https://api.anthropic.com/v1",
-        "models": [
-    {"id": "claude-opus-4-20250514", "name": "Claude Opus 4 (最强·最新)", "capabilities": ["text","vision","code","reasoning"], "context_length": 200000, "released": "2025-05"},
-    {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4 (推荐·最新)", "capabilities": ["text","vision","code","reasoning"], "context_length": 200000, "released": "2025-05"},
-    {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "capabilities": ["text","vision","code"], "context_length": 200000, "released": "2024-10"},
-    {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku (快速)", "capabilities": ["text","vision","code"], "context_length": 200000, "released": "2024-10"},
-    {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus", "capabilities": ["text","vision","code"], "context_length": 200000, "released": "2024-02"},
-    ],
-        "vision_models": [
-    {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4 (推荐)", "context_length": 200000, "released": "2025-05"},
-    {"id": "claude-opus-4-20250514", "name": "Claude Opus 4", "context_length": 200000, "released": "2025-05"},
-    {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "context_length": 200000, "released": "2024-10"},
-    ],
-    },
-    {
-        "id": "gemini",
-        "name": "Google Gemini",
-        "default_model": "gemini-2.5-pro",
-        "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "models": [
-    {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro (旗舰·最新·推理)", "capabilities": ["text","vision","code","reasoning"], "context_length": 2000000, "released": "2025-03"},
-    {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash (快速·推理·最新)", "capabilities": ["text","vision","code","reasoning"], "context_length": 1048576, "released": "2025-03"},
-    {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash (多模态)", "capabilities": ["text","vision","code"], "context_length": 1048576, "released": "2024-12"},
-    {"id": "gemini-2.0-flash-thinking-exp", "name": "Gemini 2.0 Thinking (推理实验)", "capabilities": ["text","vision","code","reasoning"], "context_length": 1048576, "released": "2024-12"},
-    {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro (超长上下文)", "capabilities": ["text","vision","code"], "context_length": 2000000, "released": "2024-02"},
-    {"id": "gemini-1.5-flash", "name": "Gemini 1.5 Flash", "capabilities": ["text","vision","code"], "context_length": 1048576, "released": "2024-02"},
-    ],
-        "vision_models": [
-    {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro (推荐)", "released": "2025-03"},
-    {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "context_length": 1048576, "released": "2025-03"},
-    {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "context_length": 1048576, "released": "2024-12"},
-    ],
-        "embedding_models": [
-    {"id": "gemini-embedding-001", "name": "Gemini Embedding (最新·3072维)", "released": "2025-10"},
-    {"id": "text-embedding-004", "name": "Gemini Text Embedding (768维)", "released": "2024-12"},
-    {"id": "text-embedding-001", "name": "Gemini Text Embedding 001 (旧版)", "released": "2023-12"},
-    ],
-    },
-    {
-        "id": "openrouter",
-        "name": "OpenRouter (聚合)",
-        "default_model": "anthropic/claude-sonnet-4",
-        "default_base_url": "https://openrouter.ai/api/v1",
-        "models": [
-    {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4", "capabilities": ["text","vision","code","reasoning"], "context_length": 200000, "released": "2025-05"},
-    {"id": "anthropic/claude-opus-4", "name": "Claude Opus 4 (最强)", "capabilities": ["text","vision","code","reasoning"], "context_length": 200000, "released": "2025-05"},
-    {"id": "google/gemini-2.5-pro", "name": "Gemini 2.5 Pro", "capabilities": ["text","vision","code","reasoning"], "context_length": 1048576, "released": "2025-03"},
-    {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash", "capabilities": ["text","vision","code","reasoning"], "context_length": 1048576, "released": "2025-03"},
-    {"id": "openai/gpt-4.1", "name": "GPT-4.1", "capabilities": ["text","vision","code"], "context_length": 1000000, "released": "2025-04"},
-    {"id": "openai/o3", "name": "o3 (推理)", "capabilities": ["text","code","reasoning"], "context_length": 200000, "released": "2025-04"},
-    {"id": "qwen/qwen3-235b-a22b", "name": "Qwen3 235B (开源旗舰)", "capabilities": ["text","code","reasoning"], "context_length": 128000, "released": "2025-04"},
-    {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1", "capabilities": ["text","code","reasoning"], "context_length": 128000, "released": "2025-01"},
-    {"id": "deepseek/deepseek-chat", "name": "DeepSeek V3", "capabilities": ["text","code"], "context_length": 128000, "released": "2024-12"},
-    {"id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B", "capabilities": ["text","code"], "context_length": 131072, "released": "2024-12"},
-    {"id": "google/gemini-2.0-flash-exp:free", "name": "Gemini 2.0 Flash (免费)", "capabilities": ["text","vision","code"], "context_length": 1048576, "released": "2024-12"},
-    ],
-        "embedding_models": [
-    {"id": "openai/text-embedding-3-large", "name": "Embedding 3 Large", "released": "2024-01"},
-    {"id": "openai/text-embedding-3-small", "name": "Embedding 3 Small", "released": "2024-01"},
-    ],
-    },
-    ]
+from scout.llm.model_catalog import PROVIDER_PRESETS as _PROVIDER_PRESETS
 
 
 def _resolve_ctx_with_source(provider: str, model: str) -> tuple[int, str]:
@@ -312,9 +71,31 @@ def resolve_model_context_length(provider: str, model: str) -> int:
     return _resolve_ctx_with_source(provider, model)[0]
 
 
-def capability_key(provider: str, model: str) -> str:
-    """模型能力覆盖表的键：``<provider>:<model>``（provider 空时用 ``*``）."""
-    return f"{str(provider or '').strip().lower() or '*'}:{str(model or '').strip()}"
+# ── 视觉判定：唯一决策点在 scout/llm/vision_route.py ──────────────────
+# ★ 2026-09-26：capability_key / resolve_model_vision / _VISION_FALLBACKS /
+# resolve_vision_fallback / resolve_vision_route 原本都写在本文件（Web 路由层），
+# 而引擎与工具层反过来 import 它们 —— 分层倒置；更关键的是聊天附件路径走的是
+# 另一套判断（`agent._vision_enabled` 只问"模型能不能看图"、从不问路由），于是
+# "设置里配的视觉模型"对用户发的图片基本不起作用，同一轮里两条链路可以给出两个
+# 不同答案。现统一收敛到核心层：本文件只转发，保留既有导入路径与测试用的旧函数名。
+from scout.llm.vision_route import (
+    VISION_FALLBACKS as _VISION_FALLBACKS,
+    capability_key,
+    native_vision,
+    resolve_vision_fallback,
+    resolve_vision_route,
+)
+
+
+def resolve_model_vision(provider: str, model: str) -> tuple[bool, str]:
+    """兼容旧签名：不传 cfg，仅按 preset 目录 + 名称规则判定能否看图.
+
+    新代码请用 `native_vision(provider, model, cfg)` 或 `resolve_vision_route(cfg)`
+    —— 它们会把用户的显式声明与实测探测算进来，本函数不会。
+    """
+    return native_vision(provider, model)
+
+
 
 
 # ── 思考强度：统一档位 → 各家参数（2026-09-24）──
@@ -397,104 +178,12 @@ def build_thinking_extra(style: str, effort: str) -> tuple[dict, str]:
     )
 
 
-def resolve_model_vision(provider: str, model: str) -> tuple[bool, str]:
-    """判定模型是否支持图片输入，返回 (bool, source).
-
-    source ∈ {"preset", "name", ""}（"" = 判断不了，按不支持处理，用户可在设置里改）。
-    """
-    p = str(provider or "").strip().lower()
-    m = str(model or "").strip()
-    ml = m.lower()
-    for preset in _PROVIDER_PRESETS:
-        if str(preset.get("id", "")).lower() != p:
-            continue
-        for mm in preset.get("models", []):
-            if str(mm.get("id", "")) == m:
-                caps = mm.get("capabilities") or []
-                return ("vision" in caps), "preset"
-    # 未收录：按模型名特征猜（视觉模型命名有规律）
-    if any(k in ml for k in ("-vl", "vision", "4o", "4.1", "gpt-5", "claude-3",
-                             "claude-sonnet-4", "claude-opus-4", "gemini", "qwen3.7-plus",
-                             "qwen3.6-plus", "glm-4v", "doubao-1.5-vision")):
-        return True, "name"
-    return False, ""
 
 
-# ── 厂商推荐视觉兜底模型（2026-09-24）────────────────────────────────────
-# 主模型不支持图片输入且用户未显式配置时，自动用该厂商的视觉模型
-# "识图成文字"再交给主模型（三级兜底的第二级）。只推荐同厂商模型——
-# 复用主厂商的 api_key/base_url，不引入跨厂商凭据复杂度。
-# 原则：选该厂商官方在售的轻量 VL（兜底场景是"描述图片"，不需要旗舰）；
-# 无视觉 API 的厂商（deepseek 等）不设条目 → 路由判 none。
-_VISION_FALLBACKS: dict[str, str] = {
-    "dashscope": "qwen-vl-max",
-    "openai": "gpt-4o-mini",
-    "volcano": "doubao-1.5-vision-pro-32k",
-    "zhipu": "glm-4v-plus",
-    "gemini": "gemini-2.5-flash",
-    "openrouter": "google/gemini-2.5-flash",
-}
 
 
-def resolve_vision_fallback(provider: str) -> str:
-    """返回该厂商的推荐视觉兜底模型 id；无则空串."""
-    p = str(provider or "").strip().lower()
-    return _VISION_FALLBACKS.get(p, "")
 
 
-def resolve_vision_route(cfg) -> dict:
-    """视觉路由统一判定（三级兜底），vision 工具/desktop/capabilities 共用.
-
-    返回 {path, model, base_url, source}:
-      path ∈ {"main", "fallback", "none"}
-        main     — 主模型直收图片（最优路径）
-        fallback — 由视觉模型先识图成文字再交主模型
-        none     — 无任何可用路径
-      model/base_url — 实际执行 VL 调用应使用的模型与端点（main 时=主模型）
-      source ∈ {"user", "override", "preset", "name", "auto-fallback", ""}
-
-    优先级（2026-09-24 设计定稿）：
-      ① 旧配置显式填了 vision_model → fallback(该模型)（兼容不动）
-      ② 用户明确开启 override=True → main
-      ③ 用户明确关闭 override=False → none（尊重用户，不做兜底）
-      ④ 未设置 + 主模型支持视觉（预设/名称）→ main
-      ⑤ 未设置 + 不支持 + 厂商有推荐视觉模型 → fallback(推荐)
-      ⑥ 都不满足 → none
-    """
-    provider = (getattr(cfg, "vision_provider", "") or getattr(cfg, "provider", "") or "").strip()
-    model = (getattr(cfg, "model", "") or "").strip()
-    base_url = (getattr(cfg, "base_url", "") or "").strip()
-
-    # ① 显式 vision_model 兼容（沿用旧行为：非空即用）
-    vision_model = (getattr(cfg, "vision_model", "") or "").strip()
-    if vision_model:
-        return {"path": "fallback", "model": vision_model,
-                "base_url": base_url, "source": "user"}
-
-    overrides = getattr(cfg, "model_vision_overrides", None) or {}
-    key = f"{provider}:{model}"
-    forced = overrides.get(key)
-    if isinstance(forced, bool):
-        if forced:
-            return {"path": "main", "model": model, "base_url": base_url,
-                    "source": "override"}
-        return {"path": "none", "model": "", "base_url": base_url,
-                "source": "override"}
-
-    try:
-        ok, src = resolve_model_vision(provider, model)
-    except Exception:  # noqa: BLE001 — 判定失败按不支持继续走兜底
-        ok, src = False, ""
-    if ok:
-        return {"path": "main", "model": model, "base_url": base_url,
-                "source": src or "preset"}
-
-    # ⑤ 厂商推荐兜底
-    fb = resolve_vision_fallback(provider)
-    if fb:
-        return {"path": "fallback", "model": fb, "base_url": base_url,
-                "source": "auto-fallback"}
-    return {"path": "none", "model": "", "base_url": base_url, "source": ""}
 
 
 def resolve_model_capabilities(
@@ -504,8 +193,18 @@ def resolve_model_capabilities(
     vision_overrides: dict | None = None,
     effort: str = "auto",
     vision_model: str = "",
+    vision_mode: dict | None = None,
+    vision_probe: dict | None = None,
+    vision_disabled: bool = False,
+    vision_provider: str = "",
 ) -> dict:
-    """汇总一个模型的三项可配能力（供设置 UI 与 /api/context/stats 复用）."""
+    """汇总一个模型的三项可配能力（供设置 UI 与 /api/context/stats 复用）.
+
+    ★ 2026-09-26：同时回传**规范能力键** `capability_key` 与视觉路由 2.0 的完整
+    状态（mode / probe / needs_choice / would_be / vision_disabled）。前端此前自己
+    拼 `provider+':'+model` 且不做小写归一，provider 大小写不一致时用户的能力开关
+    会写进一个永不命中的键却显示"已保存"（缺陷 D8）—— 键规则今后只有后端一份。
+    """
     key = capability_key(provider, model)
     ctx_over = (context_overrides or {}).get(key) or 0
     try:
@@ -519,30 +218,28 @@ def resolve_model_capabilities(
     if ctx <= 0:
         ctx, ctx_src = 0, ""
 
-    vis_over = (vision_overrides or {}).get(key)
-    if isinstance(vis_over, bool):
-        vision, vis_src = vis_over, "user"
-    else:
-        vision, vis_src = resolve_model_vision(provider, model)
+    cfg_obj = SimpleNamespace(
+        provider=str(provider or ""),
+        model=str(model or ""),
+        base_url="",
+        vision_provider=str(vision_provider or ""),
+        vision_model=str(vision_model or ""),
+        model_vision_overrides=dict(vision_overrides or {}),
+        model_vision_mode=dict(vision_mode or {}),
+        model_vision_probe=dict(vision_probe or {}),
+        vision_disabled=bool(vision_disabled),
+    )
+    # 事实与偏好分开回传：native=该模型能否直收图片；path=当前配置下谁来看图
+    vision, vis_src = native_vision(provider, model, cfg_obj)
+    route = resolve_vision_route(cfg_obj)
 
     style = resolve_thinking_style(provider, model)
     extra, applied = build_thinking_extra(style, effort)
 
-    # 视觉路由三态（main/fallback/none + 实际生效模型）供 UI 展示。
-    # ★ vision_model：带上已保存的手动兜底（2026-09-24 方案 A），否则 UI 会把
-    #   用户手动选的兜底模型误显示成"自动推荐"的那个。
-    from types import SimpleNamespace as _CapCfg
-    route = resolve_vision_route(_CapCfg(
-        vision_provider="",
-        provider=str(provider or ""),
-        model=str(model or ""),
-        base_url="",
-        vision_model=str(vision_model or ""),
-        model_vision_overrides=dict(vision_overrides or {}),
-    ))
     return {
         "provider": str(provider or ""),
         "model": str(model or ""),
+        "capability_key": key,  # ★ 前端必须用它写回，不再自行拼接
         "context_length": ctx,
         "context_source": ctx_src,  # user / preset / name / ""（未识别）
         "thinking_style": style,
@@ -552,13 +249,23 @@ def resolve_model_capabilities(
         "thinking_supported_levels": (
             ["auto", "off", "low", "medium", "high"]
         ),
+        # ── 视觉：轴 A 事实 ──
         "vision": vision,
-        "vision_source": vis_src,  # user / preset / name / ""
+        "vision_source": vis_src,  # probe / override / preset / name / ""
+        "vision_native": route.get("native", vision),
+        "vision_mode": (vision_mode or {}).get(key, "auto"),
+        "vision_probe": (vision_probe or {}).get(key),
+        # ── 视觉：轴 B 结果 ──
         "vision_route": route["path"],  # main / fallback / none
         "vision_route_model": (
             route["model"] if route["path"] == "fallback" else ""
         ),
-        "vision_route_source": route["source"],  # user / auto-fallback / ...
+        "vision_route_source": route["source"],  # self/user/override/auto-fallback/off/...
+        "vision_reason": route.get("reason", ""),
+        "vision_needs_choice": bool(route.get("needs_choice")),
+        "vision_would_be": route.get("would_be", ""),
+        "vision_disabled": bool(vision_disabled),
+        "vision_mode_options": ["auto", "native", "no_main", "off"],
     }
 
 
@@ -668,6 +375,35 @@ class ConfigRoutes:
                     else:
                         vover[str(k)] = bool(v)
                 config.model_vision_overrides = vover
+            # ── 视觉路由 2.0（2026-09-26）：模式表 / 探测结果 / 全局开关 ──
+            # mode 是 overrides 布尔表的后继（一个布尔塞不下"主模型收不收图"与
+            # "要不要视觉"两件事），写 mode 时清掉同键的旧布尔，避免两个来源打架。
+            if "model_vision_mode" in req and isinstance(req["model_vision_mode"], dict):
+                vmodes = dict(getattr(config, "model_vision_mode", None) or {})
+                vover2 = dict(getattr(config, "model_vision_overrides", None) or {})
+                for k, v in req["model_vision_mode"].items():
+                    key = str(k)
+                    if v is None or str(v).strip().lower() in ("", "auto"):
+                        vmodes.pop(key, None)      # auto/空 = 交回自动判定
+                        vover2.pop(key, None)      # 同时清除旧布尔覆盖
+                        continue
+                    val = str(v).strip().lower()
+                    if val in ("native", "no_main", "off"):
+                        vmodes[key] = val
+                        vover2.pop(key, None)
+                config.model_vision_mode = vmodes
+                config.model_vision_overrides = vover2
+            if "model_vision_probe" in req and isinstance(req["model_vision_probe"], dict):
+                vprobe = dict(getattr(config, "model_vision_probe", None) or {})
+                for k, v in req["model_vision_probe"].items():
+                    key = str(k)
+                    if v is None:
+                        vprobe.pop(key, None)      # null = 作废该模型的探测结果
+                    else:
+                        vprobe[key] = bool(v)
+                config.model_vision_probe = vprobe
+            if "vision_disabled" in req:
+                config.vision_disabled = bool(req["vision_disabled"])
             if "reasoning_effort" in req:
                 eff = str(req["reasoning_effort"] or "auto").strip().lower()
                 if eff in ("auto", "off", "low", "medium", "high"):
@@ -961,6 +697,12 @@ class ConfigRoutes:
                 vision_overrides=getattr(config, "model_vision_overrides", None) or {},
                 effort=str(getattr(config, "reasoning_effort", "auto") or "auto").lower(),
                 vision_model=str(getattr(config, "vision_model", "") or ""),
+                # 视觉路由 2.0：模式/探测/全局开关也要参与渲染，否则 UI 显示的还是
+                # 旧布尔表推导的结论，用户改了 mode 却看不到变化
+                vision_mode=getattr(config, "model_vision_mode", None) or {},
+                vision_probe=getattr(config, "model_vision_probe", None) or {},
+                vision_disabled=bool(getattr(config, "vision_disabled", False)),
+                vision_provider=str(getattr(config, "vision_provider", "") or ""),
             )
 
         @self.app.post("/api/config/test")
@@ -974,24 +716,7 @@ class ConfigRoutes:
                 return JSONResponse({"error": "请求体必须是 JSON"}, status_code=400)
             from scout.llm.providers.registry import create_provider
             try:
-                provider = str(req.get("provider", "dashscope") or "").strip() or "dashscope"
-                # 方案1 (2026-09-04)：Key 全链路去空白 —— 复制粘贴带空格/换行是 401 高频根因
-                api_key = str(req.get("api_key", "") or "").strip()
-                base_url = str(req.get("base_url", "") or "").strip()
-                model = str(req.get("model", "") or "").strip() or "qwen-plus"
-                stored_key, stored_url = self.config_mgr.get_provider_credentials(provider)
-                # 2026-08-31：输入框为空 / 回填脱敏值时回落已存明文，避免测试用掩码连接
-                # 末尾二次 strip：治愈历史落盘的首尾带空白脏 key
-                api_key = _resolve_key(api_key, stored_key).strip()
-                # 方案2 (2026-09-04)：base_url 回落顺序 请求传入 → 主配置 → 凭据区。
-                # 旧逻辑只回落凭据区 stored_url —— 当 key 来自请求/主配置而 URL 却取
-                # 凭据区旧值时形成"新 key + 旧端点"跨区错位 → Authorization failed。
-                if not base_url:
-                    cfg = self.config_mgr.load()
-                    if cfg.provider == provider and (cfg.base_url or "").strip():
-                        base_url = cfg.base_url.strip()
-                    else:
-                        base_url = (stored_url or "").strip()
+                provider, api_key, base_url, model = self._resolve_llm_target(req)
                 llm = create_provider(
                     provider=provider,
                     api_key=api_key,
@@ -1019,6 +744,98 @@ class ConfigRoutes:
                              "；② 中转令牌是否有该模型权限；③ Base URL 是否缺 /v1"
                              "；④ Key 是否带空格换行")
                 return JSONResponse({"error": err}, status_code=400)
+
+        # ── 视觉能力实测（2026-09-26）──────────────────────────────
+        @self.app.post("/api/models/probe-vision")
+        async def probe_vision_capability(request: Request):
+            """实测「这个模型能不能看图」—— 只在用户点探测按钮时执行，绝不自动跑.
+
+            为什么需要：自定义/中转网关模型从名字判断不了视觉能力，而猜错的代价
+            不对称 —— 不少网关会**静默丢掉 image_url 字段**并正常回话，此时按"支持"
+            使用，模型就是对着看不见的图编内容。所以探测用本机生成的随机数字图做
+            可验证问答（实现见 scout/llm/vision_probe），HTTP 200 本身不算结论。
+            """
+            if not self._require_auth(request):
+                return JSONResponse({"error": "未授权"}, status_code=401)
+            try:
+                req = await request.json()
+            except Exception:
+                return JSONResponse({"error": "请求体必须是 JSON"}, status_code=400)
+
+            import os as _os
+
+            provider, api_key, base_url, model = self._resolve_llm_target(req)
+            if not api_key:
+                return JSONResponse(
+                    {"error": f"provider {provider} 还没有可用 API Key，无法探测"},
+                    status_code=400,
+                )
+            try:
+                timeout = float(_os.getenv("SCOUT_VISION_PROBE_TIMEOUT", "25") or 25)
+            except ValueError:
+                timeout = 25.0
+
+            from scout.llm.vision_probe import probe_vision
+
+            res = await probe_vision(api_key, base_url, model, timeout=timeout)
+            key = capability_key(provider, model)
+            written: bool | None = None
+            cfg = self.config_mgr.load()
+            # verdict 为 None（网络/鉴权/端点问题、或 200 但读不出内容）时**不落盘**：
+            # 一次断网就把模型永久标成"不支持视觉"是不可接受的副作用。
+            if res.get("verdict") is not None:
+                probes = dict(getattr(cfg, "model_vision_probe", None) or {})
+                written = bool(res["verdict"])
+                probes[key] = written
+                cfg.model_vision_probe = probes
+                self.config_mgr.save(cfg)
+
+            caps = resolve_model_capabilities(
+                provider,
+                model,
+                context_overrides=getattr(cfg, "model_context_overrides", None) or {},
+                vision_overrides=getattr(cfg, "model_vision_overrides", None) or {},
+                effort=str(getattr(cfg, "reasoning_effort", "auto") or "auto").lower(),
+                vision_model=str(getattr(cfg, "vision_model", "") or ""),
+                vision_mode=getattr(cfg, "model_vision_mode", None) or {},
+                vision_probe=getattr(cfg, "model_vision_probe", None) or {},
+                vision_disabled=bool(getattr(cfg, "vision_disabled", False)),
+                vision_provider=str(getattr(cfg, "vision_provider", "") or ""),
+            )
+            return {
+                "status": "ok",
+                "result": res.get("result"),
+                "verdict": res.get("verdict"),
+                "written": written,
+                "detail": res.get("detail", ""),
+                "rounds": res.get("rounds", []),
+                "endpoint": base_url,
+                "capability_key": key,
+                "capabilities": caps,
+            }
+
+    def _resolve_llm_target(self, req: dict) -> tuple[str, str, str, str]:
+        """按「测试连接」那一套规则解析 (provider, api_key, base_url, model).
+
+        ★ 2026-09-26 抽出复用：凭证解析的每个坑都是踩出来的（Key 首尾空白是 401
+        高频根因、前端可能回填脱敏值、base_url 必须按 请求→主配置→凭据区 三级回落，
+        否则会出现"新 key + 旧端点"跨区错位）。视觉探测与连接测试必须共用一份，
+        不然两处会漂移 —— 而探测还要把结论落盘，漂移的代价更大。
+        """
+        provider = str(req.get("provider", "dashscope") or "").strip() or "dashscope"
+        api_key = str(req.get("api_key", "") or "").strip()
+        base_url = str(req.get("base_url", "") or "").strip()
+        model = str(req.get("model", "") or "").strip() or "qwen-plus"
+        stored_key, stored_url = self.config_mgr.get_provider_credentials(provider)
+        # 输入框为空 / 回填脱敏值时回落已存明文；末尾二次 strip 治愈历史脏 key
+        api_key = _resolve_key(api_key, stored_key).strip()
+        if not base_url:
+            cfg = self.config_mgr.load()
+            if cfg.provider == provider and (cfg.base_url or "").strip():
+                base_url = cfg.base_url.strip()
+            else:
+                base_url = (stored_url or "").strip()
+        return provider, api_key, base_url, model
 
     def _setup_security_routes(self):
         """安全策略 API."""

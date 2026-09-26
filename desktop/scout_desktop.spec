@@ -11,6 +11,7 @@
 （但首次运行需通过 download_model.py 获取本地嵌入模型）。
 """
 
+import importlib.util
 import os
 import sys
 
@@ -72,6 +73,31 @@ if _webview_lib:
 # onnxruntime: 收集其数据文件与动态库（Windows 下为 onnxruntime.dll / providers）
 datas += collect_data_files("onnxruntime")
 binaries = collect_dynamic_libs("onnxruntime")
+
+# ── ConPTY 依赖 pywinpty（2026-09-25 接通 Windows PTY 交互式终端）──────────
+# shell 工具的 interactive=true 在 Windows 下走 scout/tools/builtin/shell/
+# pty_session.WindowsPtySession → `from winpty import PtyProcess`。winpty 是
+# C 扩展包：Python 侧子模块要显式收集（PyInstaller 的 ext 扫描对 `winpty._winpty`
+# 时有漏），且它的 winpty-agent.exe / winpty.dll 是**动态库/可执行文件**，不收集
+# 就运行期报"PTY 不可用"。上一版产物里 winpty 模块数为 0，正是这个洞。
+# 缺包时不报错（源码环境/非 Windows 构建仍可跑），因此带可用性守卫。
+_pty_hiddenimports = []
+_pty_binaries = []
+if importlib.util.find_spec("winpty") is not None:
+    _pty_hiddenimports = collect_submodules("winpty") + ["winpty._winpty"]
+    _pty_binaries = collect_dynamic_libs("winpty")
+    # pywinpty 3.x 实际走 ConPTY：除 Python 扩展外还依赖 conpty.dll + OpenConsole.exe
+    # 这两个原生件（缺任一个 spawn 就失败），winpty-agent.exe/winpty.dll 是 legacy
+    # 后端。collect_dynamic_libs 只收 .dll 不收 .exe → 四个全显式补一遍；重复项由
+    # PyInstaller 按目标名去重，无害。上一版产物里 winpty 相关为 0，正是这个洞。
+    _winpty_pkg = os.path.dirname(importlib.util.find_spec("winpty").origin)
+    for _exe in ("winpty-agent.exe", "winpty.dll", "conpty.dll", "OpenConsole.exe"):
+        _src = os.path.join(_winpty_pkg, _exe)
+        if os.path.exists(_src):
+            _pty_binaries.append((_src, "."))
+        else:
+            print(f"[spec][warn] pywinpty 缺 {_exe}，打包后 PTY 可能不可用")
+binaries += _pty_binaries
 
 # ── conda 系统库（2026-09-06 修复: 否则运行时崩溃） ────────────
 # 本桌面打包使用 conda 派生的 venv，其 Python 标准库扩展(_ssl/_hashlib/_lzma/
@@ -186,6 +212,8 @@ hiddenimports = [
     # 本地 OCR 引擎（2026-09-11）：desktop find= 文本锚定兜底，
     # 工具内动态导入（importlib），静态分析抓不到 → 显式收集
     *_ocr_hiddenimports,
+    # ConPTY 交互式终端（2026-09-25）：winpty 子模块 + C 扩展
+    *_pty_hiddenimports,
     # web 适配器包（2026-09-14 W1 拆分）：模块 → 包，路由 mixin 按域分文件，
     # 显式收集保证打包不漏子模块
     *collect_submodules("scout.adapters.web"),

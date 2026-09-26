@@ -730,17 +730,28 @@ function iconHtml(name, cls, style) {
                                 <label class="block text-xs text-ink-3 mb-1.5" data-i18n="视觉能力">视觉能力</label>
                                 <select id="cfg-vision-capability" class="w-full px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60">
                                     <option value="auto" data-i18n="自动判断">自动判断</option>
-                                    <option value="on" data-i18n="支持图片输入">支持图片输入</option>
-                                    <option value="off" data-i18n="关闭图片处理">关闭图片处理</option>
+                                    <option value="native" data-i18n="能看图（主模型直收）">能看图（主模型直收）</option>
+                                    <option value="no_main" data-i18n="主模型不收图（交视觉模型识图）">主模型不收图（交视觉模型识图）</option>
+                                    <option value="off" data-i18n="关闭视觉处理">关闭视觉处理</option>
                                 </select>
                                 <p id="cfg-vision-source" class="text-xs text-ink-3 mt-1"></p>
+                                <!-- ★ 2026-09-26：自定义/中转网关模型无从判断有没有视觉能力，
+                                     而猜错代价不对称 —— 网关静默丢掉 image_url 时，模型会对着
+                                     看不见的图编内容。探测发一张本机生成的随机数字图做可验证
+                                     问答（HTTP 200 本身不算结论）。只在点按钮时发真实请求。 -->
+                                <div class="flex items-center gap-2 mt-1.5">
+                                    <button type="button" id="btn-probe-vision" onclick="probeVisionCapability()"
+                                            class="text-tiny px-2 py-1 rounded-md border border-line text-ink-2 hover:border-accent/60 hover:text-ink-1 transition-colors"
+                                            data-i18n="实测能否看图">实测能否看图</button>
+                                    <span id="cfg-vision-probe" class="text-xs text-ink-3"></span>
+                                </div>
                             </div>
                         </div>
                         <div>
                             <label class="block text-xs text-ink-3 mb-1.5" data-i18n="兜底视觉模型（可选）">兜底视觉模型（可选）</label>
                             <select id="cfg-vision-fallback-model" onchange="onSelectChange(this.id)" class="w-full px-3 py-2 rounded-lg bg-surface-3 border border-line text-ink-1 text-sm focus:outline-none focus:border-accent/60"></select>
                             <input data-i18n-placeholder="输入自定义模型名，回车确认（Esc 取消）" id="cfg-vision-fallback-custom" type="text" class="hidden w-full px-3 py-2 rounded-lg bg-surface-3 border border-accent/50 text-ink-1 text-sm focus:outline-none font-mono mt-2" placeholder="输入自定义模型名，回车确认（Esc 取消）" onkeydown="customInputKey(event, this.id)">
-                            <p class="text-xs text-ink-3 mt-1">主模型不看图时，用这个模型识图成文字。默认自动推荐当前厂商的视觉模型；若推荐模型未开通/无权限，从列表选一个你可用的，或选"自定义"手动填模型 ID。</p>
+                            <p class="text-xs text-ink-3 mt-1">主模型不看图时，用这个模型识图成文字。默认自动推荐当前厂商的视觉模型；若推荐模型未开通/无权限，从列表选一个你可用的，或选"自定义"手动填模型 ID。<span data-i18n="填成与主模型一样的名字 = 声明「主模型自己能看图」，图片将直接发给它（自定义模型最常用）。">填成与主模型一样的名字 = 声明「主模型自己能看图」，图片将直接发给它（自定义模型最常用）。</span></p>
                         </div>
                         <p class="text-xs text-ink-3">思考强度按厂商自动翻译：Qwen/百炼 → thinking_budget，OpenAI o·GPT-5 → reasoning_effort，Claude → thinking.budget_tokens，DeepSeek/GLM/Kimi → enable_thinking（仅开关）。上下文长度留空 = 自动识别（未识别时回退 128000，可在此手填真实窗口）。</p>
                     </div>
@@ -1018,7 +1029,7 @@ function iconHtml(name, cls, style) {
                     <div class="bg-surface-3 border border-line rounded-lg p-4">
                         <div class="flex items-center justify-between mb-3">
                             <h3 class="text-sm font-medium text-ink-2">当前版本</h3>
-                            <span id="current-version" class="text-lg font-mono text-accent-text">v1.0.0.4</span>
+                            <span id="current-version" class="text-lg font-mono text-accent-text">v1.0.0.5</span>
                         </div>
                         <div id="update-indicator" class="hidden text-sm text-success mt-2">
                             <span class="inline-block w-2 h-2 bg-success rounded-full mr-2"></span>
@@ -1677,6 +1688,9 @@ function handleEvent(event) {
             // 若本回合是用户在看门狗弹窗里主动「停止」→ 标记为「已中断」（保留已产出）
             agentBubble.finalize(event.data.steps || 0, event.data.usage || null, !!window._wdUserStopped);
             window._wdUserStopped = false;
+            // ★ 2026-09-26（V3）：回填本轮附件的实际送达状态到用户气泡（图片未识读/
+            // 已转文字描述）。判定来自后端，前端不自己猜。
+            if (event.data.attachments) applyAttachmentsStatus(event.data.attachments);
             onGenerationDone();
             // 回合刚结束：real token 观测值已更新，立即刷新上下文圆环
             // （不等 throttle 2.5s 窗口，2026-09-23 实时性修复）
@@ -2713,7 +2727,7 @@ let agentBubble = new AgentBubble();
 let currentSessionId = null;
 let msgSeqCounter = 0;
 
-function addMessage(role, content, msgAttachments, realIndex) {
+function addMessage(role, content, msgAttachments, realIndex, attStatus) {
     document.getElementById('welcome-screen').classList.add('hidden');
     document.getElementById('messages').classList.remove('hidden');
     const c = document.getElementById('messages');
@@ -2745,6 +2759,7 @@ function addMessage(role, content, msgAttachments, realIndex) {
                 <span class="text-xs font-medium text-ink-3">你</span>
             </div>
             <div class="msg-text max-w-[90%] px-4 py-3 rounded-xl rounded-tr-sm bg-surface-3 text-sm leading-relaxed text-ink-1">${escapeHtml(content)}${attachHtml}</div>
+            <div class="att-badge self-end mt-1">${attachmentBadgeHtml(attStatus)}</div>
             <div class="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity self-end">
                 <button onclick="copyMessage(${mid})" class="msg-act text-ink-3 hover:text-accent-text" title="${__t('复制')}"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg></button>
                 <button onclick="editMessage(${mid})" class="msg-act text-ink-3 hover:text-accent-text" title="${__t('编辑')}"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-pencil"/></svg></button>
@@ -2772,6 +2787,7 @@ function addMessage(role, content, msgAttachments, realIndex) {
         postProcessMarkdown(d.querySelector('.msg-content'));
     }
     c.appendChild(d);
+    if (role === 'user') lastUserBubble = d;  // 回合结束后回填"图片未识读"徽标用
     msgCount++;
     updateMsgCount();
     scrollToBottom(true);
@@ -2853,6 +2869,92 @@ function handleFiles(files) {
     document.getElementById('file-input').value = '';
 }
 
+// ── 附件送达状态徽标（2026-09-26 V3）───────────────────────────────
+// 后端把"图片到底有没有被模型看到"写进用户消息 metadata（attachments_status），
+// 并经 WS 的 done 事件与会话历史接口透传。此前这个信息只存在于给模型的提示词里，
+// 界面上毫无痕迹 —— 用户发完图看不到任何反馈，只能靠猜，最坏情况是模型对着看不见
+// 的图编内容而用户浑然不觉。
+let lastUserBubble = null;
+let _capCache = { key: '', at: 0, data: null };
+
+function attachmentBadgeHtml(st) {
+    if (!st) return '';
+    const unseen = (st.unseen || []).length;
+    const total = st.total || 0;
+    if (!total) return '';
+    if (st.route === 'main' && !unseen) return '';           // 全部正常直收，不打扰
+    const parts = [];
+    if (st.route === 'fallback') parts.push(__t('图片已转成文字描述'));
+    else if (st.route === 'none' || unseen) parts.push(__t('部分图片未识读'));
+    if (unseen) parts.push(__t('未送达') + ' ' + unseen + '/' + total);
+    const why = (st.unseen && st.unseen[0] && st.unseen[0].reason) || st.reason || '';
+    const t = (st.route === 'fallback' && !unseen) ? 'warn' : 'danger';
+    // ★ 类名必须都是 app.css 里已编译存在的（bg-danger/10、hover:opacity-90）：
+    //   本项目 CSS 由 frontend/ 下的 tailwind build 产出，本机没有 node，写了新
+    //   工具类不会自动进产物，表现是"样式静默失效"。改样式时先查后写。
+    const cls = t === 'danger' ? 'text-danger border-danger/30 bg-danger/10'
+                               : 'text-warn border-warn/30 bg-warn/10';
+    return `<button type="button" title="${escapeHtml(why)}" onclick="openSettings('model')"
+        class="text-tiny px-2 py-0.5 rounded-md border ${cls} transition-opacity hover:opacity-90">
+        ${escapeHtml(parts.join(' · '))}</button>`;
+}
+
+function applyAttachmentsStatus(st) {
+    if (!st || !lastUserBubble) return;
+    const slot = lastUserBubble.querySelector('.att-badge');
+    if (slot) slot.innerHTML = attachmentBadgeHtml(st);
+}
+
+// 发送前的能力预判：附件里有图时提前告诉用户"当前模型看不看图"，
+// 而不是等回合结束才看到徽标。结果按 provider+model 缓存 30s，避免每次
+// 增删附件都打一次 /api/models/capabilities。
+async function refreshAttachmentRouteHint() {
+    const hint = document.getElementById('attach-route-hint');
+    if (!hint) return;
+    const hasImg = attachments.some(a => (a.type || '').startsWith('image/'));
+    if (!hasImg) { hint.classList.add('hidden'); hint.innerHTML = ''; return; }
+    // ★ 必须用**本轮实际发送的模型**：输入框可以选别家厂商的模型（chatModelSel
+    //   会随 payload.model 发出去），只看设置面板的 cfg-model 会给出错误的提示。
+    let provider = (chatModelSel && chatModelSel.provider) || '';
+    let model = (chatModelSel && chatModelSel.model) || '';
+    if (!model) {
+        provider = (document.getElementById('cfg-provider') || {}).value || '';
+        const modelEl = document.getElementById('cfg-model');
+        model = modelEl ? modelEl.value : '';
+    }
+    if (!model) { hint.classList.add('hidden'); return; }
+    const key = provider + '|' + model;
+    const now = Date.now();
+    try {
+        if (!_capCache.data || _capCache.key !== key || now - _capCache.at > 30000) {
+            const r = await fetch('/api/models/capabilities?provider='
+                + encodeURIComponent(provider) + '&model=' + encodeURIComponent(model));
+            _capCache = { key: key, at: now, data: r.ok ? await r.json() : null };
+        }
+        const cap = _capCache.data;
+        if (!cap) { hint.classList.add('hidden'); return; }
+        let txt = '';
+        if (cap.vision_route === 'main') {
+            hint.className = 'text-xs text-ink-3 mt-1';
+            hint.textContent = __t('图片将直接发给当前模型');
+            hint.classList.remove('hidden');
+            return;
+        }
+        if (cap.vision_route === 'fallback') {
+            txt = __t('当前模型不直接看图，将由') + ' '
+                + (cap.vision_route_model || __t('视觉模型')) + ' ' + __t('识图成文字');
+        } else {
+            txt = __t('⚠ 图片不会被识读') + '：' + (cap.vision_reason || __t('当前配置无可用视觉模型'));
+        }
+        hint.className = 'text-xs mt-1 ' + (cap.vision_route === 'fallback' ? 'text-warn' : 'text-danger');
+        hint.innerHTML = escapeHtml(txt)
+            + ` <button type="button" class="underline" onclick="openSettings('model')">${__t('去设置')}</button>`;
+        hint.classList.remove('hidden');
+    } catch (e) {
+        hint.classList.add('hidden');
+    }
+}
+
 function renderAttachments() {
     const preview = document.getElementById('attachments-preview');
     if (attachments.length === 0) {
@@ -2876,7 +2978,9 @@ function renderAttachments() {
             <div class="min-w-0"><div class="text-ink-2 truncate max-w-[120px]">${a.name}</div><div class="text-ink-3">${sizeStr}</div></div>
             <button onclick="removeAttachment(${i})" class="ml-1 text-ink-3 hover:text-danger flex-shrink-0"><svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
         </div>`;
-    }).join('');
+    }).join('') + '<div id="attach-route-hint" class="hidden w-full"></div>';
+    // 附件变化时重新预判路由（有图才发请求，结果缓存 30s）
+    refreshAttachmentRouteHint();
 }
 
 function removeAttachment(index) {
@@ -3529,7 +3633,7 @@ async function loadSession(sid, opts = {}) {
                 let content = m.content || '';
                 content = content.replace(/<runtime_context>[\s\S]*?<\/runtime_context>/g, '').trim();
                 content = content.replace(/<memories>[\s\S]*?<\/memories>/g, '').trim();
-                addMessage('user', content, m.attachments, m.index);
+                addMessage('user', content, m.attachments, m.index, m.attachments_status);
                 pendingToolCallsMsg = null;
                 continue;
             }
@@ -6605,28 +6709,48 @@ const CAP_SOURCE_TEXT = {
     '': '未识别（回退默认值）',
 };
 const CAP_VISION_TEXT = {
+    probe: '实测确认',
     user: '手动设置',
+    override: '手动设置',
+    self: '兜底模型填了主模型同名（= 声明原生）',
     preset: '预设目录',
-    name: '模型名推断',
+    name: '模型名推断（未确认）',
     '': '判断不了（按不支持）',
 };
+// 与后端 scout/llm/vision_route.capability_key 严格一致：provider 小写、空则 *。
+// 以前这里自己拼且没小写，provider 大小写不一致时能力开关会写进永不命中的键。
+function capKeyOf(provider, model) {
+    const p = (provider || '').trim().toLowerCase() || '*';
+    return p + ':' + (model || '').trim();
+}
 // 视觉路由三态补充说明（2026-09-24 三级兜底）：说明图片实际会怎么被处理
 function visionRouteText(cap) {
     if (!cap) return '';
     const rt = cap.vision_route || '';
+    const s = CAP_VISION_TEXT[cap.vision_source || ''] || '';
     if (rt === 'main') {
-        const s = CAP_VISION_TEXT[cap.vision_source || ''] || '';
-        return '主模型直收图片' + (s ? '（' + s + '）' : '');
+        return '图片直接发给主模型' + (s ? '（' + s + '）' : '');
     }
     if (rt === 'fallback') {
         const m = cap.vision_route_model || '视觉模型';
-        // 手动选的兜底与自动推荐的文案分开，避免与兜底下拉框显示不一致
         if (cap.vision_route_source === 'user') {
             return '主模型不看图，由 ' + m + ' 识图成文字（手动指定兜底）';
         }
+        if (cap.vision_route_source === 'override') {
+            return '按你的设置图片不进主模型，由 ' + m + ' 识图成文字';
+        }
         return '主模型不看图，自动由 ' + m + ' 识图成文字（兜底）';
     }
-    return '主模型不看图且该厂商无兜底视觉模型，图片不会识别';
+    if (rt === 'none') {
+        if (cap.vision_disabled) return '视觉已全局关闭，图片只保留文件路径';
+        if (cap.vision_route_source === 'off') return '该模型已关闭视觉，图片只保留文件路径';
+        if (cap.vision_needs_choice) {
+            return '旧「关闭图片处理」设置：图片不会识读。'
+                + (cap.vision_would_be ? '如想让 ' + cap.vision_would_be + ' 识图，请重新选择上面一项。' : '');
+        }
+        return '主模型不看图且无可用视觉模型，图片不会识读（模型会被明确告知，不会臆测内容）';
+    }
+    return '';
 }
 
 function capProviderModel() {
@@ -6639,6 +6763,10 @@ function capProviderModel() {
     return { provider: provider, model: model };
 }
 
+// 最近一次 /api/models/capabilities 的结果：写回时优先用后端给的 capability_key，
+// 避免前后端各拼一份键规则（历史上后端小写、前端不小写，导致覆盖写进错键）。
+let CAP_LAST = null;
+
 async function refreshModelCapabilities() {
     const { provider, model } = capProviderModel();
     const keyEl = document.getElementById('cfg-cap-model');
@@ -6648,6 +6776,7 @@ async function refreshModelCapabilities() {
         const r = await fetch('/api/models/capabilities?provider=' + encodeURIComponent(provider) + '&model=' + encodeURIComponent(model));
         if (!r.ok) return;
         const cap = await r.json();
+        CAP_LAST = { provider: provider, model: model, cap: cap };
         const ctxEl = document.getElementById('cfg-context-length');
         if (ctxEl) ctxEl.value = cap.context_length || '';
         const srcEl = document.getElementById('cfg-context-source');
@@ -6657,23 +6786,74 @@ async function refreshModelCapabilities() {
         const apEl = document.getElementById('cfg-thinking-applied');
         if (apEl) apEl.textContent = cap.thinking_applied || '';
         const vsEl = document.getElementById('cfg-vision-capability');
-        if (vsEl) vsEl.value = cap.vision_source === 'user' ? (cap.vision ? 'on' : 'off') : 'auto';
+        // 值来自后端 mode（auto/native/no_main/off）；老配置只有 bool 时后端已折算
+        if (vsEl) vsEl.value = (cap.vision_mode && ['native', 'no_main', 'off'].includes(cap.vision_mode))
+            ? cap.vision_mode : 'auto';
         const vSrcEl = document.getElementById('cfg-vision-source');
         if (vSrcEl) vSrcEl.textContent = visionRouteText(cap);
+        const probeEl = document.getElementById('cfg-vision-probe');
+        if (probeEl) {
+            if (cap.vision_probe === true) probeEl.textContent = __t('已实测：能看图');
+            else if (cap.vision_probe === false) probeEl.textContent = __t('已实测：不收图片');
+            else if (cap.vision_source === 'name') probeEl.textContent = __t('能力靠猜，建议实测一次');
+            else probeEl.textContent = '';
+        }
     } catch (e) { console.warn('模型能力拉取失败:', e); }
+}
+
+// 实测探测：会发一次真实推理请求（随机数字图问答），只在用户点按钮时执行。
+async function probeVisionCapability() {
+    const { provider, model } = capProviderModel();
+    if (!model) { alert(__t('请先选择或填写模型')); return; }
+    const btn = document.getElementById('btn-probe-vision');
+    const out = document.getElementById('cfg-vision-probe');
+    if (btn) { btn.disabled = true; btn.textContent = __t('探测中…'); }
+    try {
+        const r = await fetch('/api/models/probe-vision', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: provider, model: model }),
+        });
+        const j = await r.json();
+        if (!r.ok) {
+            if (out) out.textContent = (j && j.error) || __t('探测失败');
+            return;
+        }
+        const map = {
+            supported: __t('实测能看图'), unsupported: __t('实测不收图片'),
+            unverified: __t('未能证实（疑似网关丢弃图片）'),
+            auth: __t('鉴权失败，无法判定'), transport: __t('端点/网络异常，无法判定'),
+            no_image_lib: __t('缺少 Pillow，无法生成测试图'), unknown: __t('无法判定'),
+        };
+        const label = map[j.result] || j.result;
+        if (out) out.textContent = label + (j.detail ? ' · ' + j.detail : '');
+        if (j.written === null && j.result !== 'unverified') {
+            // 没落盘时提示用户结论未被记录，避免以为"已经改好了"
+            if (out) out.textContent += ' · ' + __t('（未记录，可修正配置后重试）');
+        }
+        await refreshModelCapabilities();
+    } catch (e) {
+        if (out) out.textContent = __t('探测请求失败') + ': ' + e;
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = __t('实测能否看图'); }
+    }
 }
 
 function collectModelCapabilities() {
     const { provider, model } = capProviderModel();
     if (!model) return {};
-    const key = (provider || '*') + ':' + model;
+    let key = capKeyOf(provider, model);
+    if (CAP_LAST && CAP_LAST.provider === provider && CAP_LAST.model === model
+        && CAP_LAST.cap && CAP_LAST.cap.capability_key) {
+        key = CAP_LAST.cap.capability_key;  // 后端算的键为准
+    }
     const ctxRaw = (document.getElementById('cfg-context-length') || {}).value;
     const ctx = parseInt(ctxRaw, 10) || 0;  // 0 = 清除覆盖，回到自动识别
     const vis = (document.getElementById('cfg-vision-capability') || {}).value || 'auto';
     const eff = (document.getElementById('cfg-reasoning-effort') || {}).value || 'auto';
     return {
         model_context_overrides: { [key]: ctx },
-        model_vision_overrides: { [key]: vis === 'auto' ? null : (vis === 'on') },
+        // auto → null（后端会同时清掉旧的 bool 覆盖，回到自动判断）
+        model_vision_mode: { [key]: vis },
         reasoning_effort: eff,
     };
 }

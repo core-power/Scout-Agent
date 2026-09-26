@@ -102,9 +102,52 @@ class ChannelRoutes:
             # 设置 Agent 处理函数
             if self._agent:
                 async def handle_message(message):
-                    session = Session(id=f"channel_{name}_{message.sender}")
-                    response = await self._agent.chat(message.content, session)
-                    return response
+                    import copy
+                    from scout.adapters.channel_callbacks import ChannelCallbacks
+                    from scout.session.store import get_session_store
+                    from scout.tools.registry import ToolRegistry
+
+                    sid = f"channel_{name}_{message.sender}"
+                    # 载入持久会话（IM 多轮上下文；澄清「问完等下一条消息作答」依赖它）；
+                    # 无则新建。此前每轮都用全新空 Session → IM 多轮无上下文。
+                    try:
+                        session = get_session_store().load_session(sid)
+                    except Exception:
+                        session = None
+                    if session is None:
+                        session = Session(id=sid)
+
+                    # 每条消息用 agent 浅拷贝挂 IM 专属回调（race-free，对齐 ws.py 模式）：
+                    # ask_user 澄清发到渠道、危险操作默认拒绝（IM 无法可靠交互批准）。
+                    channel_id = message.session_id or name
+                    adapter = self._channel_manager.get_adapter(name)
+
+                    async def _send(cid, text, **kw):
+                        if adapter is None:
+                            return False
+                        return await adapter.send_message(cid, text, **kw)
+
+                    agent_copy = copy.copy(self._agent)
+                    agent_copy.callbacks = ChannelCallbacks(
+                        _send,
+                        channel_id=channel_id,
+                        user_id=message.sender or "",
+                        reply_to=(message.metadata or {}).get("message_id"),
+                    )
+                    ToolRegistry._main_agent = agent_copy
+
+                    # ★ 修复：Agent 没有 .chat 方法（此前每条 IM 消息都 AttributeError →
+                    #   被 _handle_message 吞成「处理失败」，IM 对话实际不可用）。
+                    #   正确入口 run_conversation(content, session) -> {"response", "session", ...}。
+                    result = await agent_copy.run_conversation(
+                        message.content, session, attachments=message.attachments
+                    )
+                    # 持久化会话，供下一条消息（含澄清回答）续上下文
+                    try:
+                        get_session_store().save_session((result or {}).get("session") or session)
+                    except Exception:
+                        pass
+                    return (result or {}).get("response", "") or ""
 
                 self._channel_manager.set_agent_handler(handle_message)
 

@@ -130,10 +130,10 @@ class SkillRetriever:
             lines.append(f"- **问题**: {skill.intent}")
             lines.append(f"- **成功率**: {skill.success_rate:.0%} (使用 {skill.usage_count} 次)")
             if skill.solution_template:
-                lines.append(f"- **解决方案模板**:")
-                lines.append(f"```")
+                lines.append("- **解决方案模板**:")
+                lines.append("```")
                 lines.append(skill.solution_template)
-                lines.append(f"```")
+                lines.append("```")
             lines.append("")
 
         lines.append("请根据当前任务的具体情况，参考上述经验进行调整。")

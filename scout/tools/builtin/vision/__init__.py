@@ -1,10 +1,10 @@
 """图片分析工具 — 通过多模态视觉模型（VL）分析图片.
 
-路由策略（2026-09-07 简化）：
-- resolve_mode(): vision_model 非空 → "vl"；未配置 → "none"。
-- "none"（未配置视觉模型）→ 直接返回友好提示，不再走本地 OCR 兜底
-  （2026-09-07 决策：移除 RapidOCR/cv2 依赖，为项目减负约 160MB；
-  OCR 只能提取文字无法描述画面，且用户明确要求去掉该依赖）。
+路由策略（2026-09-24 三级兜底）：
+- resolve_vision_route(): main（主模型直收）/ fallback（视觉模型识图成文字，
+  来源=旧显式配置或厂商自动推荐）/ none。
+- resolve_mode(): main+fallback 都返回 "vl"，仅 none 返回 "none"。
+- "none" → 返回友好提示（无本地 OCR 兜底，2026-09-07 决策移除 RapidOCR/cv2）。
 - "vl" 失败（模型不支持图片/超时/4xx）→ 返回失败原因，由主模型决策。
 """
 
@@ -46,14 +46,27 @@ async def _wait_for_file(image: str, attempts: int = 12, interval: float = 0.3) 
 
 
 def resolve_mode(cfg) -> str:
-    """路由决策：返回 "vl"（已配置视觉模型）或 "none"（未配置）.
+    """路由决策：返回 "vl"（可用视觉）或 "none"（不可用）.
 
-    规则（2026-09-07 简化）：vision_model 非空 → "vl"（即使与主 model 同名——
-    同名也可能是多模态模型，实测 qwen3.8-27b 支持 image_url 输入）；
-    否则 → "none"，由调用方返回未配置提示（不再有本地 OCR 兜底）。
+    2026-09-24 升级为三级兜底（详见 resolve_vision_route）：
+      main（主模型直收）与 fallback（视觉模型识图成文字）都返回 "vl"，
+      只有完全无路径才返回 "none"。需要区分路径/拿实际执行模型时，
+      直接调 resolve_vision_route(cfg)。
     """
-    vision_model = (getattr(cfg, "vision_model", "") or "").strip()
-    return "vl" if vision_model else "none"
+    return "vl" if resolve_vision_route(cfg)["path"] in ("main", "fallback") else "none"
+
+
+def resolve_vision_route(cfg) -> dict:
+    """视觉路由判定 —— 转发核心层唯一实现（2026-09-26 收敛，避免三处实现漂移）.
+
+    旧写法是「委托 routes/config.py，导入失败再退回一份本地判定」：那份兜底只看
+    `vision_model`、不看能力声明与探测结果，会在导入异常时悄悄给出与聊天链路不一样
+    的答案。核心模块 `scout.llm.vision_route` 不依赖 Web 层，直接调用即可，因此
+    取消本地兜底 —— 判定失败应当抛出，而不是静默给出错误路由。
+    """
+    from scout.llm.vision_route import resolve_vision_route as _r
+
+    return _r(cfg)
 
 
 def _parse_crop(crop: str, w: int, h: int) -> tuple[int, int, int, int] | None:
@@ -131,7 +144,11 @@ def get_vl_config() -> tuple[str, str, str, object]:
         cfg_proxy = cfg
         api_key = cfg.api_key or ""
         base_url = cfg.base_url or ""
-        model = (cfg.vision_model or cfg.model or "").strip()
+        # 2026-09-26：模型选择完全交给统一路由 —— 判 main 时用主模型本身（此前
+        # main 分支仍取 `cfg.vision_model`，用户历史上填过的外挂名字会在这里被误用），
+        # 判 fallback 时用路由指定的外挂/推荐兜底。
+        _route = resolve_vision_route(cfg)
+        model = (_route.get("model") or getattr(cfg, "model", "") or "").strip()
         # 视觉模型独立厂商：设置了 vision_provider 且与主厂商不同时，
         # 使用该厂商已保存的 api_key/base_url
         if cfg.vision_provider and cfg.vision_provider != cfg.provider:
@@ -268,36 +285,30 @@ _VISION_MAX_EDGE = 1280  # 问答路径 vision 输入最长边（token 与分辨
 
 
 def _downscale_for_vision(image: str, max_edge: int = _VISION_MAX_EDGE) -> str:
-    """等比缩小超大截图再发给 VL（2026-09-17 token 优化）.
+    """等比缩小超大截图再发给 VL（2026-09-17 token 优化；2026-09-26 收敛到共用预处理）.
 
     全屏截图（如 1888×1150）直发单张 2~4K token，GUI 任务二十轮即数万。
-    仅处理本地 png/jpg/webp 且最长边超限的图；原图不动，缩放副本以
-    _vision_ds_ 前缀写同目录（带 mtime 缓存，避免每步重复缩放）。
-    URL / data: / 已达标图片原样返回。定位链路（需要精确坐标）不走此函数。
-    """
-    from pathlib import Path
+    实现已统一到 `scout.llm.image_prep`（与聊天附件、兜底识图同一条预处理链），
+    这里只保留 vision 问答路径的语义：**只砍边长、不按字节预算继续压**（GUI 小字
+    清晰度优先），并沿用 URL / data: / 非图片扩展名原样返回的约定。
+    定位链路（需要精确坐标）不走此函数。
 
+    副作用变化：缩放副本不再以 `_vision_ds_*` 写在用户原图旁边，而是落到
+    `DATA_DIR/image_cache/` —— 在别人文件夹里造临时文件本来就不该发生。
+    """
     if not image or image.startswith(("http://", "https://", "data:")):
         return image
-    p = Path(image)
-    if not p.exists() or p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+    if os.path.splitext(image)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
         return image
     try:
-        from PIL import Image
+        from scout.llm.image_prep import prepare_image
 
-        with Image.open(p) as im:
-            w, h = im.size
-            if max(w, h) <= max_edge:
-                return image
-            scale = max_edge / max(w, h)
-            out = p.with_name(f"_vision_ds_{p.name}")
-            if out.exists() and out.stat().st_mtime >= p.stat().st_mtime:
-                return str(out)
-            im.resize((max(1, int(w * scale)), max(1, int(h * scale))),
-                      Image.LANCZOS).save(out)
-            return str(out)
-    except Exception:
+        # budget 给到 64MB：等价于"只按边长降采样"，保持改造前的视觉问答行为
+        prep = prepare_image(image, max_edge=max_edge, budget=64 * 1024 * 1024)
+        return prep.path
+    except Exception:  # noqa: BLE001 — 预处理任何失败都放行原图，绝不让截图消失
         return image
+
 
 
 def _image_fingerprint(image: str) -> str | None:
@@ -471,13 +482,15 @@ class VisionTool(ToolDefinition):
         # desktop locate/find 定位链路复用同一函数，避免两处漂移）──
         api_key, base_url, model, cfg_proxy = get_vl_config()
 
-        # ── 路由决策：已配置 vision_model → VL；未配置 → 友好提示（无 OCR 兜底）──
+        # ── 路由决策：main（主模型直收）/ fallback（视觉模型兜底）→ VL；
+        # none → 友好提示（2026-09-24 三级兜底，fallback 已自动生效）──
         mode = resolve_mode(cfg_proxy) if cfg_proxy is not None else ("vl" if api_key and model else "none")
         if mode == "none":
             return Observation(
                 tool_name="vision", success=False,
-                output="当前未配置视觉模型，无法读取图片。请在「设置 → 模型配置」中填写视觉模型（vision_model）后重试；"
-                "未配置前此工具不可用，请改用其他方式获取信息（如 desktop 的 read_controls）。",
+                output="当前无法读取图片：主模型不支持图片输入，且该厂商没有可自动兜底的视觉模型"
+                "（或你在设置里显式关闭了视觉能力）。可在「设置 → 模型配置 → 模型能力」中开启"
+                "视觉能力，或改用其他方式获取信息（如 desktop 的 read_controls）。",
             )
         if not api_key:
             from scout.config.paths import DATA_DIR
@@ -491,7 +504,23 @@ class VisionTool(ToolDefinition):
         obs = await _call_vision(api_key, base_url, model, image, question, crop)
         if obs.success:
             return obs
-        # VL 失败：无 OCR 兜底（2026-09-07），直接如实返回失败原因，由主模型决策下一步
+        # VL 失败：无 OCR 兜底（2026-09-07），直接如实返回失败原因，由主模型决策下一步。
+        # 2026-09-24：自动兜底模型可能未开通/无权限（4xx）——此时附上明确指引，
+        # 避免主模型反复换问法重试同一张图（每轮 10s+ 的无效等待）。
+        if not obs.success:
+            try:
+                _src = resolve_vision_route(cfg_proxy).get("source", "") if cfg_proxy is not None else ""
+            except Exception:  # noqa: BLE001
+                _src = ""
+            if _src == "auto-fallback":
+                return Observation(
+                    tool_name="vision", success=False,
+                    output=obs.output
+                    + "\n[提示] 当前使用的是系统自动推荐的兜底视觉模型，本次调用失败"
+                    "（可能是该模型未在你的账号开通或无权限）。请在"
+                    "「设置 → 模型配置 → 模型能力 → 兜底视觉模型」中手动填写一个"
+                    "你确认可用的视觉模型（如 qwen-vl-plus、gpt-4o），填写后即可正常识图。",
+                )
         return obs
 
 

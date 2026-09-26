@@ -101,6 +101,27 @@ INITIAL_CONFIG = {
     #   ask=标准：仅高危操作弹窗询问；auto=全部放行：高危也不问直接执行；
     #   strict=谨慎：每条 shell / 代码执行都先询问
     "permission_mode": "ask",
+    # ── 模型能力用户可配（2026-09-24）──
+    # 上下文窗口覆盖：{"<provider>:<model>": tokens}。用户在设置里手动填的
+    # 窗口长度优先于预设目录/模型名推断，解决"未收录模型一律回退 128k"的误判
+    "model_context_overrides": {},
+    # 思考强度档位：auto=不注入（由模型默认）/ off=关闭思维链 /
+    #   low / medium / high=按各厂商参数翻译（thinking_budget / reasoning_effort …）
+    "reasoning_effort": "auto",
+    # 视觉能力覆盖：{"<provider>:<model>": true|false}。true=主模型直收图片，
+    #   未列出的模型按预设 capabilities 自动判断
+    #   ★ 2026-09-26 起为兼容字段：新配置写 model_vision_mode（见下），读取时
+    #   mode 优先、bool 兜底，老用户配置不动也能继续工作
+    "model_vision_overrides": {},
+    # ── 视觉路由 2.0（判定逻辑唯一入口：scout/llm/vision_route.py）──
+    # 按模型记的视觉模式，优先级高于上面的 bool 覆盖表：
+    #   auto 自动 / native 主模型直收 / no_main 主模型不收但允许外挂识图 / off 关闭视觉
+    "model_vision_mode": {},
+    # 设置页点「探测」得到的实测结果（发一张 1x1 图片问 provider 收不收）。
+    # 可信度最高：新模型层出不穷，名称猜测规则追不完，实测一次就固定下来。
+    "model_vision_probe": {},
+    # 全局视觉总开关：关闭后聊天附件只保留路径，并明确告知模型"图片无法识读"
+    "vision_disabled": False,
 }
 
 # Windows 个人版默认允许启动本地应用（QQ/微信等）；其他平台保持保守默认关闭
@@ -155,6 +176,15 @@ class LLMConfig(BaseModel):
     search_engine: str = ""  # 旧版单值 SearXNG URL（兼容，优先使用 search_engines）
     search_engines: list[dict] = []  # 多搜索引擎源：{name,type,url,api_key,enabled}
     auth_enabled: bool = False  # 登录认证开关（默认关闭）
+    # ── 模型能力用户可配（2026-09-24）──
+    model_context_overrides: dict[str, int] = Field(default_factory=dict)  # "<provider>:<model>" -> 上下文窗口
+    reasoning_effort: str = "auto"  # auto / off / low / medium / high
+    model_vision_overrides: dict[str, bool] = Field(default_factory=dict)  # "<provider>:<model>" -> 是否支持图片输入（兼容字段）
+    # ★ 2026-09-26 视觉路由 2.0：mode 优先于上面的 bool 表；探测结果可信度最高。
+    # 详见 scout/llm/vision_route.py 模块头（为什么要把「模型事实」与「谁来看图」分开）。
+    model_vision_mode: dict[str, str] = Field(default_factory=dict)  # auto/native/no_main/off
+    model_vision_probe: dict[str, bool] = Field(default_factory=dict)  # 实测：能否直收图片
+    vision_disabled: bool = False  # 全局视觉总开关
 
 
 class ConfigManager:
@@ -360,9 +390,61 @@ class ConfigManager:
             return restored
         return {}
 
-    def save(self, config: LLMConfig) -> None:
-        """保存配置到 config.json（敏感字段加密存储）."""
+    def save(self, config: LLMConfig, *, protect_credentials: bool = True) -> None:
+        """保存配置到 config.json（敏感字段加密存储）.
+
+        ★ 凭据护栏（2026-09-24）：默认开启。保存前对比磁盘现存配置——
+        若本次要落盘的 api_key / provider_keys 比**磁盘上已存的凭据更少**
+        （即内存对象丢过 key，来源可能是任何上游 bug），自动沿用磁盘值，
+        拒绝把"丢 key"固化到磁盘。历史事故：2026-09-24 用户 openai key 被
+        某次带病落盘清空且 `_write_encrypted` 对空值静默过滤、`_legacy_restored`
+        一次性标记又关闭了自愈门，导致 key 永久丢失只能从备份恢复。
+        显式增删凭据的唯一合法入口是 save_provider_key（内部传 protect_credentials=False），
+        因此护栏不会复活用户主动删除的 key。
+        """
         data = config.model_dump()
+        if protect_credentials:
+            disk = {}
+            try:
+                if CONFIG_PATH.exists():
+                    disk = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                disk = {}
+            if disk:
+                # 1) api_key：新值为空且磁盘非空 → 沿用磁盘值（先解密，让
+                #    _write_encrypted 用当前密钥正常加密，避免双重加密）
+                if not str(data.get("api_key") or "").strip():
+                    disk_api = str(disk.get("api_key") or "")
+                    if disk_api:
+                        if _is_encrypted(disk_api):
+                            try:
+                                disk_api = _decrypt_field_ex(disk_api)[0]
+                            except Exception:  # noqa: BLE001 — 解不开则不保护
+                                disk_api = ""
+                        if disk_api:
+                            logger.warning(
+                                "[save-guard] 本次保存的 api_key 为空但磁盘已有值，"
+                                "沿用磁盘值（防止凭据丢失）"
+                            )
+                            data["api_key"] = disk_api
+                # 2) provider_keys：磁盘有而新数据缺项/空 → 补回
+                disk_keys = disk.get("provider_keys") or {}
+                new_keys = dict(data.get("provider_keys") or {})
+                restored = []
+                for k, v in disk_keys.items():
+                    if v and not str(new_keys.get(k) or "").strip():
+                        if _is_encrypted(v):
+                            try:
+                                v = _decrypt_field_ex(v)[0]
+                            except Exception:  # noqa: BLE001
+                                continue
+                        new_keys[k] = v
+                        restored.append(k)
+                if restored:
+                    logger.warning(
+                        f"[save-guard] 本次保存丢失了已存凭据 {restored}，已从磁盘恢复"
+                    )
+                    data["provider_keys"] = new_keys
         self._write_encrypted(data)
 
     def save_provider_key(
@@ -392,7 +474,9 @@ class ConfigManager:
             config.provider = provider
         if activate and base_url:
             config.base_url = base_url
-        self.save(config)
+        # protect_credentials=False：本方法是显式增删凭据的合法入口
+        # （api_key 为空 = 删除该 provider 的 key），护栏不得复活被删项
+        self.save(config, protect_credentials=False)
 
     def save_provider_base_url(self, provider: str, base_url: str, activate: bool = False) -> None:
         """仅保存某 provider 的 base_url 到 provider_base_urls 映射（明文落盘）.
