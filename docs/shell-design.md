@@ -289,7 +289,7 @@ write_file 执行前：后端快照 before 内容
   `rgb(var(--c-line-strong)) transparent`。
 
 **回滚**：删掉各页面那一行 `<link rel="stylesheet" href="/static/css/theme-workbuddy.css">` 即可。
-Toast / scrollbar 是改在 `index.html` 里的，回滚用 `D:\workbuddy-data\.workbuddy\index.html.bak-toast`。
+Toast / scrollbar 是改在 `index.html` 里的，回滚以改动前的 index.html 备份为准（留存于本地数据目录）。
 `desktop/scout_desktop.spec` 第 37 行整目录打包 `scout/web/static`，新 CSS 无需改 spec。
 
 ### 6.4 运行期动态层（已落地）
