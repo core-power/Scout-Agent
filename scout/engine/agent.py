@@ -160,7 +160,6 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         vision_input: bool | None = None,  # None=按模型能力自动判断；True/False=用户强制
         model_provider: str = "",  # 用于能力解析（思考参数风格/视觉）的厂商标识
     ):
-
         self.llm = llm
 
         self.deep_thinking = deep_thinking
@@ -183,6 +182,33 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
             self.loop = ReActLoop(self)
 
+        # ── 装配阶段化（2026-09-27 R1）：原 842 行 __init__ 按域分解为 10 个阶段方法 ──
+        # 行为不变契约：以下调用顺序 = 原语句顺序，任何调序都可能改变 system prompt
+        # 组装结果或破坏跨段依赖（如 _embedding_provider → 技能向量库）。
+        self._init_system_prompt(agent_mode, system_prompt, deep_thinking, language)
+        self._init_loop_controls(callbacks, max_turns, max_loop_seconds, temperature)
+        self._init_tools(
+            tools,
+            register_as_main,
+            delegate_depth,
+            max_delegate_depth,
+            exclude_tools,
+            allow_tools,
+        )
+        self._init_context_and_persistence(enable_context, enable_persistence)
+        self._init_memory_system(enable_memory, embedding_provider, memory_extractor, context_assembler, memory_flush)
+        self._init_security_and_heal(enable_security, auto_approve, permission_mode, enable_self_heal, max_heal_retries)
+        self._init_skills_and_workspace(enable_self_heal, enable_skills, enable_workspace, workspace_dir)
+        self._init_bus_and_runtime_state(enable_bus)
+        self._init_tier_capabilities(enable_reflexion, enable_goal_manager, enable_observability, enable_hitl, hitl_tools, enable_skills)
+        self._init_instruction_and_checkpoint()
+
+    def _init_system_prompt(self, agent_mode, system_prompt, deep_thinking, language):
+        """装配 system prompt：模式模板 → 平台提示 → 产物目录约定 → 语言规则.
+
+        ★ 顺序敏感：工作空间指令(_init_skills_and_workspace)与分层指令链
+n        (_init_instruction_and_checkpoint) 在后续阶段追加到末尾——任何调序都会
+n        改变最终 system prompt 内容，影响行为与前缀缓存."""
         if agent_mode == "multi_agent":
             self.system_prompt = (
                 "You are Scout, an orchestrator agent with persistent memory. You coordinate sub-agents to solve complex tasks.\n\n"
@@ -422,6 +448,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         if lang_rule:
             self.system_prompt = self.system_prompt + "\n" + lang_rule
 
+    def _init_loop_controls(self, callbacks, max_turns, max_loop_seconds, temperature):
+        """循环控制装配：预算/看门狗/熔断阈值/温度/废弃双模型占位."""
         self.callbacks = callbacks or NullCallbacks()
 
         self.max_turns = max_turns
@@ -471,6 +499,16 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
         self.executor_llm = None
 
+    def _init_tools(
+        self,
+        tools,
+        register_as_main,
+        delegate_depth,
+        max_delegate_depth,
+        exclude_tools,
+        allow_tools,
+    ):
+        """工具装配：schema 构建（compact）、渐进式加载状态、主 Agent 引用注册."""
         # ── 子代理委派控制 ──
 
         self.delegate_depth = delegate_depth
@@ -519,6 +557,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         if register_as_main:
             ToolRegistry._main_agent = self
 
+    def _init_context_and_persistence(self, enable_context, enable_persistence):
+        """上下文治理（ContextManager + 省 token 开关）+ 会话持久化 + 活跃会话注册表."""
         # 上下文治理
 
         self.enable_context = enable_context
@@ -585,6 +625,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         else:
             self.session_store = None
 
+    def _init_memory_system(self, enable_memory, embedding_provider, memory_extractor, context_assembler, memory_flush):
+        """记忆系统：store/嵌入提供者 + E4 三件套（extractor/assembler/flush）."""
         # 记忆系统
 
         self.enable_memory = enable_memory
@@ -636,6 +678,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
             memory_flush = MemoryFlush(extractor=memory_extractor)
         self.memory_flush = memory_flush
 
+    def _init_security_and_heal(self, enable_security, auto_approve, permission_mode, enable_self_heal, max_heal_retries):
+        """安全层（SecurityManager）+ 沙箱管理器 + 自修复循环."""
         # 安全层
 
         self.enable_security = enable_security
@@ -679,6 +723,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         else:
             self.heal_loop = None
 
+    def _init_skills_and_workspace(self, enable_self_heal, enable_skills, enable_workspace, workspace_dir):
+        """技能沉淀（synthesizer/retriever）+ 文件技能管理 + 工作空间（追加 system prompt 末尾，保前缀稳定）."""
         # 技能沉淀系统（向量检索 + 自动合成）
 
         self.skill_synthesizer = None
@@ -752,6 +798,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         else:
             self.workspace = None
 
+    def _init_bus_and_runtime_state(self, enable_bus):
+        """事件总线 + 每轮重置的运行时状态（搜索历史/工具统计/usage/执行器/取消标志）."""
         # 事件总线
 
         self.enable_bus = enable_bus
@@ -798,6 +846,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
 
         self._loop_break_injected = False  # 本轮是否已注入过循环打断提示（避免重复注入）
 
+    def _init_tier_capabilities(self, enable_reflexion, enable_goal_manager, enable_observability, enable_hitl, hitl_tools, enable_skills):
+        """第一/第二梯队能力：反思/目标管理/可观测/HITL + 自动化策略/蒸馏/自省/记忆闸门."""
         # ── 第一梯队能力初始化 ──
 
         # 反思循环
@@ -906,6 +956,8 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         except Exception:
             self.memory_gate = None
 
+    def _init_instruction_and_checkpoint(self):
+        """分层指令链（追加 system prompt，必须在 _init_skills_and_workspace 之后）+ Checkpoint + A2A."""
         # 分层指令链（对标 Codex AGENTS.md：全局→项目→目录 override 链）
 
         try:
@@ -944,6 +996,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         from scout.a2a.client import A2AManager
 
         self.a2a_manager = A2AManager()
+
 
     def cancel(self):
         """用户取消当前对话 — 设置标志位，循环会在下一步检查后退出."""

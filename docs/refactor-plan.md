@@ -380,3 +380,40 @@ staticmethod 误用 / eval 解释器 / 认证 e2e 副作用）修复。
 | A4 | **3080** | 技能域搬家 → engine/skills/（1846，7 模块入包） |
 
 **engine/ 目录重构前 28 个平铺文件 → 现 21 文件 + 2 子包（skills/ 等）**
+
+### R1 ✅ 完成（2026-09-27）—— __init__ 装配阶段化（第二轮回流治理）
+**账：`__init__` 842 行 → 94 行；agent.py 3764 → 3817 行（+53 行为方法头/文档/调用点样板）**
+
+背景：W1-W4 + A1-A4 + A2b + D1-D2 已于 2026-09-14 全部清零；此后功能开发
+（懒加载/视觉路由/自适应预算等）使 agent.py 回流至 3764 行，其中 `__init__`
+膨胀为全文件最大方法（842 行，AST 实测）。
+
+拆法（纯语句搬移，零逻辑改动）：按域分解为 10 个 `_init_*` 阶段方法，
+调用顺序 = 原语句顺序（system prompt 组装顺序敏感：模板→平台→产物→语言
+→工作空间→指令链，任何调序都会改变前缀缓存行为）：
+
+| 阶段方法 | 行数 | 内容 |
+|----------|------|------|
+| `_init_system_prompt` | 244 | 模式模板/平台提示/产物约定/语言规则 |
+| `_init_loop_controls` | 50 | 预算/看门狗/熔断/温度/废弃双模型占位 |
+| `_init_tools` | 49 | schema/渐进加载/委派参数/主引用注册 |
+| `_init_context_and_persistence` | 67 | ContextManager + 会话持久化 |
+| `_init_memory_system` | 52 | memory store/嵌入 + E4 三件套 |
+| `_init_security_and_heal` | 44 | SecurityManager/沙箱/自修复 |
+| `_init_skills_and_workspace` | 74 | 技能沉淀/技能管理/工作空间 |
+| `_init_bus_and_runtime_state` | 47 | 事件总线 + 每轮重置状态 |
+| `_init_tier_capabilities` | 109 | 反思/目标/可观测/HITL/蒸馏/自省/闸门 |
+| `_init_instruction_and_checkpoint` | 40 | 指令链 + Checkpoint + A2A |
+
+**踩坑追加（第 8 条）**：段边界审计只核对「段内引用的外部名」不够——
+**构造函数参数也要逐段对账**。本次 `_init_tools` 段用了 `delegate_depth/
+max_delegate_depth/exclude_tools/allow_tools` 四个参数，初次漏传，
+pyflakes（undefined name）当场抓获——蓝图「拆分后必跑 pyflakes」再次验证有效。
+
+**验证**：pyflakes 0 ✓；staticmethod 误用扫描 0 ✓；全量 948 passed/15 skipped/
+1 failed（与改造前基线逐项一致，1 failed 为 frontmatter 存量问题）✓；
+Agent 实例化冒烟（system_prompt 3731 字符、核心片段齐全、27 工具、ReActLoop）✓
+
+### R2（待办）—— 双轨主循环收敛（本蓝图最大剩余收益）
+`stream_conversation`(834 行) 与 `_run_react`(585 行) 的主循环体仍是双轨维护
+（A1 只收敛了护栏件）。收敛需重设计主循环骨架，风险高，须独立会话专项处理。
