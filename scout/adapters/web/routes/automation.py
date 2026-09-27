@@ -555,7 +555,7 @@ class AutomationRoutes:
             store = getattr(self._agent, "session_store", None)
             if store:
                 try:
-                    session = store.load_session(session_id)
+                    session = await store.async_load_session(session_id)
                     if session:
                         messages = [
                             {"role": m.role.value, "content": m.content}

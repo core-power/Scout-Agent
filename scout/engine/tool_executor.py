@@ -1236,7 +1236,8 @@ class ToolExecutionMixin:
                     })
                     session.extra["files"] = files
                     if self.enable_persistence and self.session_store:
-                        self.session_store.save_session(session)
+                        # ★ 2026-09-27 冻死修复：await 异步 API，不走同步包装
+                        await self.session_store.async_save_session(session)
                 except Exception:
                     pass
 

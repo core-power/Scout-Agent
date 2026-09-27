@@ -1202,20 +1202,32 @@ class SessionStore:
         return self._run_async(self.async_archive_messages(session_id, messages, reason))
 
     def _run_async(self, coro):
-        """在同步上下文中运行异步协程."""
+        """在同步上下文中运行异步协程 —— 仅限「当前线程没有运行中的事件循环」.
+
+        ★ 2026-09-27 冻死修复。旧实现检测到运行中循环时，会偷偷开一个线程跑
+        ``asyncio.run(coro)``，再在**当前事件循环线程上** join 等结果。而 ``get_session_store()``
+        是全局单例，嵌套循环里的存储操作要争 ``SQLiteStorage`` 那把 loop 亲和的异步锁
+        （v1.0.0.5 存储层改造引入 ``to_thread`` + ``_ReentrantLock``），持锁方偏偏是被
+        join 冻住的主循环任务 → 双向等待。30s 超时抛错也救不回来：``with`` 退出仍会
+        ``shutdown(wait=True)`` 永久 join。实测后果就是「exe 打开后历史会话加载不出来」——
+        ``/api/sessions`` 一次请求把整个 web 服务冻死，连 ``/health`` 都不再返回。
+
+        现在不再兜底，直接 fail-fast：把「在异步上下文里误用同步包装」变成响亮、可定位的
+        异常，而不是静默的全服卡死。异步上下文请用同名 ``async_*`` 方法
+        （``async_list_sessions`` / ``async_load_session`` / ``async_save_session`` ...）。
+        """
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
 
-        if loop and loop.is_running():
-            # 已有事件循环在运行 — 创建新线程执行
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(asyncio.run, coro)
-                return future.result(timeout=30)
-        else:
-            return asyncio.run(coro)
+        if loop is not None and loop.is_running():
+            coro.close()  # 未await 的协程要显式关掉，免得 RuntimeWarning
+            raise RuntimeError(
+                "SessionStore 同步 API 不能在运行中的事件循环里调用（曾把整个 web 服务冻死）。"
+                "请改用同名 async_* 方法，如 async_list_sessions/async_load_session/async_save_session。"
+            )
+        return asyncio.run(coro)
 
     def create(self, session_id: str, agent_id: str = "default",
                parent_id: str | None = None, lineage_id: str = "",

@@ -1417,7 +1417,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 session.status = "error"
 
                 if self.enable_persistence and self.session_store:
-                    self.session_store.save_session(session)
+                    await self.session_store.async_save_session(session)
 
                 if self.bus:
                     await self.bus.emit(
@@ -1639,7 +1639,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 # 2026-08-14: 语义缓存已移除（命中率低+实时性腐蚀），不再写回
 
                 if self.enable_persistence and self.session_store:
-                    self.session_store.save_session(session)
+                    await self.session_store.async_save_session(session)
 
                 if self.bus:
                     await self.bus.emit(
@@ -1771,7 +1771,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         await self.callbacks.on_status("done")
 
         if self.enable_persistence and self.session_store:
-            self.session_store.save_session(session)
+            await self.session_store.async_save_session(session)
 
         # ── 插件钩子：after_chat（可改写助手回复） ──
         final_text = await self._run_plugin_after_chat(user_message, final_text, session.id)
@@ -2553,7 +2553,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                 # 2026-08-14: 语义缓存已移除（命中率低+实时性腐蚀），不再写回
 
                 if self.enable_persistence and self.session_store:
-                    self.session_store.save_session(session)
+                    await self.session_store.async_save_session(session)
 
                 if self.bus:
                     await self.bus.emit(
@@ -2588,7 +2588,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
                             # 这里存到 session.extra 并在 done 之后再次保存一次）
                             session.extra["suggestions"] = suggestions
                             if self.enable_persistence and self.session_store:
-                                self.session_store.save_session(session)
+                                await self.session_store.async_save_session(session)
 
                     except Exception:
                         pass
@@ -2660,7 +2660,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         session.status = "done"
 
         if self.enable_persistence and self.session_store:
-            self.session_store.save_session(session)
+            await self.session_store.async_save_session(session)
 
         # 先推送正文 + done，再附上"继续"引导建议（与正常完成路径一致）
 
@@ -3130,8 +3130,10 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
         表现为「重启后最新对话消息丢失」。
 
         此处按最小间隔落盘一次，把丢失窗口从「整回合」压缩到「≤5 秒」。实现要点：
-        - 用 ``asyncio.to_thread`` 执行（save_session 是同步全量重写，直接调用会
-          阻塞事件循环最长 30s，拖慢流式推送）；
+        - 走 ``async_save_session``（★ 2026-09-27）：全量重写的 SQLite 往返由存储层
+          自己 ``to_thread`` 卸载，不阻塞事件循环。此前用 ``asyncio.to_thread``
+          包同步 ``save_session``，等于在工作线程里再开一个嵌套事件循环，与主循环
+          争同一把 loop 亲和的存储锁 —— 正是 /api/sessions 冻死整个服务的同款病灶；
         - 失败只告警不阻断——内存态仍是真相，后续落盘会覆盖修正；
         - 不依赖 ``enable_context``（与上下文治理无关，纯持久化）。
         """
@@ -3148,7 +3150,7 @@ class Agent(ToolExecutionMixin, ContextInjectMixin):
             return
         self._last_progress_persist = now
         try:
-            await asyncio.to_thread(self.session_store.save_session, session)
+            await self.session_store.async_save_session(session)
         except Exception:
             logging.getLogger(__name__).warning(
                 "回合内进度落盘失败（不影响本轮执行；内存态仍为真相）", exc_info=True

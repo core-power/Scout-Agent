@@ -429,12 +429,11 @@ def create_web_app(agent=None) -> FastAPI:
             session = active_sessions[sid]
         if session is None and store and sid:
             try:
-                session = await asyncio.to_thread(store.load_session, sid)
-            except TypeError:
-                try:
-                    session = store.load_session(sid)
-                except Exception:  # noqa: BLE001
-                    session = None
+                # ★ 2026-09-27 冻死修复：直接 await 异步 API。此前写成
+                # asyncio.to_thread(store.load_session, sid) 只是把阻塞挪到工作线程，
+                # 而同步包装会在线程里再开一个嵌套事件循环，与主循环争同一把
+                # loop 亲和的存储锁——上下文环轮询这个接口时最容易撞上。
+                session = await store.async_load_session(sid)
             except Exception:  # noqa: BLE001
                 session = None
 

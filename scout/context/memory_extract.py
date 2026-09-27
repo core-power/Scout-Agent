@@ -433,7 +433,8 @@ class SessionMemoryExtractor:
             # ★ 必须加载完整消息：仅用 id/status 构造的空 Session 会让
             #   extract() 因 `not session.messages` 直接空转，批量补抽取永远无效
             try:
-                loaded = session_store.load_session(sid)
+                # ★ 2026-09-27 冻死修复：await 异步 API，不走同步包装
+                loaded = await session_store.async_load_session(sid)
                 session = loaded if (loaded and getattr(loaded, "messages", None)) else None
             except Exception:
                 session = None

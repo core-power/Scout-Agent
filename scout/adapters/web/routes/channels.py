@@ -111,7 +111,8 @@ class ChannelRoutes:
                     # 载入持久会话（IM 多轮上下文；澄清「问完等下一条消息作答」依赖它）；
                     # 无则新建。此前每轮都用全新空 Session → IM 多轮无上下文。
                     try:
-                        session = get_session_store().load_session(sid)
+                        # ★ 2026-09-27 冻死修复：一律 await async_*，不得走同步包装
+                        session = await get_session_store().async_load_session(sid)
                     except Exception:
                         session = None
                     if session is None:
@@ -144,7 +145,9 @@ class ChannelRoutes:
                     )
                     # 持久化会话，供下一条消息（含澄清回答）续上下文
                     try:
-                        get_session_store().save_session((result or {}).get("session") or session)
+                        await get_session_store().async_save_session(
+                            (result or {}).get("session") or session
+                        )
                     except Exception:
                         pass
                     return (result or {}).get("response", "") or ""

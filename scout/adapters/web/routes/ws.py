@@ -63,7 +63,10 @@ class WsRoutes:
             restored = True
             _sstore = self._session_store()
             if sid_param and _sstore:
-                existing = _sstore.load_session(sid_param)
+                # ★ 2026-09-27 冻死修复：WS/路由内一律 await async_*，不得走 SessionStore
+                # 同步包装——_run_async 会在事件循环线程上开线程并 join，与主循环在飞的
+                # 存储操作争同一把 loop 亲和锁，一旦撞上就把整个 web 服务永久冻死。
+                existing = await _sstore.async_load_session(sid_param)
                 if existing:
                     session = existing
                     restored = True
@@ -93,9 +96,9 @@ class WsRoutes:
                 restored = True
                 session = None
                 try:
-                    recent = _sstore.list_sessions(limit=1)
+                    recent = await _sstore.async_list_sessions(limit=1)
                     if recent:
-                        session = _sstore.load_session(recent[0]["id"])
+                        session = await _sstore.async_load_session(recent[0]["id"])
                 except Exception:
                     logger.warning("恢复最近会话失败（无 sid 分支）", exc_info=True)
                 if session is None:
@@ -227,7 +230,7 @@ class WsRoutes:
 
                     # 重新加载 session（可能被 PUT/DELETE API 修改过）
                     if self._agent.session_store:
-                        fresh = self._agent.session_store.load_session(session.id)
+                        fresh = await self._agent.session_store.async_load_session(session.id)
                         if fresh:
                             session = fresh
 
@@ -240,7 +243,7 @@ class WsRoutes:
                             deleted_msgs = session.messages[edit_from:]
                             # 截断保护：先归档将被删除的消息（可事后恢复/审计）
                             try:
-                                self._agent.session_store.archive_messages(
+                                await self._agent.session_store.async_archive_messages(
                                     session.id, deleted_msgs, reason="edit_truncate"
                                 )
                             except Exception as _arch_err:
@@ -297,13 +300,13 @@ class WsRoutes:
                             # 磁盘仍是旧数据 → 重启/刷新后"已删除的旧回复复活"。
                             try:
                                 # force=True：编辑截断是**故意变短**，需绕过过期快照防护
-                                self._agent.session_store.save_session(session, force=True)
+                                await self._agent.session_store.async_save_session(session, force=True)
                             except Exception as _save_err:  # noqa: BLE001
                                 logging.getLogger(__name__).warning(
                                     "截断后保存失败，回读磁盘态避免内存/磁盘分叉: %s", _save_err
                                 )
                                 try:
-                                    _fresh2 = self._agent.session_store.load_session(session.id)
+                                    _fresh2 = await self._agent.session_store.async_load_session(session.id)
                                     if _fresh2:
                                         session = _fresh2
                                 except Exception:  # noqa: BLE001
@@ -503,7 +506,7 @@ class WsRoutes:
                                 if session.messages:
                                     if session.status in ("", "idle"):
                                         session.status = "done"
-                                    self._agent.session_store.save_session(session)
+                                    await self._agent.session_store.async_save_session(session)
                                     logger.info(f"[PERSIST] 兜底保存会话 {session.id[:8]} ({len(session.messages)} 条消息)")
                         except Exception as _persist_err:
                             logger.warning(f"[PERSIST] 兜底保存失败: {_persist_err}")

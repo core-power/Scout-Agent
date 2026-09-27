@@ -88,7 +88,11 @@ class SessionRoutes:
             """列出历史会话."""
             _sstore = self._session_store()
             if _sstore:
-                sessions = _sstore.list_sessions(limit=limit)
+                # ★ 2026-09-27 冻死修复：路由内一律 await async_* API。走同步包装
+                # （list_sessions/load_session/...）会经 SessionStore._run_async 偷偷开线程
+                # 并在本事件循环线程上 join 等待，而嵌套循环要争的存储锁正被主循环上
+                # 在飞的任务持有 → 互相等待，整个 web 服务永久无响应（/health 都不返回）。
+                sessions = await _sstore.async_list_sessions(limit=limit)
                 return {"sessions": sessions}
             return {"sessions": []}
 
@@ -99,12 +103,12 @@ class SessionRoutes:
                 return JSONResponse({"error": "搜索关键词不能为空"}, status_code=400)
             if not self._agent or not self._agent.session_store:
                 return JSONResponse({"error": "会话存储未启用"}, status_code=400)
-            results = self._agent.session_store.search_messages(q, limit=limit)
+            results = await self._agent.session_store.async_search_messages(q, limit=limit)
             # 补充会话标题
             for r in results:
                 sid = r.get("session_id") or r.get("sid", "")
                 if sid:
-                    s = self._agent.session_store.load_session(sid)
+                    s = await self._agent.session_store.async_load_session(sid)
                     r["session_title"] = s.extra.get("title", "") if s else ""
                     r["session_preview"] = (s.messages[0].content[:50] if s and s.messages else "")
             return {"query": q, "results": results, "total": len(results)}
@@ -114,7 +118,7 @@ class SessionRoutes:
             """加载指定会话."""
             _sstore = self._session_store()
             if _sstore:
-                session = _sstore.load_session(session_id)
+                session = await _sstore.async_load_session(session_id)
                 if session:
                     msgs = []
                     for idx, m in enumerate(session.messages):
@@ -220,7 +224,7 @@ class SessionRoutes:
             # exe 启动时 agent 为 None，此前删除一律返回 400"会话存储未启用"，会话删不掉。
             store = self._session_store()
             if store:
-                store.delete_session(session_id)
+                await store.async_delete_session(session_id)
                 return {"status": "ok"}
             return JSONResponse({"error": "会话存储未启用"}, status_code=400)
 
@@ -233,7 +237,7 @@ class SessionRoutes:
                 return JSONResponse({"error": "标题不能为空"}, status_code=400)
             store = self._session_store()
             if store:
-                store.rename_session(session_id, title)
+                await store.async_rename_session(session_id, title)
                 return {"status": "ok"}
             return JSONResponse({"error": "会话存储未启用"}, status_code=400)
 
@@ -318,7 +322,7 @@ class SessionRoutes:
                     )
             except Exception:  # noqa: BLE001
                 pass
-            session = store.load_session(session_id)
+            session = await store.async_load_session(session_id)
             if not session:
                 return JSONResponse({"error": "会话不存在"}, status_code=404)
             # 收集被删除消息的内容，用于清理记忆
@@ -353,7 +357,7 @@ class SessionRoutes:
             except Exception:  # noqa: BLE001 — 清理失败不影响删除主流程
                 pass
             # force=True：删除/编辑消息是**故意变短**，绕过过期快照防护
-            store.save_session(session, force=True)
+            await store.async_save_session(session, force=True)
             # 同步清理记忆 — 按被删除消息的内容模糊匹配
             mem_deleted = 0
             if self._agent.memory_store:
@@ -383,7 +387,7 @@ class SessionRoutes:
                     )
             except Exception:  # noqa: BLE001
                 pass
-            session = store.load_session(session_id)
+            session = await store.async_load_session(session_id)
             if not session:
                 return JSONResponse({"error": "会话不存在"}, status_code=404)
             # 收集被截断消息的内容，用于清理记忆
@@ -422,7 +426,7 @@ class SessionRoutes:
                     ]
             except Exception:  # noqa: BLE001
                 pass
-            store.save_session(session, force=True)
+            await store.async_save_session(session, force=True)
             # 同步清理记忆 — 旧消息内容和后续消息内容
             mem_deleted = 0
             if self._agent.memory_store:

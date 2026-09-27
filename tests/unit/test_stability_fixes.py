@@ -288,3 +288,45 @@ def test_session_store_sync_save_load_no_deadlock(tmp_path):
     assert loaded.id == "s-regr"
     assert len(loaded.messages) == 2
     assert loaded.messages[0].content == "你好"
+
+
+async def test_session_store_sync_wrapper_fails_fast_in_loop(tmp_path):
+    """回归（2026-09-27）：exe 打开后历史会话永远加载不出来 = 整个 web 服务被冻死.
+
+    病灶：async 路由里调用 SessionStore 的**同步包装**（list_sessions/load_session/
+    save_session...）。``_run_async`` 检测到运行中的循环后，会偷偷开一个线程跑
+    ``asyncio.run(coro)``，再在**本事件循环线程上** join 等待；而 ``get_session_store()``
+    是全局单例，嵌套循环里的存储操作要争 SQLiteStorage 那把 loop 亲和的异步锁，持锁方
+    恰好是被 join 冻住的主循环任务 → 永久互锁。30s 超时也救不回来（``with`` 退出仍
+    ``shutdown(wait=True)``）。现场栈：``list_sessions(sessions.py:91) → _run_async
+    (store.py:1214) → __exit__ → shutdown → join``，CPU 占用 0%，连 /health 都不返回。
+
+    修复：异步上下文一律 ``await async_*``；``_run_async`` 检测到运行中的循环即
+    fail-fast。此测同时锁死两件事——误用同步包装立刻报错（不再静默卡死），且报错之后
+    主循环依旧健康（异步 API 仍可用）。
+    """
+    from scout.core.types import Message, Session
+    from scout.session.store import SessionStore
+
+    store = SessionStore(db_path=tmp_path / "sessions.db")
+    await store.async_save_session(Session(id="s-freeze", messages=[Message(role="user", content="历史")]))
+
+    async def _hold_lock(release: asyncio.Event) -> None:
+        """模拟主循环上任意一个「持锁且在飞」的存储操作（保存会话 / status 轮询等）."""
+        async with store._storage._lock:  # noqa: SLF001 — 故意取内部锁复现在飞持锁
+            await release.wait()
+
+    release = asyncio.Event()
+    holder = asyncio.create_task(_hold_lock(release))
+    await asyncio.sleep(0.05)  # 确保 holder 已持锁
+
+    with pytest.raises(RuntimeError, match="async_"):
+        store.list_sessions()  # ← 旧实现在这里把整个服务永久冻死
+
+    release.set()
+    await asyncio.wait_for(holder, timeout=5)
+
+    # 主循环没被冻住：异步 API 照常可用，历史也读得回来
+    rows = await asyncio.wait_for(store.async_list_sessions(limit=5), timeout=5)
+    assert [r["id"] for r in rows] == ["s-freeze"]
+

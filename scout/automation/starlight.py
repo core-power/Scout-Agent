@@ -344,8 +344,9 @@ class StarlightDistiller:
         lookback = timedelta(hours=self.config["lookback_hours"])
         cutoff = datetime.now() - lookback
 
-        # 获取最近的会话 (list_sessions 返回 list[dict]，包含 id, updated_at 等)
-        all_sessions = self.session_store.list_sessions(limit=50)
+        # 获取最近的会话 (async_list_sessions 返回 list[dict]，包含 id, updated_at 等)
+        # ★ 2026-09-27 冻死修复：本方法运行在主事件循环上，必须 await 异步 API。
+        all_sessions = await self.session_store.async_list_sessions(limit=50)
         recent_sessions = []
         for s in all_sessions:
             updated = s.get("updated_at")
@@ -374,7 +375,7 @@ class StarlightDistiller:
         # 加载每个会话的完整消息，构建对话列表
         conversations = []
         for s in recent_sessions:
-            session = self.session_store.load_session(s["id"])
+            session = await self.session_store.async_load_session(s["id"])
             if not session or not session.messages:
                 continue
             # 将 Message 对象转为 dict

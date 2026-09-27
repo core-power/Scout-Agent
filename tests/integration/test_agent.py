@@ -105,11 +105,12 @@ class TestSessionIntegration:
             Message(role="assistant", content=f"文件已创建：{result.output}")
         )
         
-        # 保存会话
-        store.save_session(session)
+        # 保存会话（★ 2026-09-27：本用例是 async def，必须走异步 API —
+        # SessionStore 的同步包装在检测到运行中循环时会 fail-fast，防呆锁死事件循环的旧路径）
+        await store.async_save_session(session)
         
         # 验证
-        loaded = store.load_session("tool-session")
+        loaded = await store.async_load_session("tool-session")
         assert loaded is not None
         # observations 不会被持久化，这是当前设计的限制
         # assert len(loaded.observations) == 1
