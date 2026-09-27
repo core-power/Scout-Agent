@@ -88,3 +88,6 @@ _shots_*.png
 *.bak-v1
 scout/web/static/_*.py
 tools/demo_media/
+
+# 本地构建产物副本（正式 zip 在 dist/，发版脚本产物）
+dist-build/
