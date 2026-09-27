@@ -2460,28 +2460,16 @@ class AgentBubble {
         return this.text || '';
     }
 
-    // ── 回合用量统计：只留缓存命中率 ──
-    // ★ 2026-09-27 按需求撤掉 token 与耗时两个 chip。耗时的原因是字段本身是
-    // avg_latency_ms = AVG(每次上游调用延迟)，不是这一回合的墙钟耗时，挂在气泡
-    // 下面必然被读成「这条回复用了 N 秒」；平均延迟在独立用量页按模型分列已有。
-    renderUsageStats(usage) {
-        if (!usage || !this.el) return;
-        const calls = usage.calls || 0;
-        const cacheRate = (usage.cache_hit_rate || 0) * 100;
-        if (calls <= 0) return;  // 无调用不显示
-
-        // 有调用就显示缓存命中率（0% 也显示，让每次命中情况可见）
-        const parts = [__tpl(`缓存 ${cacheRate.toFixed(0)}%`)];
-
-        // 消息徽章条：插入到内容区下方（与聊天底部时间同行或在下）
-        const statsEl = document.createElement('div');
-        statsEl.className = 'usage-stats text-tiny text-ink-3 mt-1.5 flex items-center gap-1 flex-wrap';
-        statsEl.innerHTML = parts.map(p => `<span class="px-1.5 py-0.5 rounded bg-surface-3 border border-line">${p}</span>`).join('');
-        // 插入到 content 之后、pending files 之前的位置（插入到内容块末尾，不依赖选择器）
-        const contentWrap = this.contentEl.closest('div') || this.contentEl;
-        contentWrap.appendChild(statsEl);
-        scrollToBottom(true);
-    }
+    // ── 回合用量统计：已整体下架（★ 2026-09-27）──
+    // 原来在每条回复下面挂 token / 缓存% / 耗时 三个 chip。撤掉的判断：
+    //   · token 是引擎单位，用户能据此行动的单位是钱 → 归用量页的 ¥ 卡片；
+    //   · 「累计」取的是 session 全量（usage.session_total_tokens），挂在单条
+    //     回复下面会被读成「这条花了 48 万 token」，纯属制造焦虑；
+    //   · 耗时字段是 avg_latency_ms = AVG(每次上游调用)，不是回合墙钟耗时，放
+    //     在气泡下必然被误读成「这条回复用了 N 秒」；
+    //   · 缓存命中率是运维指标，且上游不回传 cached 时后端会退化为本地推断
+    //     （cache_source=api|local），前端无法区分 → 不放正文流。
+    // 界面安静下来的同时，消耗与花费全部在 /usage 里可查（模型监控页）。
 
     // 面板完成态：所有子代理完成，汇总中（保留兼容旧调用）
     finishMultiAgentView(summary) {
@@ -2564,8 +2552,8 @@ class AgentBubble {
                 this.statusBadge.className = 'agent-status-badge text-xs text-success';
             }
         }
-        // ── 回合用量统计：token / 缓存命中率 / 耗时 ──
-        if (usage) this.renderUsageStats(usage);
+        // ── 回合用量不渲染到正文流：token/缓存/耗时三个 chip 已整体下架，
+        //    消耗与花费统一去 /usage（模型监控页）看。理由见上方下架说明。──
         msgCount++;
         updateMsgCount();
         // 重置所有状态，确保下一个 assistant 消息创建新的气泡

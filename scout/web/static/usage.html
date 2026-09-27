@@ -48,8 +48,10 @@
         </div>
     </div>
 
-    <!-- 概览卡片 -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6" id="overview-cards">
+    <!-- 概览卡片（★ 2026-09-27 加『预估花费 / 缓存省下』：token 是引擎单位，钱才是能行动的
+         单位；数据来自 /api/usage/summary 早已返回的 estimated_cost_cny / estimated_saved_cny，
+         后端零改动） -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6" id="overview-cards">
         <div class="bg-[#111] border border-white/5 rounded-xl p-4">
             <div class="text-xs text-slate-500 mb-1">总调用次数</div>
             <div class="text-2xl font-bold text-white" id="stat-calls">—</div>
@@ -59,8 +61,18 @@
             <div class="text-2xl font-bold text-scout-400" id="stat-tokens">—</div>
         </div>
         <div class="bg-[#111] border border-white/5 rounded-xl p-4">
+            <div class="text-xs text-slate-500 mb-1">预估花费</div>
+            <div class="text-2xl font-bold text-white" id="stat-cost">—</div>
+            <div class="text-[10px] text-slate-600 mt-1">按模型参考价估算</div>
+        </div>
+        <div class="bg-[#111] border border-white/5 rounded-xl p-4">
             <div class="text-xs text-slate-500 mb-1">缓存命中</div>
             <div class="text-2xl font-bold text-emerald-400" id="stat-cache">—</div>
+        </div>
+        <div class="bg-[#111] border border-white/5 rounded-xl p-4">
+            <div class="text-xs text-slate-500 mb-1">缓存省下</div>
+            <div class="text-2xl font-bold text-emerald-400" id="stat-saved">—</div>
+            <div class="text-[10px] text-slate-600 mt-1">命中部分按折扣价计价</div>
         </div>
         <div class="bg-[#111] border border-white/5 rounded-xl p-4">
             <div class="text-xs text-slate-500 mb-1">平均延迟</div>
@@ -127,6 +139,14 @@ function formatMs(ms) {
     return Math.round(ms) + 'ms';
 }
 
+// 金额格式化（人民币，按模型参考价估算）
+function formatCny(v) {
+    if (!v) return '¥0';
+    if (v >= 100) return '¥' + v.toFixed(0);
+    if (v >= 1) return '¥' + v.toFixed(2);
+    return '¥' + v.toFixed(3);
+}
+
 function switchPeriod(period) {
     currentPeriod = period;
     document.querySelectorAll('.period-btn').forEach(btn => {
@@ -149,6 +169,8 @@ async function loadSummary() {
         const cacheRate = t.call_count > 0 ? ((t.cache_hits || 0) / t.call_count * 100).toFixed(0) + '%' : '0%';
         document.getElementById('stat-cache').textContent = cacheRate;
         document.getElementById('stat-latency').textContent = formatMs(t.avg_latency);
+        document.getElementById('stat-cost').textContent = formatCny(t.estimated_cost_cny || 0);
+        document.getElementById('stat-saved').textContent = formatCny(t.estimated_saved_cny || 0);
 
         // 模型表格
         const tbody = document.getElementById('model-tbody');
