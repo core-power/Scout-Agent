@@ -68,6 +68,7 @@
         <div class="bg-[#111] border border-white/5 rounded-xl p-4">
             <div class="text-xs text-slate-500 mb-1">缓存命中</div>
             <div class="text-2xl font-bold text-emerald-400" id="stat-cache">—</div>
+            <div class="text-[10px] text-slate-600 mt-1">按输入 token 加权</div>
         </div>
         <div class="bg-[#111] border border-white/5 rounded-xl p-4">
             <div class="text-xs text-slate-500 mb-1">缓存省下</div>
@@ -103,7 +104,7 @@
                         <th class="text-right py-2 px-4">Prompt</th>
                         <th class="text-right py-2 px-4">Completion</th>
                         <th class="text-right py-2 px-4">总 Token</th>
-                        <th class="text-right py-2 px-4">缓存命中</th>
+                        <th class="text-right py-2 px-4">命中调用</th>
                         <th class="text-right py-2 pl-4">平均延迟</th>
                     </tr>
                 </thead>
@@ -166,8 +167,13 @@ async function loadSummary() {
         const t = d.total || {};
         document.getElementById('stat-calls').textContent = formatNum(t.call_count || 0);
         document.getElementById('stat-tokens').textContent = formatNum(t.total_tokens || 0);
-        const cacheRate = t.call_count > 0 ? ((t.cache_hits || 0) / t.call_count * 100).toFixed(0) + '%' : '0%';
-        document.getElementById('stat-cache').textContent = cacheRate;
+        // ★ 2026-09-27 口径统一：缓存命中率一律按输入 token 加权
+        // （cached_tokens / prompt_tokens），与 tracker.get_summary 返回的
+        // cache_hit_rate、adapter/agent 的回合统计、doctor、cache_monitor 同源。
+        // 原先这里另算了一套 cache_hits/call_count（按调用次数），同一词两个数
+        // （实测 85% vs 76%），且与旁边「缓存省下 ¥」对不上——省的钱正是按 token
+        // 折扣算的。
+        document.getElementById('stat-cache').textContent = ((t.cache_hit_rate || 0) * 100).toFixed(0) + '%';
         document.getElementById('stat-latency').textContent = formatMs(t.avg_latency);
         document.getElementById('stat-cost').textContent = formatCny(t.estimated_cost_cny || 0);
         document.getElementById('stat-saved').textContent = formatCny(t.estimated_saved_cny || 0);
