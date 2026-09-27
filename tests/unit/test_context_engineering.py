@@ -417,3 +417,99 @@ def test_agent_auto_wraps_memory_flush(tmp_path):
     agent = _make_mini_agent(memory_extractor=extractor)
     assert agent.memory_flush is not None  # 未显式注入也自动包装
     assert agent.memory_flush.extractor is extractor
+
+
+# ── 前缀静态化契约（2026-09-27）：PromptBuilder 动静态分离 ────────────
+
+
+class _FakeMemory:
+    """最小记忆桩：search 返回固定条目，供注入断言用."""
+
+    def __init__(self, content: str):
+        self._content = content
+
+    def search(self, _q: str, limit: int = 3):
+        return [MemoryEntry(id=1, content=self._content, importance=0.5)]
+
+
+def test_prompt_builder_system_prompt_is_static():
+    """system prompt 必须跨轮逐字节一致，且不含任何动态内容."""
+    from scout.context.prompt import PromptBuilder
+
+    pb = PromptBuilder(system_prompt="你是 Scout。", memory_store=_FakeMemory("用户喜欢中文回复"))
+    import time as _time
+
+    p1 = pb.build(user_input="第一轮", current_step=0, max_steps=30)
+    _time.sleep(1.1)  # 跨过一秒，旧实现的时间戳会变
+    p2 = pb.build(user_input="第二轮内容完全不同", current_step=15, max_steps=30)
+
+    assert p1 == p2, "system prompt 含动态内容，前缀缓存会每轮击穿"
+    assert "当前时间" not in p1
+    assert "用户喜欢中文回复" not in p1  # 记忆属于动态层
+
+
+def test_prompt_builder_dynamic_content_goes_to_runtime_context():
+    """时间戳/记忆/预算警告必须出现在 runtime_context（user 消息尾部），而非 system prompt."""
+    from scout.context.prompt import PromptBuilder
+
+    pb = PromptBuilder(
+        system_prompt="你是 Scout。",
+        memory_store=_FakeMemory("用户喜欢中文回复"),
+        budget_warning_threshold=25,
+    )
+    rt = pb.build_runtime_context(user_input="帮我看看", current_step=10, max_steps=30)
+
+    assert "当前时间" in rt
+    assert "用户喜欢中文回复" in rt
+    assert "剩余迭代次数" in rt
+    # 无预算警告时不出现该行
+    rt_far = pb.build_runtime_context(user_input="帮我看看", current_step=0, max_steps=1000)
+    assert "剩余迭代次数" not in rt_far
+
+
+# ── 前缀静态化契约（2026-09-27）：PromptBuilder 动静态分离 ────────────
+
+
+class _FakeMemory:
+    """最小记忆桩：search 返回固定条目，供注入断言用."""
+
+    def __init__(self, content: str):
+        self._content = content
+
+    def search(self, _q: str, limit: int = 3):
+        return [MemoryEntry(id=1, content=self._content, importance=0.5)]
+
+
+def test_prompt_builder_system_prompt_is_static():
+    """system prompt 必须跨轮逐字节一致，且不含任何动态内容."""
+    from scout.context.prompt import PromptBuilder
+
+    pb = PromptBuilder(system_prompt="你是 Scout。", memory_store=_FakeMemory("用户喜欢中文回复"))
+    import time as _time
+
+    p1 = pb.build(user_input="第一轮", current_step=0, max_steps=30)
+    _time.sleep(1.1)  # 跨过一秒，旧实现的时间戳会变
+    p2 = pb.build(user_input="第二轮内容完全不同", current_step=15, max_steps=30)
+
+    assert p1 == p2, "system prompt 含动态内容，前缀缓存会每轮击穿"
+    assert "当前时间" not in p1
+    assert "用户喜欢中文回复" not in p1  # 记忆属于动态层
+
+
+def test_prompt_builder_dynamic_content_goes_to_runtime_context():
+    """时间戳/记忆/预算警告必须出现在 runtime_context（user 消息尾部），而非 system prompt."""
+    from scout.context.prompt import PromptBuilder
+
+    pb = PromptBuilder(
+        system_prompt="你是 Scout。",
+        memory_store=_FakeMemory("用户喜欢中文回复"),
+        budget_warning_threshold=25,
+    )
+    rt = pb.build_runtime_context(user_input="帮我看看", current_step=10, max_steps=30)
+
+    assert "当前时间" in rt
+    assert "用户喜欢中文回复" in rt
+    assert "剩余迭代次数" in rt
+    # 无预算警告时不出现该行
+    rt_far = pb.build_runtime_context(user_input="帮我看看", current_step=0, max_steps=1000)
+    assert "剩余迭代次数" not in rt_far

@@ -1,7 +1,16 @@
-"""分层 Prompt 构建器 — 借鉴 Hermes 的 prompt_builder.
+"""分层 Prompt 构建器 — 前缀静态化契约版.
 
-三层构建: stable(不变) → context(按需) → volatile(每次变)
-确保 system prompt 在对话中途不突变。
+核心契约（与 engine/context_inject.py 的 v3-Final P0 方案对齐）：
+
+- ``build()`` 只返回 **100% 静态** 的 system prompt（stable 层）——
+  跨轮逐字节一致，保证前缀缓存可命中；
+- 动态内容（技能匹配 / 记忆召回 / 时间戳 / 预算警告）一律经
+  ``build_runtime_context()`` 生成，由调用方追加到**当前 user 消息尾部**，
+  绝不进入 system prompt。
+
+历史教训：旧版把 context/volatile 层拼进 system prompt，时间戳精确到秒、
+记忆每轮检索结果不同 → 前缀每轮变化，隐式缓存全部击穿（成本 +110%，
+见 docs/ 智能路由缓存优化 Brief）。
 """
 
 from __future__ import annotations
@@ -11,7 +20,7 @@ from typing import Any
 
 
 class PromptBuilder:
-    """分层 Prompt 构建器."""
+    """分层 Prompt 构建器（system prompt 静态 + 动态尾块分离）."""
 
     def __init__(
         self,
@@ -27,32 +36,43 @@ class PromptBuilder:
         self.memory = memory_store
         self.budget_warning_threshold = budget_warning_threshold
 
-    def build(
+    def build(self, session: Any = None, **_kwargs: Any) -> str:
+        """构建 **静态** system prompt — 仅 stable 层.
+
+        旧签名中的 ``user_input``/``current_step``/``max_steps`` 参数已不再
+        影响 system prompt（它们属于动态层，走 :meth:`build_runtime_context`），
+        保留 ``**_kwargs`` 以兼容既有调用方，不做破坏性签名变更。
+
+        ⚠️ 本方法返回值在 Agent 生命周期内必须逐字节稳定 —— 任何新增注入
+        都必须满足"构造后不再变化"，否则前缀缓存全部失效。
+        """
+        stable = self._build_stable()
+        return stable if stable else self.base_prompt
+
+    def build_runtime_context(
         self,
-        session: Any = None,
         user_input: str = "",
         current_step: int = 0,
         max_steps: int = 30,
     ) -> str:
-        """构建完整 system prompt — 三层叠加."""
-        layers = []
+        """构建动态上下文块 — 追加到**当前 user 消息尾部**，勿放入 system prompt.
 
-        # ── 1. Stable 层（不在对话中途变化）──
-        stable = self._build_stable()
-        if stable:
-            layers.append(stable)
+        内容：技能匹配 + 记忆召回（context 层）→ 时间戳 + 预算警告（volatile 层）。
+        每轮内容不同是预期行为：它位于消息列表末尾，不影响前缀缓存。
+        """
+        parts = []
 
-        # ── 2. Context 层（按需注入）──
+        # ── Context 层（按需注入：技能 + 记忆）──
         context = self._build_context(user_input)
         if context:
-            layers.append(context)
+            parts.append(context)
 
-        # ── 3. Volatile 层（每次变化）──
+        # ── Volatile 层（时间戳 + 预算警告）──
         volatile = self._build_volatile(current_step, max_steps)
         if volatile:
-            layers.append(volatile)
+            parts.append(volatile)
 
-        return "\n\n---\n\n".join(layers) if layers else self.base_prompt
+        return "\n\n---\n\n".join(parts)
 
     def _build_stable(self) -> str:
         """Stable 层 — 身份 + 工作空间 + 文件处理指导."""
@@ -89,13 +109,13 @@ class PromptBuilder:
 示例：
 - 用户："帮我生成一个周报文档并导出给我" → 明确要文件，生成后 send_file
 - 用户："帮我总结一下这个项目的架构" → 只要内容，直接文本回复，不要发文件"""
-        
+
         parts.append(file_guidance)
 
         return "\n\n".join(p for p in parts if p.strip())
 
     def _build_context(self, user_input: str) -> str:
-        """Context 层 — 技能匹配 + 记忆召回."""
+        """Context 层 — 技能匹配 + 记忆召回（动态，进 user 消息尾部）."""
         parts = []
 
         # 技能匹配
@@ -114,7 +134,7 @@ class PromptBuilder:
         return "\n\n".join(p for p in parts if p.strip())
 
     def _build_volatile(self, current_step: int, max_steps: int) -> str:
-        """Volatile 层 — 时间戳 + 预算警告."""
+        """Volatile 层 — 时间戳 + 预算警告（动态，进 user 消息尾部）."""
         parts = [f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]
 
         # 预算警告
