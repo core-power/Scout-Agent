@@ -2460,19 +2460,18 @@ class AgentBubble {
         return this.text || '';
     }
 
-    // ── 回合用量统计：缓存命中率 / 耗时（★ 2026-09-27 按需求去掉 token 显示）──
+    // ── 回合用量统计：只留缓存命中率 ──
+    // ★ 2026-09-27 按需求撤掉 token 与耗时两个 chip。耗时的原因是字段本身是
+    // avg_latency_ms = AVG(每次上游调用延迟)，不是这一回合的墙钟耗时，挂在气泡
+    // 下面必然被读成「这条回复用了 N 秒」；平均延迟在独立用量页按模型分列已有。
     renderUsageStats(usage) {
         if (!usage || !this.el) return;
         const calls = usage.calls || 0;
         const cacheRate = (usage.cache_hit_rate || 0) * 100;
-        const latency = usage.avg_latency_ms || 0;
-        if (calls <= 0) return;  // 无数据不显示
+        if (calls <= 0) return;  // 无调用不显示
 
-        const parts = [];
         // 有调用就显示缓存命中率（0% 也显示，让每次命中情况可见）
-        parts.push(__tpl(`缓存 ${cacheRate.toFixed(0)}%`));
-        if (latency > 0) parts.push(`⏱ ${latency >= 1000 ? (latency/1000).toFixed(1)+'s' : latency+'ms'}`);
-        if (!parts.length) return;
+        const parts = [__tpl(`缓存 ${cacheRate.toFixed(0)}%`)];
 
         // 消息徽章条：插入到内容区下方（与聊天底部时间同行或在下）
         const statsEl = document.createElement('div');
