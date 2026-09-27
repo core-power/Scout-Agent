@@ -1607,7 +1607,6 @@ function handleEvent(event) {
         case 'thinking': event.data.started ? agentBubble.showThinking() : agentBubble.hideThinking(); break;
         case 'reasoning': agentBubble.handleReasoning(event.data.content); break;
         case 'step': agentBubble.setStep(event.data.step, event.data.total); break;
-        case 'usage_live': agentBubble.setLiveUsage(event.data); break;
         case 'status': {
             agentBubble.setStatus(event.data.status);
             // Multi-Agent 模式：任务开始（thinking/acting）就显示规划面板
@@ -1863,20 +1862,13 @@ class AgentBubble {
         scrollToBottom(true);
     }
 
-    // 实时用量（token/调用数）→ 与步骤合并显示在同一 badge（2026-09-24，#2）
-    setLiveUsage(usage) {
-        if (!usage) return;
-        this._ensure();
-        this._liveTokens = usage.tokens || 0;
-        this._liveCalls = usage.calls || 0;
-        this._renderStepBadge();
-    }
-
+    // ★ 2026-09-27：运行过程中的 token 计数（usage_live）已从活动流移除——
+    // 步骤栏只显示「步骤 x/y」。setLiveUsage/~N tokens 一并删除，后端 ws.py 的
+    // 3 秒节流推送也停了（那次 usage.db 聚合查询只为这个 badge 服务）。
     _renderStepBadge() {
         if (!this.stepBadge) return;
         const parts = [];
         if (this._stepInfo) parts.push(__tpl(`步骤 ${this._stepInfo.step}/${this._stepInfo.total}`));
-        if (this._liveTokens) parts.push(__tpl(`~${this._liveTokens} tokens`));
         if (!parts.length) return;
         this.stepBadge.textContent = parts.join(' · ');
         this.stepBadge.classList.remove('hidden');
@@ -2468,27 +2460,19 @@ class AgentBubble {
         return this.text || '';
     }
 
-    // ── 回合用量统计：token / 缓存命中率 / 耗时 / 调用次数 ──
+    // ── 回合用量统计：缓存命中率 / 耗时（★ 2026-09-27 按需求去掉 token 显示）──
     renderUsageStats(usage) {
         if (!usage || !this.el) return;
-        const tokens = usage.tokens || 0;
-        const cached = usage.cached || 0;
         const calls = usage.calls || 0;
         const cacheRate = (usage.cache_hit_rate || 0) * 100;
         const latency = usage.avg_latency_ms || 0;
-        // 历史累计 token（该 session 全量，重进会话后仍可见，不会因刷新归零）
-        const totalTokens = usage.session_total_tokens || 0;
-        if (tokens <= 0 && calls <= 0) return;  // 无数据不显示
+        if (calls <= 0) return;  // 无数据不显示
 
-        // 人性化 token 显示：优先显示"本次"，有历史累计则附加"累计"
-        const fmtTok = tokens >= 1000 ? (tokens/1000).toFixed(1) + 'k' : String(tokens);
-        const fmtTotal = totalTokens >= 1000 ? (totalTokens/1000).toFixed(1) + 'k' : String(totalTokens);
-        const parts = totalTokens > tokens
-            ? [__tpl(`⚡ ${fmtTok} (累计 ${fmtTotal}) tokens`)]
-            : [`⚡ ${fmtTok} tokens`];
+        const parts = [];
         // 有调用就显示缓存命中率（0% 也显示，让每次命中情况可见）
-        if (calls > 0) parts.push(__tpl(`缓存 ${cacheRate.toFixed(0)}%`));
+        parts.push(__tpl(`缓存 ${cacheRate.toFixed(0)}%`));
         if (latency > 0) parts.push(`⏱ ${latency >= 1000 ? (latency/1000).toFixed(1)+'s' : latency+'ms'}`);
+        if (!parts.length) return;
 
         // 消息徽章条：插入到内容区下方（与聊天底部时间同行或在下）
         const statsEl = document.createElement('div');
@@ -2595,8 +2579,6 @@ class AgentBubble {
         this.stepBadge = null;
         this.statusBadge = null;
         this._stepInfo = null;
-        this._liveTokens = 0;
-        this._liveCalls = 0;
     }
 
     showReflection(hint) {

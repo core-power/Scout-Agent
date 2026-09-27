@@ -674,7 +674,7 @@
   }
 
   // ── 思考行 ────────────────────────────────────────────────
-  function fmtChars(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
+  // （原 fmtChars() 随「已思考 · N 字」一起移除，2026-09-27）
 
   P.showThinking = function () {
     this._ensure();
@@ -709,13 +709,12 @@
       return;
     }
     var ms = Date.now() - (this._thinkStart || Date.now());
-    var n = (this._reasoningText || '').length;
     el.classList.remove('am-think');
     el.classList.add('am-think-fin', 'is-past');
+    // ★ 2026-09-27：按需求只留思考耗时，不再显示推演字数
     el.innerHTML =
       '<span style="display:inline-flex;color:rgb(var(--c-success))">' + CHECK + '</span>' +
-      '<span class="am-think-label">' + T('已思考 {n}', { n: fmtDur(ms) }) +
-      (n > 0 ? T(' · {n} 字', { n: fmtChars(n) }) : '') + '</span>';
+      '<span class="am-think-label">' + T('已思考 {n}', { n: fmtDur(ms) }) + '</span>';
     // 小结停留 1.1s 让眼睛捕捉到"想完了"，再淡出
     setTimeout(function () {
       el.classList.add('am-leaving');

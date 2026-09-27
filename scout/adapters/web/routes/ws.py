@@ -355,7 +355,6 @@ class WsRoutes:
 
                     # 用流式对话 + 事件队列并发推送
                     _turn_ws_start = time.time()
-                    _last_usage_emit = [0.0]  # 闭包可变：实时用量事件的节流时间戳
                     async def run_stream():
                         async for delta in agent_copy.stream_conversation(user_msg, session, attachments=attachment_info or None):
                             try:
@@ -365,18 +364,9 @@ class WsRoutes:
                                 # 推送猜测问题
                                 if delta.suggestions:
                                     await ws.send_json({"type": "suggestions", "data": {"items": delta.suggestions}})
-                                # ── 实时用量（节流 ≥3s，2026-09-24）：长任务过程中让
-                                #    token 消耗可见，缓解"跑很久不知道烧了多少"的焦虑。
-                                #    复用回合级统计 _collect_ws_usage；查询失败静默跳过。
-                                _now_u = time.time()
-                                if _now_u - _last_usage_emit[0] >= 3.0:
-                                    _last_usage_emit[0] = _now_u
-                                    try:
-                                        _live = self._collect_ws_usage(session.id, _turn_ws_start)
-                                        if _live.get("calls", 0) > 0:
-                                            await ws.send_json({"type": "usage_live", "data": _live})
-                                    except Exception:
-                                        pass
+                                # ★ 2026-09-27：运行中的 usage_live（每 3s 聚合一次 usage.db，
+                                #    只喂给步骤栏的 ~N tokens badge）按需求移除。
+                                #    回合级统计仍在下方收尾时经 _collect_ws_usage 下发。
                                 # 推送队列中剩余事件（fallback）
                                 while not callbacks.events.empty():
                                     event = callbacks.events.get_nowait()
