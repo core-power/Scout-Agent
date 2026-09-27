@@ -19,7 +19,30 @@ from pathlib import Path
 
 from rich.console import Console
 
-console = Console()
+
+def _build_console() -> Console:
+    """构造一个不会因输出流编码而崩溃的 Console。
+
+    Windows 上把 stdout 重定向到文件/管道时，流编码会落到 cp936（GBK）。
+    rich 的 legacy Windows 渲染路径直接往该流写文本，遇到 emoji 就抛
+    UnicodeEncodeError，把整个命令掀掉——「scout --web > log.txt」曾因此
+    在打印启动横幅时直接崩进程。
+
+    这里只把错误策略改成 replace：宁可把 emoji 降级成「?」，也不让 CLI 崩。
+    不改 encoding，避免真实控制台出现二次乱码。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):  # 已脱离 tty、或流不支持重配时静默跳过
+            pass
+    return Console()
+
+
+console = _build_console()
 
 DEFAULT_SYSTEM_PROMPT = """\
 You are Scout, a helpful AI assistant with persistent memory and skills.
