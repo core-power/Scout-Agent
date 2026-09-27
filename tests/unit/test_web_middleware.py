@@ -19,7 +19,6 @@ class TestWhitelist:
         "/api/auth/check",
         "/api/auth/status",
         "/api/auth/change-password",
-        "/api/webhook/abc123",
         "/static/app.js",
         "/.well-known/anything",
     ])
@@ -35,6 +34,9 @@ class TestWhitelist:
         "/v1/chat/completions",
         "/a2a/tasks/send",
         "/ws",
+        # 2026-09-25 外部 Webhook 管理功能下线，放行同步移除：
+        # 未初始化凭证时该路径必须走 401，不能再出现在白名单里。
+        "/api/webhook/abc123",
     ])
     def test_not_whitelisted(self, path):
         assert _is_initialization_whitelist(path) is False
