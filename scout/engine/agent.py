@@ -2065,15 +2065,6 @@ n        改变最终 system prompt 内容，影响行为与前缀缓存."""
                 _stream_kwargs = dict(
                     messages=api_messages,
                     tools=active_tools,
-                    temperature=self.temperature,
-                    _role="main",
-                    _session_id=session.id,
-                    **active_extra,
-                )
-
-                _stream_kwargs = dict(
-                    messages=api_messages,
-                    tools=active_tools,
                     temperature=self._compute_temperature(active_llm),
                     _role="main",
                     _session_id=session.id,
