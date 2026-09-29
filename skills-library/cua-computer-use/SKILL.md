@@ -1,7 +1,7 @@
 ---
 name: cua-computer-use
 description: Windows CUA计算机使用技能 — GUI任务自主闭环（观察→决策→行动→验证）+ 一发原语 + 坐标/输入核心规则。判档/恢复表/避坑等细节配方在 references/playbook.md（异常场景先读它）。
-trigger: 帮我完成,自动完成,替我操作,帮我操作,代我操作,全自动,一步步点,按流程走,自己操作,自主完成,帮我点,帮我填,替我点,替我填,操作一遍,走一遍流程,全程操作,帮我发,帮我预约,帮我下单,帮我提交,帮我报名,帮我处理,替我弄,操作软件,桌面操控,桌面软件,操作电脑,操控电脑,控制电脑,控制鼠标,cua,computer use,computer-use,desktop automation,operate autonomously,do it for me,control app
+trigger: 帮我完成,自动完成,替我操作,帮我操作,代我操作,全自动,一步步点,按流程走,自己操作,自主完成,帮我点,帮我填,替我点,替我填,操作一遍,走一遍流程,全程操作,帮我发,帮我预约,帮我下单,帮我提交,帮我报名,帮我处理,替我弄,操作软件,桌面操控,桌面软件,操作电脑,操控电脑,控制电脑,控制鼠标,点按钮,点确定,点掉,处理弹窗,关闭弹窗,cua,computer use,computer-use,desktop automation,operate autonomously,do it for me,control app
 version: 2.1.0
 author: scout-self-distilled
 ---
