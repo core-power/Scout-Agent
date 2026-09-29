@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scout-agent"
-version = "1.0.0.5"
+version = "1.0.0.6"
 description = "Scout Agent — The self-evolving AI agent that grows with you"
 readme = "README.md"
 requires-python = ">=3.11"
