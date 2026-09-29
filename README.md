@@ -39,7 +39,7 @@
 | 9–18 s | 🖱️ Real GUI control | Notepad opens, focus lands in the editing area, and the Chinese to-do list is typed **line by line with real keystrokes** (IME-friendly) |
 | 18–21 s | ✅ *“已完成，记事本已打开，清单已写好”* | Selects all to show the result, then reports completion in the chat |
 
-**Why it matters:** most “agents” stop at generating text. Scout ships a built-in `desktop` tool that runs **real mouse clicks, real keystrokes and real screenshots**, plus **10 battle-tested skill packs** in `skills-library/` — send a WeChat message, look someone up on Feishu, drive a browser, fill an Excel sheet. You say it; it happens on your real desktop, on your real apps.
+**Why it matters:** most “agents” stop at generating text. Scout ships a built-in `desktop` tool that runs **real mouse clicks, real keystrokes and real screenshots**, plus **11 battle-tested skill packs** in `skills-library/` — send a WeChat message, look someone up on Feishu, drive a browser, fill an Excel sheet. You say it; it happens on your real desktop, on your real apps.
 
 > 🔒 Everything runs locally: the recording above was made on the author’s own Windows box, with no cloud desktop and no screen-sharing service involved.
 
