@@ -4,7 +4,7 @@
 
 # Scout Agent
 
-**The self-evolving AI agent that grows with you**
+**The AI agent that actually operates your Windows apps — real clicks, real keystrokes, real memory.**
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -15,6 +15,33 @@
 *Persistent Memory · Desktop Control · Multi-Channel · Security-First*
 
 </div>
+
+---
+
+## <a name="desktop-control"></a>🖱️ It Really Has Hands — One Sentence, and Scout Drives Your Windows
+
+<div align="center">
+
+<img src="docs/media/desktop-gui-demo.gif" width="88%" alt="Scout takes over Windows Notepad — live recording">
+
+<sub><b>Uncut screen recording · 21 s · zero simulation.</b> One line typed into Scout — it thinks, opens Notepad, types the whole to-do list in Chinese, then reports back “done”.</sub><br><br>
+
+<b>▶ <a href="docs/media/desktop-gui-demo.mp4">Watch the HD MP4</a></b>
+
+</div>
+
+**What you just watched, beat by beat:**
+
+| ⏱️ | Scene | What Scout actually did |
+|:---:|---|---|
+| 0–3 s | 🗣️ *“打开记事本，帮我写一份今天的待办清单”* | A plain-language instruction typed into Scout — no script, no macro, no API |
+| 3–9 s | 🧠 ReAct reasoning | Breaks the task down, picks the `desktop` tool, decides to launch Notepad |
+| 9–18 s | 🖱️ Real GUI control | Notepad opens, focus lands in the editing area, and the Chinese to-do list is typed **line by line with real keystrokes** (IME-friendly) |
+| 18–21 s | ✅ *“已完成，记事本已打开，清单已写好”* | Selects all to show the result, then reports completion in the chat |
+
+**Why it matters:** most “agents” stop at generating text. Scout ships a built-in `desktop` tool that runs **real mouse clicks, real keystrokes and real screenshots**, plus **10 battle-tested skill packs** in `skills-library/` — send a WeChat message, look someone up on Feishu, drive a browser, fill an Excel sheet. You say it; it happens on your real desktop, on your real apps.
+
+> 🔒 Everything runs locally: the recording above was made on the author’s own Windows box, with no cloud desktop and no screen-sharing service involved.
 
 ---
 
@@ -44,15 +71,10 @@ Scout Agent is an intelligent personal assistant AI agent with persistent memory
 
 ---
 
-## <a name="demo"></a>⚡ Scout in 60 Seconds (two live recordings — nothing simulated)
+## <a name="demo"></a>⚡ Scout in 60 Seconds (live recording — nothing simulated)
 
 <table>
   <tr>
-    <td align="center" width="50%">
-      <b>🖱️ desktop tool · really drives Windows apps</b><br>
-      <img src="docs/media/desktop-gui-demo.gif" width="100%" alt="Scout desktop automation demo"><br>
-      <sub>Type one instruction → Scout opens Notepad and types the to-do list for you, keystroke by keystroke. Uncut, nothing simulated.<br>▶ <a href="docs/media/desktop-gui-demo.mp4">HD MP4</a></sub>
-    </td>
     <td align="center" width="50%">
       <b>🖥️ Brand-new Web UI · one-minute tour</b><br>
       <img src="docs/media/ui-tour-en.gif" width="100%" alt="Scout UI tour"><br>
@@ -63,33 +85,6 @@ Scout Agent is an intelligent personal assistant AI agent with persistent memory
 
 | 🧰 **20+** built-in tools | 🌐 **12+** chat channels | 🖱️ **11** battle-tested desktop skills | 🧩 **5** swappable core components |
 |:---:|:---:|:---:|:---:|
-
----
-
-## <a name="desktop-control"></a>🖱️ It Really Has Hands — One Sentence, and Scout Drives Your Windows
-
-<div align="center">
-
-<img src="docs/media/desktop-gui-demo.gif" width="88%" alt="Scout takes over Windows Notepad — live recording">
-
-<sub><b>Uncut screen recording · 21 s · zero simulation.</b> One line typed into Scout — it thinks, opens Notepad, types the whole to-do list in Chinese, then reports back “done”.</sub><br><br>
-
-<b>▶ <a href="docs/media/desktop-gui-demo.mp4">Watch the HD MP4</a></b>
-
-</div>
-
-**What you just watched, beat by beat:**
-
-| ⏱️ | Scene | What Scout actually did |
-|:---:|---|---|
-| 0–3 s | 🗣️ *“打开记事本，帮我写一份今天的待办清单”* | A plain-language instruction typed into Scout — no script, no macro, no API |
-| 3–9 s | 🧠 ReAct reasoning | Breaks the task down, picks the `desktop` tool, decides to launch Notepad |
-| 9–18 s | 🖱️ Real GUI control | Notepad opens, focus lands in the editing area, and the Chinese to-do list is typed **line by line with real keystrokes** (IME-friendly) |
-| 18–21 s | ✅ *“已完成，记事本已打开，清单已写好”* | Selects all to show the result, then reports completion in the chat |
-
-**Why it matters:** most “agents” stop at generating text. Scout ships a built-in `desktop` tool that runs **real mouse clicks, real keystrokes and real screenshots**, plus **10 battle-tested skill packs** in `skills-library/` — send a WeChat message, look someone up on Feishu, drive a browser, fill an Excel sheet. You say it; it happens on your real desktop, on your real apps.
-
-> 🔒 Everything runs locally: the recording above was made on the author’s own Windows box, with no cloud desktop and no screen-sharing service involved.
 
 ---
 
