@@ -13,11 +13,12 @@
 
 | 技能 | 覆盖 | 实测要点 |
 |---|---|---|
-| windows-gui-control | 通用方法论（总纲） | 五步闭环 / rel 坐标 / SendInput unicode / 验证标准 |
+| cua-computer-use | 通用方法论（总纲，2026-09-10 合并原 windows-gui-control） | 任务级 GUI 闭环：观察→决策→行动→验证→恢复；rel 坐标 / 防点错三件套 / probe 判档 / 中文输入规则 |
 | uwp-app-control | UWP 应用（计算器/设置等） | 双窗口结构：ApplicationFrameHost+title 组合定位；auto_id 锚点 |
 | browser-gui-control | Chrome/Edge 窗口层 | ^t+type_text+ENTER 导航；%d 直达地址栏 |
 | office-app-control | Word/Excel/PPT | Excel COM 写入；名称框直达单元格；WPS 探测 |
 | wechat-desktop-control | 微信 4.x | 消息框/发送按钮 rel 坐标；禁用 Enter 发送；macro 打包发送 |
+| feishu-app-control | 飞书 PC 版（Electron） | Ctrl+K 全局搜索直达联系人；搜索框禁 Ctrl+V 但收 SendInput unicode；Enter 发送有效 |
 | tencent-meeting-control | 腾讯会议（模板，坐标待回填） | 无 API 纯 GUI；登录态硬前置预检；预定→复制邀请→微信 macro 发送 |
 | notepad-app-control | 记事本（标准应用样板） | 控件路线；新/老记事本控件名 |
 | windows-system-control | 系统层（电源/音量/窗口/任务管理器） | 快捷键矩阵 + PowerShell 组合 |
