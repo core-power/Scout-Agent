@@ -144,6 +144,13 @@ class BrowserTool(ToolDefinition):
     # 2026-09-02: 进程内只尝试自动安装一次，避免每次请求都触发大体积下载
     _install_attempted: bool = False
 
+    # 2026-09-30: 自动安装默认关闭（fail-fast）。实测缺失 chromium 时静默下载
+    # 13 分钟后才失败，一次任务 1/4 时间被吞。需要开箱即用的部署场景显式设
+    # SCOUT_BROWSER_AUTO_INSTALL=1 才允许自动下载。
+    @staticmethod
+    def _auto_install_enabled() -> bool:
+        return os.getenv("SCOUT_BROWSER_AUTO_INSTALL", "").strip().lower() in ("1", "true", "yes", "on")
+
     def __init__(self):
         self._browser = None
         self._context = None
@@ -171,10 +178,18 @@ class BrowserTool(ToolDefinition):
                         args=["--no-sandbox", "--disable-dev-shm-usage"],
                     )
                 except Exception as e:
-                    # 首次运行（2026-08-30）：chromium 二进制未安装 → 自动安装后重试。
-                    # Windows 绿色版不带浏览器，需在首次使用浏览器工具时自动下载。
+                    # 2026-08-30: chromium 二进制未安装时自动安装后重试；
+                    # 2026-09-30 改为 fail-fast：默认不再静默下载（曾实测一次
+                    # 任务被 13 分钟的下载堵死），显式设 SCOUT_BROWSER_AUTO_INSTALL=1
+                    # 才保留旧的自动安装行为。
                     msg = str(e).lower()
                     if "executable doesn't exist" in msg or "not found" in msg or "error while loading" in msg:
+                        if not self._auto_install_enabled():
+                            raise RuntimeError(
+                                "未检测到 chromium 浏览器（自动安装已默认关闭，避免任务被大体积下载堵死）。"
+                                "请手动执行一次: playwright install chromium；"
+                                "或设环境变量 SCOUT_BROWSER_AUTO_INSTALL=1 恢复自动安装。"
+                            )
                         _installed = await self._auto_install_chromium()
                         if not _installed:
                             raise RuntimeError(

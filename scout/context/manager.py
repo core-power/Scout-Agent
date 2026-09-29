@@ -606,7 +606,10 @@ class ContextManager:
         - 仅提炼 role==TOOL 的被删消息（配对的 assistant 是模型自己的话，无信息量）；
         - 无可提炼内容且已存在笔记时，仍会把现有笔记挪到末尾（保证位置正确，
           例如被压缩卷走后重建）；
-        - 笔记上限 _NOTES_MAX_ITEMS 条 / _NOTES_MAX_CHARS 字符，超出丢最旧。
+        - 笔记上限 _NOTES_MAX_ITEMS 条 / _NOTES_MAX_CHARS 字符，超出丢最旧；
+        - ★ 2026-09-30 假设板升级：重复调查检测——与已有笔记同目标（同文件
+          同区间/同关键词，归一化数字后比对）的条目不再重复入账，改为在笔记
+          末尾追加 ⚠ 重复警告，把"兜圈子"暴露给模型本尊，抑制无进展循环。
 
         Returns: 笔记是否发生变化。
         """
@@ -626,7 +629,14 @@ class ContextManager:
                 if s.startswith("- ")
             ]
 
+        def _norm_key(item: str) -> str:
+            """归一化条目为重复比对键：抹掉行号等数字噪声后取前 64 字符."""
+            body = item.split("]", 1)[-1] if "]" in item else item
+            body = re.sub(r"\d+", "#", body)
+            return re.sub(r"\s+", "", body).lower()[:64]
+
         new_items: list[str] = []
+        dup_counter: dict[str, int] = {}   # 归一化键 -> 已出现次数
         for m in removed or []:
             if m.role != Role.TOOL:
                 continue
@@ -636,9 +646,27 @@ class ContextManager:
                 continue
             if len(text) > self._NOTES_ITEM_CHARS:
                 text = text[: self._NOTES_ITEM_CHARS] + "…"
-            new_items.append(f"- [{name}] {text}")
+            item = f"- [{name}] {text}"
+            key = _norm_key(item)
+            if key in dup_counter:
+                dup_counter[key] += 1
+                continue  # 重复调查不重复入账
+            dup_counter[key] = 1
+            # 与既有笔记（旧条目）比对 —— 旧行为下这里会无限堆叠同目标条目
+            if any(_norm_key(x) == key for x in old_items):
+                dup_counter[key] += 1
+                continue
+            new_items.append(item)
 
         merged = old_items + [x for x in new_items if x not in old_items]
+        # ★ 重复调查警告（最多列 3 个目标，避免警告自身吃掉预算）
+        dups = [(k, c) for k, c in dup_counter.items() if c > 1]
+        if dups:
+            dup_lines = [
+                f"⚠ 第{c}次重复调查同一目标（键: {k[:40]}）— 请改用 file outline / 精读已读区间 / 换关键词，勿再原样重查"
+                for k, c in dups[:3]
+            ]
+            merged.append("- " + "\n- ".join(dup_lines))
         # 超限丢最旧（保尾部 = 最近发生的步骤）
         merged = merged[-self._NOTES_MAX_ITEMS :]
         total = sum(len(x) + 1 for x in merged)
@@ -649,7 +677,12 @@ class ContextManager:
         if not merged:
             return False
 
-        content = "[运行笔记] 已归档步骤的关键结论（自动提炼，防剪枝失忆）:\n" + "\n".join(merged)
+        content = (
+            "[运行笔记] 已归档步骤的关键结论（防剪枝失忆）。调查纪律："
+            "①换方向前先核对本笔记，已读过的文件区间/已搜过的关键词严禁原样重查；"
+            "②维护假设清单，排除一条记一条；③读大文件先用 file outline 拿结构再精读。\n"
+            + "\n".join(merged)
+        )
         changed = notes_idx is None or session.messages[notes_idx].content != content
         if notes_idx is not None:
             del session.messages[notes_idx]

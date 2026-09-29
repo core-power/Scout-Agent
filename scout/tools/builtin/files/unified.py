@@ -43,6 +43,9 @@ class UnifiedFileTool(ToolDefinition):
     name = "file"
     description = (
         "文件操作工具 — 读取、写入、编辑文件.\n\n"
+        "0. 骨架 (outline): ★ 大文件(>500行)先用 outline 拿全局结构地图"
+        "（函数/类/章节锚点+行号），再按行号 read 精读嫌疑区间——"
+        "严禁对大文件从头分页爬读（每段消耗一轮决策）。\n"
         "1. 替换 (replace):\n"
         "   <<<<<<< SEARCH\n   原代码\n   =======\n   新代码\n   >>>>>>> REPLACE\n\n"
         "2. 插入 (insert):\n"
@@ -56,7 +59,7 @@ class UnifiedFileTool(ToolDefinition):
             "action": {
                 "type": "string",
                 "description": "操作类型",
-                "enum": ["read", "write", "list", "replace", "insert", "delete", "edit"],
+                "enum": ["read", "outline", "write", "list", "replace", "insert", "delete", "edit"],
             },
             "path": {
                 "type": "string",
@@ -118,6 +121,8 @@ class UnifiedFileTool(ToolDefinition):
         try:
             if action == "read":
                 return self._read(path, start_line, end_line)
+            elif action == "outline":
+                return self._outline(path)
             elif action == "write":
                 return self._write(path, content)
             elif action == "list":
@@ -134,7 +139,7 @@ class UnifiedFileTool(ToolDefinition):
                 return Observation(
                     tool_name="file",
                     success=False,
-                    output=f"未知操作: {action}。支持: read, write, list, replace, insert, delete, edit",
+                    output=f"未知操作: {action}。支持: read, outline, write, list, replace, insert, delete, edit",
                 )
         except Exception as e:
             return Observation(tool_name="file", success=False, output=f"操作失败: {e}")
@@ -208,6 +213,98 @@ class UnifiedFileTool(ToolDefinition):
             success=True,
             output=output,
             metadata={"total_lines": total, "start": start_line, "end": end_line},
+        )
+
+    # ── outline（结构骨架，2026-09-30 轮数优化）──────────
+
+    # 各扩展名的结构锚点正则（按优先级顺序匹配）
+    _OUTLINE_PATTERNS: dict[str, list[str]] = {
+        ".py": [
+            r"^class\s+\w+",
+            r"^(async\s+)?def\s+\w+",
+            r"^\s{4}(async\s+)?def\s+\w+",
+            r"^\s*#\s*──.*──",          # 项目惯用的分节注释
+            r"^\s*#\s*={3,}",
+        ],
+        ".js": [
+            r"^\s*(export\s+)?(async\s+)?function\s+\w+",
+            r"^\s*(export\s+)?(const|let|var)\s+\w+\s*=\s*(async\s*)?\(",
+            r"^\s*(export\s+)?class\s+\w+",
+            r"^\s*(const|let)\s+\w+\s*=\s*(async\s*)?(function|\()",
+            r"^\s*//\s*─+.*─+",          # 分节注释
+            r"^\s*//\s*={3,}",
+        ],
+        ".ts": None,  # 走 .js
+        ".css": [r"^\s*/\*\s*-+.*-+\s*\*/", r"^[^\s@}][^{}]*\{"],
+        ".html": [r"<(script|section|div[^>]*id=|nav|header|footer|main|aside)[^>]*>", r"<!--\s*={3,}"],
+        ".md": [r"^#{1,4}\s"],
+    }
+
+    _OUTLINE_MAX_ENTRIES = 250
+
+    def _outline(self, path: str) -> Observation:
+        """返回文件结构骨架：类/函数/章节锚点+行号，供先定位再精读."""
+        if not path:
+            return Observation(tool_name="file", success=False, output="缺少 path 参数")
+
+        path, err = self._resolve_path(path)
+        if err:
+            return Observation(tool_name="file", success=False, output=err, error_code="SANDBOX")
+        if not os.path.exists(path):
+            return Observation(tool_name="file", success=False, output=f"文件不存在: {path}", error_code="NOT_FOUND")
+        if os.path.isdir(path):
+            return Observation(tool_name="file", success=False, output=f"路径是目录，请使用 list 操作: {path}")
+
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except Exception as e:
+            return Observation(tool_name="file", success=False, output=f"读取失败: {e}")
+
+        total = len(lines)
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".ts":
+            ext = ".js"
+        patterns = self._OUTLINE_PATTERNS.get(ext)
+        if patterns is None and ext in (".mjs", ".cjs", ".jsx", ".tsx"):
+            patterns = self._OUTLINE_PATTERNS[".js"]
+        if patterns is None:
+            # 通用兜底：常见语言的结构声明
+            patterns = [r"^\s*(def|class|function|async function|interface|struct)\s+\w+", r"^#{1,4}\s"]
+
+        import re as _re
+        compiled = [_re.compile(p) for p in patterns]
+        seen_spans: set[int] = set()  # 同一行只输出一次
+        entries: list[str] = []
+        for i, raw in enumerate(lines, start=1):
+            if len(entries) >= self._OUTLINE_MAX_ENTRIES:
+                entries.append(f"  …（骨架超过 {self._OUTLINE_MAX_ENTRIES} 条已截断，请用行区间 read 精读）")
+                break
+            content = raw.rstrip()
+            if not content.strip():
+                continue
+            hit = None
+            for cp in compiled:
+                if cp.match(content):
+                    hit = content.strip()
+                    break
+            if hit is None or i in seen_spans:
+                continue
+            seen_spans.add(i)
+            entries.append(f"{i:5d} | {hit[:120]}")
+
+        header = f"🗺️ {path} 结构骨架 ({len(seen_spans)} 个锚点 / 共 {total} 行)"
+        usage = "用法：按行号定位后用 read(start_line, end_line) 精读嫌疑区间，不要从头分页。"
+        if not entries:
+            output = header + "\n(未匹配到结构锚点)\n" + usage
+        else:
+            output = header + "\n" + "\n".join(entries) + "\n" + usage
+
+        return Observation(
+            tool_name="file",
+            success=True,
+            output=output,
+            metadata={"total_lines": total, "anchors": len(seen_spans), "mode": "outline"},
         )
 
     # ── write ─────────────────────────────────────────────
